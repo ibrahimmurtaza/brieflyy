@@ -1,0 +1,72 @@
+import fastify, { type FastifyInstance } from 'fastify';
+import fastifyCookie from '@fastify/cookie';
+import fastifySensible from '@fastify/sensible';
+
+import { SESSION_COOKIE_NAME, SESSION_TTL_MS_DEFAULT } from './config.js';
+import type { Db } from './db/client.js';
+import { DrizzleAccountRepo } from './repos/account-repo.js';
+import { DrizzleMagicLinkRepo } from './repos/magic-link-repo.js';
+import { DrizzleSessionRepo } from './repos/session-repo.js';
+import { DrizzleUserRepo } from './repos/user-repo.js';
+import { AuthService } from './auth/auth-service.js';
+import { registerAuthRoutes } from './auth/routes.js';
+import { registerPageRoutes } from './pages/routes.js';
+import type { EmailTransport } from './email/transport.js';
+import type { Clock } from './domain/clock.js';
+import { systemClock } from './domain/clock.js';
+import type { RandomSource } from './domain/crypto.js';
+import { nodeRandom } from './domain/crypto.js';
+
+export interface CreateAppOptions {
+  readonly db: Db;
+  readonly emailTransport: EmailTransport;
+  readonly appBaseUrl: string;
+  readonly cookieSecure?: boolean | undefined;
+  readonly clock?: Clock | undefined;
+  readonly random?: RandomSource | undefined;
+  readonly sessionTtlMs?: number | undefined;
+  readonly logger?: boolean | undefined;
+}
+
+export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance> {
+  const app = fastify({
+    logger: opts.logger ?? false,
+  });
+
+  await app.register(fastifyCookie, {});
+  await app.register(fastifySensible);
+
+  const userRepo = new DrizzleUserRepo(opts.db);
+  const accountRepo = new DrizzleAccountRepo(opts.db);
+  const sessionRepo = new DrizzleSessionRepo(opts.db);
+  const magicLinkRepo = new DrizzleMagicLinkRepo(opts.db);
+
+  const clock = opts.clock ?? systemClock;
+  // Reap expired session rows so the sessions table doesn't grow without bound.
+  await sessionRepo.deleteExpired(clock.now());
+
+  const authService = new AuthService({
+    userRepo,
+    accountRepo,
+    sessionRepo,
+    magicLinkRepo,
+    emailTransport: opts.emailTransport,
+    clock,
+    random: opts.random ?? nodeRandom,
+    appBaseUrl: opts.appBaseUrl,
+    sessionTtlMs: opts.sessionTtlMs,
+  });
+
+  await registerAuthRoutes(app, {
+    authService,
+    sessionTtlMs: opts.sessionTtlMs ?? SESSION_TTL_MS_DEFAULT,
+    cookieSecure: opts.cookieSecure ?? false,
+    appBaseUrl: opts.appBaseUrl,
+  });
+
+  await registerPageRoutes(app, { appBaseUrl: opts.appBaseUrl });
+
+  return app;
+}
+
+export { SESSION_COOKIE_NAME };

@@ -1,0 +1,3 @@
+# Story and Cluster are distinct grains
+
+A Story is a deduped event — a group of near-duplicate Articles within a 48–72h window, identified by a story-fingerprint (named entities + key phrases). A Cluster is a grouping of related Stories by entity overlap within a 7d window, and is the unit the User actually sees. The two are recorded as separate concepts in `CONTEXT.md` because the pipeline deals in Stories and the product deals in Clusters, and conflating them would force the ranking, feedback, and summarization layers to agree on a grain that neither layer actually wants. Story-level dedup collapses syndication noise; Cluster-level grouping gives the User a coherent narrative rather than a stream of deduped fragments.
