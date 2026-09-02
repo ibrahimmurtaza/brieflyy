@@ -39,3 +39,22 @@ export interface MagicLink {
   readonly expiresAt: Date;
   readonly consumedAt: Date | null;
 }
+
+export type OAuthProvider = 'google';
+
+export interface OAuthState {
+  readonly id: string;
+  readonly stateHash: string;
+  readonly codeVerifierHash: string;
+  readonly createdAt: Date;
+  readonly expiresAt: Date;
+  readonly consumedAt: Date | null;
+}
+
+export interface OAuthAccount {
+  readonly id: string;
+  readonly accountId: AccountId;
+  readonly provider: OAuthProvider;
+  readonly providerSubject: string;
+  readonly createdAt: Date;
+}

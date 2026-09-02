@@ -4,6 +4,7 @@ import { applySchema } from './db/migrate.js';
 import { createDatabase } from './db/client.js';
 import { createApp } from './app.js';
 import { createEmailTransport } from './email/index.js';
+import { GoogleOAuthClient } from './oauth/google-client.js';
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -25,6 +26,14 @@ function envDriver(name: string, fallback: 'console' | 'resend'): 'console' | 'r
   return fallback;
 }
 
+function envOauthProvider(
+  name: string,
+): 'google' | undefined {
+  const raw = process.env[name];
+  if (raw === 'google') return 'google';
+  return undefined;
+}
+
 async function main(): Promise<void> {
   const databaseUrl = requireEnv('DATABASE_URL').replace(/^file:/, '');
   const appBaseUrl = requireEnv('APP_BASE_URL');
@@ -38,12 +47,21 @@ async function main(): Promise<void> {
     resendApiKey: process.env.RESEND_API_KEY,
   });
 
+  const oauthProvider = envOauthProvider('OAUTH_PROVIDER');
+  let oauthClient = undefined;
+  if (oauthProvider === 'google') {
+    const clientId = requireEnv('GOOGLE_OAUTH_CLIENT_ID');
+    const clientSecret = requireEnv('GOOGLE_OAUTH_CLIENT_SECRET');
+    oauthClient = new GoogleOAuthClient({ clientId, clientSecret });
+  }
+
   const app = await createApp({
     db,
     emailTransport,
     appBaseUrl,
     cookieSecure: envBool('COOKIE_SECURE', process.env.NODE_ENV === 'production'),
     logger: true,
+    oauthClient,
   });
 
   const port = Number(process.env.PORT ?? 3000);

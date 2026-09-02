@@ -45,6 +45,9 @@ function signupPage(): string {
     .status { min-height: 1.5rem; font-size: 0.9rem; }
     .status.error { color: #b00020; }
     .status.ok { color: #1a7f37; }
+    .divider { display: flex; align-items: center; gap: 0.75rem; margin: 1.5rem 0 0.75rem; color: #888; font-size: 0.85rem; }
+    .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: #ddd; }
+    a.google { display: block; text-align: center; padding: 0.7rem 0.9rem; border: 1px solid #ccc; border-radius: 6px; color: inherit; text-decoration: none; background: white; }
   </style>
 </head>
 <body>
@@ -57,6 +60,8 @@ function signupPage(): string {
       <button type="submit">Send magic link</button>
       <div id="status" class="status" role="status" aria-live="polite"></div>
     </form>
+    <div class="divider"><span>or</span></div>
+    <a class="google" href="/auth/google/start">Sign in with Google</a>
   </main>
   <script>
     (function () {

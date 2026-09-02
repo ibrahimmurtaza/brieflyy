@@ -6,10 +6,13 @@ import { SESSION_COOKIE_NAME, SESSION_TTL_MS_DEFAULT } from './config.js';
 import type { Db } from './db/client.js';
 import { DrizzleAccountRepo } from './repos/account-repo.js';
 import { DrizzleMagicLinkRepo } from './repos/magic-link-repo.js';
+import { DrizzleOAuthAccountRepo } from './repos/oauth-account-repo.js';
+import { DrizzleOAuthStateRepo } from './repos/oauth-state-repo.js';
 import { DrizzleSessionRepo } from './repos/session-repo.js';
 import { DrizzleUserRepo } from './repos/user-repo.js';
 import { AuthService } from './auth/auth-service.js';
 import { registerAuthRoutes } from './auth/routes.js';
+import type { OAuthClient } from './oauth/client.js';
 import { registerPageRoutes } from './pages/routes.js';
 import type { EmailTransport } from './email/transport.js';
 import type { Clock } from './domain/clock.js';
@@ -25,6 +28,7 @@ export interface CreateAppOptions {
   readonly clock?: Clock | undefined;
   readonly random?: RandomSource | undefined;
   readonly sessionTtlMs?: number | undefined;
+  readonly oauthClient?: OAuthClient | undefined;
   readonly logger?: boolean | undefined;
 }
 
@@ -40,6 +44,12 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
   const accountRepo = new DrizzleAccountRepo(opts.db);
   const sessionRepo = new DrizzleSessionRepo(opts.db);
   const magicLinkRepo = new DrizzleMagicLinkRepo(opts.db);
+  const oauthStateRepo = opts.oauthClient
+    ? new DrizzleOAuthStateRepo(opts.db)
+    : null;
+  const oauthAccountRepo = opts.oauthClient
+    ? new DrizzleOAuthAccountRepo(opts.db)
+    : null;
 
   const clock = opts.clock ?? systemClock;
   // Reap expired session rows so the sessions table doesn't grow without bound.
@@ -50,6 +60,9 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     accountRepo,
     sessionRepo,
     magicLinkRepo,
+    oauthStateRepo: oauthStateRepo ?? undefined,
+    oauthAccountRepo: oauthAccountRepo ?? undefined,
+    oauthClient: opts.oauthClient,
     emailTransport: opts.emailTransport,
     clock,
     random: opts.random ?? nodeRandom,

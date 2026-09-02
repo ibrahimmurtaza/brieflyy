@@ -38,6 +38,27 @@ CREATE TABLE IF NOT EXISTS magic_links (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS magic_links_token_hash_unique ON magic_links (token_hash);
 CREATE INDEX IF NOT EXISTS magic_links_account_idx ON magic_links (account_id);
+
+CREATE TABLE IF NOT EXISTS oauth_states (
+  id TEXT PRIMARY KEY NOT NULL,
+  state_hash TEXT NOT NULL,
+  code_verifier_hash TEXT NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+  expires_at INTEGER NOT NULL,
+  consumed_at INTEGER
+);
+CREATE UNIQUE INDEX IF NOT EXISTS oauth_states_state_hash_unique ON oauth_states (state_hash);
+CREATE INDEX IF NOT EXISTS oauth_states_expires_idx ON oauth_states (expires_at);
+
+CREATE TABLE IF NOT EXISTS oauth_accounts (
+  id TEXT PRIMARY KEY NOT NULL,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  provider_subject TEXT NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS oauth_accounts_provider_subject_unique ON oauth_accounts (provider, provider_subject);
+CREATE INDEX IF NOT EXISTS oauth_accounts_account_idx ON oauth_accounts (account_id);
 `;
 
 export function applySchema(driver: SqliteDriver): void {

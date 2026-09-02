@@ -2,16 +2,21 @@ import { z } from 'zod';
 
 import {
   MAGIC_LINK_TTL_MS_DEFAULT,
+  OAUTH_STATE_TTL_MS_DEFAULT,
   SESSION_TTL_MS_DEFAULT,
 } from '../config.js';
 import type { Clock } from '../domain/clock.js';
 import {
   generateMagicLinkToken,
-  hashMagicLinkToken,
+  generateOauthCodeVerifier,
   generateSessionId,
+  hashMagicLinkToken,
+  hashOauthCodeVerifier,
+  hashOauthState,
   type RandomSource,
 } from '../domain/crypto.js';
 import type { EmailTransport } from '../email/transport.js';
+import type { OAuthClient } from '../oauth/client.js';
 import type {
   Account,
   Session,
@@ -19,6 +24,8 @@ import type {
 } from '../domain/types.js';
 import type { AccountRepo } from '../repos/account-repo.js';
 import type { MagicLinkRepo } from '../repos/magic-link-repo.js';
+import type { OAuthAccountRepo } from '../repos/oauth-account-repo.js';
+import type { OAuthStateRepo } from '../repos/oauth-state-repo.js';
 import type { SessionRepo } from '../repos/session-repo.js';
 import type { UserRepo } from '../repos/user-repo.js';
 
@@ -27,12 +34,16 @@ export interface AuthServiceDeps {
   readonly accountRepo: AccountRepo;
   readonly sessionRepo: SessionRepo;
   readonly magicLinkRepo: MagicLinkRepo;
+  readonly oauthStateRepo?: OAuthStateRepo | undefined;
+  readonly oauthAccountRepo?: OAuthAccountRepo | undefined;
+  readonly oauthClient?: OAuthClient | undefined;
   readonly emailTransport: EmailTransport;
   readonly clock: Clock;
   readonly random: RandomSource;
   readonly appBaseUrl: string;
   readonly magicLinkTtlMs?: number | undefined;
   readonly sessionTtlMs?: number | undefined;
+  readonly oauthStateTtlMs?: number | undefined;
 }
 
 export const emailSchema = z
@@ -89,6 +100,38 @@ export interface CurrentAuth {
   readonly account: Account;
 }
 
+export interface StartGoogleOAuthOutcome {
+  readonly authorizationUrl: string;
+  readonly state: string;
+  readonly codeVerifier: string;
+}
+
+export interface CompleteGoogleInput {
+  readonly code: string;
+  readonly state: string;
+  readonly stateHash: string;
+  readonly codeVerifier: string;
+  readonly redirectUri: string;
+}
+
+export type CompleteGoogleOutcome =
+  | {
+      readonly status: 'ok';
+      readonly session: Session;
+      readonly user: User;
+      readonly account: Account;
+    }
+  | {
+      readonly status: 'invalid';
+      readonly reason:
+        | 'unknown_state'
+        | 'expired_state'
+        | 'state_consumed'
+        | 'verifier_mismatch'
+        | 'unverified_email'
+        | 'provider_exchange_failed';
+    };
+
 function makeMagicLinkUrl(appBaseUrl: string, token: string): string {
   const base = appBaseUrl.replace(/\/+$/, '');
   return `${base}/auth/magic-link/verify?token=${encodeURIComponent(token)}`;
@@ -116,24 +159,32 @@ export class AuthService {
   private readonly accountRepo: AccountRepo;
   private readonly sessionRepo: SessionRepo;
   private readonly magicLinkRepo: MagicLinkRepo;
+  private readonly oauthStateRepo: OAuthStateRepo | null;
+  private readonly oauthAccountRepo: OAuthAccountRepo | null;
+  private readonly oauthClient: OAuthClient | null;
   private readonly emailTransport: EmailTransport;
   private readonly clock: Clock;
   private readonly random: RandomSource;
   private readonly appBaseUrl: string;
   private readonly magicLinkTtlMs: number;
   private readonly sessionTtlMs: number;
+  private readonly oauthStateTtlMs: number;
 
   constructor(deps: AuthServiceDeps) {
     this.userRepo = deps.userRepo;
     this.accountRepo = deps.accountRepo;
     this.sessionRepo = deps.sessionRepo;
     this.magicLinkRepo = deps.magicLinkRepo;
+    this.oauthStateRepo = deps.oauthStateRepo ?? null;
+    this.oauthAccountRepo = deps.oauthAccountRepo ?? null;
+    this.oauthClient = deps.oauthClient ?? null;
     this.emailTransport = deps.emailTransport;
     this.clock = deps.clock;
     this.random = deps.random;
     this.appBaseUrl = deps.appBaseUrl;
     this.magicLinkTtlMs = deps.magicLinkTtlMs ?? MAGIC_LINK_TTL_MS_DEFAULT;
     this.sessionTtlMs = deps.sessionTtlMs ?? SESSION_TTL_MS_DEFAULT;
+    this.oauthStateTtlMs = deps.oauthStateTtlMs ?? OAUTH_STATE_TTL_MS_DEFAULT;
   }
 
   async requestMagicLink(
@@ -267,4 +318,135 @@ export class AuthService {
     }
     return { status: 'ok' };
   }
+
+  async startGoogleOAuth(): Promise<StartGoogleOAuthOutcome> {
+    if (!this.oauthClient || !this.oauthStateRepo) {
+      throw new Error('Google OAuth is not configured on this AuthService');
+    }
+    const state = generateOauthCodeVerifier(this.random);
+    const codeVerifier = generateOauthCodeVerifier(this.random);
+    const now = this.clock.now();
+    await this.oauthStateRepo.insert({
+      id: this.random.uuid(),
+      stateHash: hashOauthState(state),
+      codeVerifierHash: hashOauthCodeVerifier(codeVerifier),
+      createdAt: now,
+      expiresAt: new Date(now.getTime() + this.oauthStateTtlMs),
+      consumedAt: null,
+    });
+    const redirectUri = makeGoogleCallbackUri(this.appBaseUrl);
+    const authorizationUrl = this.oauthClient.buildAuthorizationUrl({
+      state,
+      codeVerifier,
+      redirectUri,
+    });
+    return { authorizationUrl, state, codeVerifier };
+  }
+
+  async completeWithGoogle(
+    input: CompleteGoogleInput,
+  ): Promise<CompleteGoogleOutcome> {
+    if (!this.oauthClient || !this.oauthStateRepo || !this.oauthAccountRepo) {
+      throw new Error('Google OAuth is not configured on this AuthService');
+    }
+    if (hashOauthState(input.state) !== input.stateHash) {
+      return { status: 'invalid', reason: 'unknown_state' };
+    }
+    const stateRow = await this.oauthStateRepo.getByStateHash(input.stateHash);
+    if (!stateRow) {
+      return { status: 'invalid', reason: 'unknown_state' };
+    }
+    const now = this.clock.now();
+    if (stateRow.consumedAt !== null) {
+      return { status: 'invalid', reason: 'state_consumed' };
+    }
+    if (stateRow.expiresAt.getTime() <= now.getTime()) {
+      return { status: 'invalid', reason: 'expired_state' };
+    }
+    if (
+      hashOauthCodeVerifier(input.codeVerifier) !== stateRow.codeVerifierHash
+    ) {
+      return { status: 'invalid', reason: 'verifier_mismatch' };
+    }
+
+    const exchange = await this.oauthClient.exchangeCode({
+      code: input.code,
+      codeVerifier: input.codeVerifier,
+      redirectUri: input.redirectUri,
+    });
+    if (exchange.status !== 'ok') {
+      return { status: 'invalid', reason: 'provider_exchange_failed' };
+    }
+    if (!exchange.profile.emailVerified) {
+      return { status: 'invalid', reason: 'unverified_email' };
+    }
+
+    await this.oauthStateRepo.markConsumed(stateRow.id, now);
+
+    const existingLink = await this.oauthAccountRepo.getByProviderSubject(
+      exchange.profile.provider,
+      exchange.profile.subject,
+    );
+    let account: Account;
+    let user: User;
+    if (existingLink) {
+      account = (await this.accountRepo.getById(existingLink.accountId))!;
+      user = (await this.userRepo.getById(account.userId))!;
+    } else {
+      const email = exchange.profile.email;
+      const found = await this.accountRepo.getByEmail(email);
+      if (found) {
+        account = found;
+        user = (await this.userRepo.getById(account.userId))!;
+      } else {
+        user = {
+          id: this.random.uuid(),
+          createdAt: now,
+          onboardingState: 'not_started',
+        };
+        account = {
+          id: this.random.uuid(),
+          userId: user.id,
+          email,
+          emailVerifiedAt: now,
+          createdAt: now,
+        };
+        await this.userRepo.insert(user);
+        await this.accountRepo.insert(account);
+      }
+      await this.oauthAccountRepo.insert({
+        id: this.random.uuid(),
+        accountId: account.id,
+        provider: exchange.profile.provider,
+        providerSubject: exchange.profile.subject,
+        createdAt: now,
+      });
+    }
+
+    if (account.emailVerifiedAt === null) {
+      await this.accountRepo.markEmailVerified(account.id, now);
+    }
+
+    const sessionId = generateSessionId(this.random);
+    const session: Session = {
+      id: sessionId,
+      userId: user.id,
+      createdAt: now,
+      expiresAt: new Date(now.getTime() + this.sessionTtlMs),
+      revokedAt: null,
+    };
+    await this.sessionRepo.insert(session);
+
+    return { status: 'ok', session, user, account };
+  }
+}
+
+function makeGoogleCallbackUri(appBaseUrl: string): string {
+  const base = appBaseUrl.replace(/\/+$/, '');
+  return `${base}/auth/google/callback`;
+}
+
+export const googleCallbackPath = '/auth/google/callback';
+export function makeGoogleCallbackUrl(appBaseUrl: string): string {
+  return makeGoogleCallbackUri(appBaseUrl);
 }
