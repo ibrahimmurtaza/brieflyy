@@ -243,7 +243,8 @@ describe('HTTP: /auth/logout', () => {
       url: '/auth/logout',
       headers: { cookie },
     });
-    expect(logout.statusCode).toBe(204);
+    expect(logout.statusCode).toBe(302);
+    expect(logout.headers.location).toBe('/');
 
     const clearedCookie = logout.headers['set-cookie'] ?? '';
     expect(clearedCookie).toMatch(/brieflyy_session=;/);
@@ -257,9 +258,20 @@ describe('HTTP: /auth/logout', () => {
     expect(after.headers.location).toBe('/signup');
   });
 
-  it('returns 204 even when there is no session', async () => {
+  it('accepts an empty form-urlencoded body like a real browser submits', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/auth/logout',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    });
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toBe('/');
+  });
+
+  it('redirects to / even when there is no session', async () => {
     const response = await app.inject({ method: 'POST', url: '/auth/logout' });
-    expect(response.statusCode).toBe(204);
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toBe('/');
   });
 });
 

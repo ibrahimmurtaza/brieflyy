@@ -83,6 +83,46 @@ export const magicLinks = sqliteTable(
   }),
 );
 
+export const oauthStates = sqliteTable(
+  'oauth_states',
+  {
+    id: text('id').primaryKey(),
+    stateHash: text('state_hash').notNull(),
+    codeVerifierHash: text('code_verifier_hash').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+    expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
+    consumedAt: integer('consumed_at', { mode: 'timestamp_ms' }),
+  },
+  (t) => ({
+    stateHashUnique: uniqueIndex('oauth_states_state_hash_unique').on(t.stateHash),
+    expiresIdx: index('oauth_states_expires_idx').on(t.expiresAt),
+  }),
+);
+
+export const oauthAccounts = sqliteTable(
+  'oauth_accounts',
+  {
+    id: text('id').primaryKey(),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    provider: text('provider', { enum: ['google'] }).notNull(),
+    providerSubject: text('provider_subject').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    providerSubjectUnique: uniqueIndex('oauth_accounts_provider_subject_unique').on(
+      t.provider,
+      t.providerSubject,
+    ),
+    accountIdx: index('oauth_accounts_account_idx').on(t.accountId),
+  }),
+);
+
 export type UserRow = typeof users.$inferSelect;
 export type NewUserRow = typeof users.$inferInsert;
 export type AccountRow = typeof accounts.$inferSelect;
@@ -91,3 +131,7 @@ export type SessionRow = typeof sessions.$inferSelect;
 export type NewSessionRow = typeof sessions.$inferInsert;
 export type MagicLinkRow = typeof magicLinks.$inferSelect;
 export type NewMagicLinkRow = typeof magicLinks.$inferInsert;
+export type OAuthStateRow = typeof oauthStates.$inferSelect;
+export type NewOAuthStateRow = typeof oauthStates.$inferInsert;
+export type OAuthAccountRow = typeof oauthAccounts.$inferSelect;
+export type NewOAuthAccountRow = typeof oauthAccounts.$inferInsert;

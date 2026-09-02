@@ -27,3 +27,15 @@ export function generateSessionId(rand: RandomSource = nodeRandom): string {
 export function hashMagicLinkToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
 }
+
+export function hashOauthState(state: string): string {
+  return createHash('sha256').update(state).digest('hex');
+}
+
+export function hashOauthCodeVerifier(verifier: string): string {
+  return createHash('sha256').update(verifier).digest('hex');
+}
+
+export function generateOauthCodeVerifier(rand: RandomSource = nodeRandom): string {
+  return Buffer.from(rand.bytes(MAGIC_LINK_BYTES)).toString('base64url');
+}
