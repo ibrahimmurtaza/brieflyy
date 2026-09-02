@@ -154,7 +154,7 @@ export async function registerAuthRoutes(
       await authService.destroySession(sessionId);
     }
     clearSessionCookie(reply);
-    return reply.code(204).send();
+    return reply.code(302).header('location', '/').send();
   });
 
   fastify.get('/auth/google/start', async (_req, reply) => {

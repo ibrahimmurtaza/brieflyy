@@ -40,6 +40,30 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
   await app.register(fastifyCookie, {});
   await app.register(fastifySensible);
 
+  app.addContentTypeParser(
+    'application/x-www-form-urlencoded',
+    { parseAs: 'string' as const },
+    (_req, body: string, done) => {
+      const fields: Record<string, string> = {};
+      if (body.length > 0) {
+        for (const pair of body.split('&')) {
+          if (pair.length === 0) continue;
+          const eq = pair.indexOf('=');
+          const key = eq === -1 ? pair : pair.slice(0, eq);
+          const value = eq === -1 ? '' : pair.slice(eq + 1);
+          try {
+            fields[decodeURIComponent(key)] = decodeURIComponent(
+              value.replace(/\+/g, ' '),
+            );
+          } catch {
+            // Malformed escape; skip this field.
+          }
+        }
+      }
+      done(null, fields);
+    },
+  );
+
   const userRepo = new DrizzleUserRepo(opts.db);
   const accountRepo = new DrizzleAccountRepo(opts.db);
   const sessionRepo = new DrizzleSessionRepo(opts.db);
