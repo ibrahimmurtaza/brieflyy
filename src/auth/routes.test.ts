@@ -192,7 +192,7 @@ describe('HTTP: /auth/magic-link/verify → authenticated session', () => {
       headers: { cookie },
     });
     expect(onboarding.statusCode).toBe(200);
-    expect(onboarding.body).toContain('Pick 3 topics');
+    expect(onboarding.body).toContain('Pick your topics');
     expect(onboarding.body).toContain('iris@example.com');
   });
 });

@@ -1,0 +1,92 @@
+{
+  "sources": [
+    { "slug": "reuters", "name": "Reuters", "homepageUrl": "https://www.reuters.com" },
+    { "slug": "associated-press", "name": "Associated Press", "homepageUrl": "https://apnews.com" },
+    { "slug": "the-guardian", "name": "The Guardian", "homepageUrl": "https://www.theguardian.com" },
+    { "slug": "bbc-news", "name": "BBC News", "homepageUrl": "https://www.bbc.com/news" },
+    { "slug": "arstechnica", "name": "Ars Technica", "homepageUrl": "https://arstechnica.com" },
+    { "slug": "the-verge", "name": "The Verge", "homepageUrl": "https://www.theverge.com" },
+    { "slug": "wired", "name": "Wired", "homepageUrl": "https://www.wired.com" },
+    { "slug": "hacker-news", "name": "Hacker News", "homepageUrl": "https://news.ycombinator.com" },
+    { "slug": "nature", "name": "Nature", "homepageUrl": "https://www.nature.com" },
+    { "slug": "scientific-american", "name": "Scientific American", "homepageUrl": "https://www.scientificamerican.com" },
+    { "slug": "science-news", "name": "Science News", "homepageUrl": "https://www.sciencenews.org" },
+    { "slug": "quanta-magazine", "name": "Quanta Magazine", "homepageUrl": "https://www.quantamagazine.org" },
+    { "slug": "bloomberg", "name": "Bloomberg", "homepageUrl": "https://www.bloomberg.com" },
+    { "slug": "financial-times", "name": "Financial Times", "homepageUrl": "https://www.ft.com" },
+    { "slug": "the-wall-street-journal", "name": "The Wall Street Journal", "homepageUrl": "https://www.wsj.com" },
+    { "slug": "politico", "name": "Politico", "homepageUrl": "https://www.politico.com" }
+  ],
+  "templates": [
+    {
+      "slug": "world-news",
+      "title": "World news",
+      "blurb": "Major international stories, day by day.",
+      "category": "news",
+      "defaultSourceSlugs": ["reuters", "associated-press", "the-guardian", "bbc-news"]
+    },
+    {
+      "slug": "tech-industry",
+      "title": "Tech industry",
+      "blurb": "Product launches, earnings, and moves at the big platforms.",
+      "category": "technology",
+      "defaultSourceSlugs": ["the-verge", "wired", "arstechnica"]
+    },
+    {
+      "slug": "ai-and-ml",
+      "title": "AI & machine learning",
+      "blurb": "Research, model releases, and the people building them.",
+      "category": "technology",
+      "defaultSourceSlugs": ["arstechnica", "the-verge", "wired", "quanta-magazine"]
+    },
+    {
+      "slug": "startups",
+      "title": "Startups",
+      "blurb": "Funding rounds, exits, and the early-stage scene.",
+      "category": "business",
+      "defaultSourceSlugs": ["wired", "the-verge", "bloomberg"]
+    },
+    {
+      "slug": "markets",
+      "title": "Markets",
+      "blurb": "Equities, macro, and what moved today.",
+      "category": "business",
+      "defaultSourceSlugs": ["bloomberg", "financial-times", "the-wall-street-journal"]
+    },
+    {
+      "slug": "natural-sciences",
+      "title": "Natural sciences",
+      "blurb": "Physics, chemistry, biology — the week's papers and findings.",
+      "category": "science",
+      "defaultSourceSlugs": ["nature", "scientific-american", "science-news"]
+    },
+    {
+      "slug": "climate",
+      "title": "Climate",
+      "blurb": "Climate science, policy, and the energy transition.",
+      "category": "science",
+      "defaultSourceSlugs": ["nature", "scientific-american", "bbc-news"]
+    },
+    {
+      "slug": "us-politics",
+      "title": "US politics",
+      "blurb": "Washington, the White House, and the legislative agenda.",
+      "category": "policy",
+      "defaultSourceSlugs": ["politico", "the-guardian", "bbc-news"]
+    },
+    {
+      "slug": "tech-policy",
+      "title": "Tech policy",
+      "blurb": "Antitrust, regulation, and the politics of the platforms.",
+      "category": "policy",
+      "defaultSourceSlugs": ["politico", "the-verge", "wired"]
+    },
+    {
+      "slug": "developer-culture",
+      "title": "Developer culture",
+      "blurb": "Languages, tools, and the discussions shaping how we build.",
+      "category": "technology",
+      "defaultSourceSlugs": ["hacker-news", "arstechnica"]
+    }
+  ]
+}

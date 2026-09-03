@@ -59,6 +59,54 @@ CREATE TABLE IF NOT EXISTS oauth_accounts (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS oauth_accounts_provider_subject_unique ON oauth_accounts (provider, provider_subject);
 CREATE INDEX IF NOT EXISTS oauth_accounts_account_idx ON oauth_accounts (account_id);
+
+CREATE TABLE IF NOT EXISTS sources (
+  id TEXT PRIMARY KEY NOT NULL,
+  slug TEXT NOT NULL,
+  name TEXT NOT NULL,
+  homepage_url TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS sources_slug_unique ON sources (slug);
+
+CREATE TABLE IF NOT EXISTS topic_templates (
+  id TEXT PRIMARY KEY NOT NULL,
+  slug TEXT NOT NULL,
+  title TEXT NOT NULL,
+  blurb TEXT NOT NULL,
+  category TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS topic_templates_slug_unique ON topic_templates (slug);
+CREATE INDEX IF NOT EXISTS topic_templates_category_idx ON topic_templates (category);
+
+CREATE TABLE IF NOT EXISTS topic_template_sources (
+  topic_template_id TEXT NOT NULL REFERENCES topic_templates(id) ON DELETE CASCADE,
+  source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS topic_template_sources_pk ON topic_template_sources (topic_template_id, source_id);
+CREATE INDEX IF NOT EXISTS topic_template_sources_template_idx ON topic_template_sources (topic_template_id);
+
+CREATE TABLE IF NOT EXISTS topics (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  slug TEXT NOT NULL,
+  title TEXT NOT NULL,
+  blurb TEXT NOT NULL,
+  category TEXT NOT NULL,
+  origin_kind TEXT NOT NULL,
+  origin_template_id TEXT REFERENCES topic_templates(id) ON DELETE SET NULL,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS topics_user_slug_unique ON topics (user_id, slug);
+CREATE INDEX IF NOT EXISTS topics_user_idx ON topics (user_id);
+
+CREATE TABLE IF NOT EXISTS topic_sources (
+  topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+  source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS topic_sources_pk ON topic_sources (topic_id, source_id);
+CREATE INDEX IF NOT EXISTS topic_sources_topic_idx ON topic_sources (topic_id);
 `;
 
 export function applySchema(driver: SqliteDriver): void {

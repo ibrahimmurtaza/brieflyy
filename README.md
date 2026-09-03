@@ -10,7 +10,7 @@ personalized brief feed with insights and visual trends.
 ## Status
 
 - [x] **[01]** Account & magic-link auth — see `feature/01-magic-link-auth`
-- [ ] [02] Google OAuth sign-in
+- [x] **[02]** Google OAuth sign-in — see `feature/02-Google-OAuth`
 - [ ] [03] Directory seed & topic selection
 - [ ] [04] DeliveryTime picker & welcome email
 - [ ] [05] Single-source ingest + Story dedup
@@ -65,13 +65,15 @@ src/
 ├── config.ts              # shared constants
 │
 ├── db/                    # Drizzle schema, migration runner, driver factory
+├── directory/             # Seed JSON + directory loader (Sources, TopicTemplates)
 ├── domain/                # pure types & helpers (crypto, clock)
-├── repos/                 # persistence adapters for users / accounts / sessions / magic-links
+├── repos/                 # persistence adapters (users, accounts, sessions, magic-links, topics, ...)
 │
 ├── email/                 # EmailTransport seam (Console + Resend)
 │
 ├── auth/                  # AuthService (orchestration) + HTTP routes
-├── pages/                 # placeholder HTML routes (signup, onboarding)
+├── onboarding/            # OnboardingService (Directory → Topics) + HTTP routes
+├── pages/                 # placeholder HTML routes (signup, onboarding, ...)
 │
 └── testing/               # test-only helpers (test DB, deterministic clock)
 ```
@@ -98,7 +100,12 @@ Fastify's `inject()` against the same `createApp` factory.
 pnpm test
 ```
 
-36 tests across 3 files:
+99 tests across 9 files:
 - `auth-service.test.ts` — request / verify magic-link, sessions, logout
 - `routes.test.ts` — Fastify routes (signup, verify, logout, pages)
 - `transport.test.ts` — EmailTransport + factory
+- `google-auth-service.test.ts` — Google OAuth start / complete
+- `google-routes.test.ts` — `/auth/google/start` + `/auth/google/callback`
+- `oauth-repos.test.ts` — OAuth state / account repos
+- `onboarding-service.test.ts` — Directory listing, select 3 topics, paywall
+- `routes.test.ts` (onboarding) — `/onboarding/pick-topics` GET + POST + API
