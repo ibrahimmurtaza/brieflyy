@@ -38,6 +38,13 @@ export async function registerPageRoutes(
       );
   });
 
+  fastify.get('/onboarding/delivery-time', async (req, reply) => {
+    if (!req.auth) {
+      return reply.code(302).header('location', '/signup').send();
+    }
+    return reply.type('text/html').send(deliveryTimePlaceholderPage(req.auth.account.email));
+  });
+
   fastify.get('/', async (_req, reply) => {
     return reply.code(302).header('location', '/signup').send();
   });
@@ -251,6 +258,30 @@ function pickTopicsPage(input: {
       validate();
     })();
   </script>
+</body>
+</html>`;
+}
+
+function deliveryTimePlaceholderPage(email: string): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Delivery time · Brieflyy</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, sans-serif; max-width: 520px; margin: 4rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.6rem; margin: 0 0 0.5rem; }
+    p { color: #555; }
+    a { color: #1f6feb; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Pick your delivery time</h1>
+    <p>Signed in as ${escapeHtml(email)}.</p>
+    <p>Delivery-time and timezone selection is coming in the next update. <a href="/onboarding/pick-topics">Back to your topics</a>.</p>
+  </main>
 </body>
 </html>`;
 }

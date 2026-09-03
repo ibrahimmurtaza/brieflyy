@@ -291,3 +291,36 @@ describe('HTTP: POST /onboarding/pick-topics', () => {
     expect(response.headers.location).toBe('/signup');
   });
 });
+
+describe('HTTP: GET /onboarding/delivery-time (placeholder)', () => {
+  let app: FastifyInstance;
+  let cookie: string;
+  beforeEach(async () => {
+    const ctx = await signInFresh();
+    app = ctx.app;
+    cookie = ctx.cookie;
+  });
+  afterEach(async () => {
+    await app.close();
+  });
+
+  it('renders a placeholder page for signed-in users', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/onboarding/delivery-time',
+      headers: { cookie },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatch(/Pick your delivery time/);
+    expect(response.body).toMatch(/coming in the next update/i);
+  });
+
+  it('redirects to /signup when not authenticated', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/onboarding/delivery-time',
+    });
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toBe('/signup');
+  });
+});
