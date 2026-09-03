@@ -123,6 +123,121 @@ export const oauthAccounts = sqliteTable(
   }),
 );
 
+export const sources = sqliteTable(
+  'sources',
+  {
+    id: text('id').primaryKey(),
+    slug: text('slug').notNull(),
+    name: text('name').notNull(),
+    homepageUrl: text('homepage_url').notNull(),
+  },
+  (t) => ({
+    slugUnique: uniqueIndex('sources_slug_unique').on(t.slug),
+  }),
+);
+
+export const topicTemplates = sqliteTable(
+  'topic_templates',
+  {
+    id: text('id').primaryKey(),
+    slug: text('slug').notNull(),
+    title: text('title').notNull(),
+    blurb: text('blurb').notNull(),
+    category: text('category', {
+      enum: [
+        'news',
+        'technology',
+        'science',
+        'business',
+        'policy',
+        'unspecified',
+      ],
+    }).notNull(),
+  },
+  (t) => ({
+    slugUnique: uniqueIndex('topic_templates_slug_unique').on(t.slug),
+    categoryIdx: index('topic_templates_category_idx').on(t.category),
+  }),
+);
+
+export const topicTemplateSources = sqliteTable(
+  'topic_template_sources',
+  {
+    topicTemplateId: text('topic_template_id')
+      .notNull()
+      .references(() => topicTemplates.id, { onDelete: 'cascade' }),
+    sourceId: text('source_id')
+      .notNull()
+      .references(() => sources.id, { onDelete: 'cascade' }),
+    position: integer('position').notNull(),
+  },
+  (t) => ({
+    pk: uniqueIndex('topic_template_sources_pk').on(
+      t.topicTemplateId,
+      t.sourceId,
+    ),
+    templateIdx: index('topic_template_sources_template_idx').on(
+      t.topicTemplateId,
+    ),
+  }),
+);
+
+export const topics = sqliteTable(
+  'topics',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    slug: text('slug').notNull(),
+    title: text('title').notNull(),
+    blurb: text('blurb').notNull(),
+    category: text('category', {
+      enum: [
+        'news',
+        'technology',
+        'science',
+        'business',
+        'policy',
+        'unspecified',
+      ],
+    }).notNull(),
+    originKind: text('origin_kind', { enum: ['template', 'freeform'] })
+      .notNull(),
+    originTemplateId: text('origin_template_id').references(
+      () => topicTemplates.id,
+      { onDelete: 'set null' },
+    ),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    userSlugUnique: uniqueIndex('topics_user_slug_unique').on(
+      t.userId,
+      t.slug,
+    ),
+    userIdx: index('topics_user_idx').on(t.userId),
+  }),
+);
+
+export const topicSources = sqliteTable(
+  'topic_sources',
+  {
+    topicId: text('topic_id')
+      .notNull()
+      .references(() => topics.id, { onDelete: 'cascade' }),
+    sourceId: text('source_id')
+      .notNull()
+      .references(() => sources.id, { onDelete: 'cascade' }),
+    position: integer('position').notNull(),
+  },
+  (t) => ({
+    pk: uniqueIndex('topic_sources_pk').on(t.topicId, t.sourceId),
+    topicIdx: index('topic_sources_topic_idx').on(t.topicId),
+  }),
+);
+
 export type UserRow = typeof users.$inferSelect;
 export type NewUserRow = typeof users.$inferInsert;
 export type AccountRow = typeof accounts.$inferSelect;
@@ -135,3 +250,13 @@ export type OAuthStateRow = typeof oauthStates.$inferSelect;
 export type NewOAuthStateRow = typeof oauthStates.$inferInsert;
 export type OAuthAccountRow = typeof oauthAccounts.$inferSelect;
 export type NewOAuthAccountRow = typeof oauthAccounts.$inferInsert;
+export type SourceRow = typeof sources.$inferSelect;
+export type NewSourceRow = typeof sources.$inferInsert;
+export type TopicTemplateRow = typeof topicTemplates.$inferSelect;
+export type NewTopicTemplateRow = typeof topicTemplates.$inferInsert;
+export type TopicTemplateSourceRow = typeof topicTemplateSources.$inferSelect;
+export type NewTopicTemplateSourceRow = typeof topicTemplateSources.$inferInsert;
+export type TopicRow = typeof topics.$inferSelect;
+export type NewTopicRow = typeof topics.$inferInsert;
+export type TopicSourceRow = typeof topicSources.$inferSelect;
+export type NewTopicSourceRow = typeof topicSources.$inferInsert;

@@ -4,15 +4,20 @@ import fastifySensible from '@fastify/sensible';
 
 import { SESSION_COOKIE_NAME, SESSION_TTL_MS_DEFAULT } from './config.js';
 import type { Db } from './db/client.js';
+import { applyDirectorySeed } from './directory/seed.js';
 import { DrizzleAccountRepo } from './repos/account-repo.js';
 import { DrizzleMagicLinkRepo } from './repos/magic-link-repo.js';
 import { DrizzleOAuthAccountRepo } from './repos/oauth-account-repo.js';
 import { DrizzleOAuthStateRepo } from './repos/oauth-state-repo.js';
 import { DrizzleSessionRepo } from './repos/session-repo.js';
 import { DrizzleUserRepo } from './repos/user-repo.js';
+import { DrizzleTopicTemplateRepo } from './repos/directory-repo.js';
+import { DrizzleTopicRepo } from './repos/topic-repo.js';
 import { AuthService } from './auth/auth-service.js';
 import { registerAuthRoutes } from './auth/routes.js';
 import type { OAuthClient } from './oauth/client.js';
+import { OnboardingService } from './onboarding/onboarding-service.js';
+import { registerOnboardingRoutes } from './onboarding/routes.js';
 import { registerPageRoutes } from './pages/routes.js';
 import type { EmailTransport } from './email/transport.js';
 import type { Clock } from './domain/clock.js';
@@ -44,19 +49,28 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     'application/x-www-form-urlencoded',
     { parseAs: 'string' as const },
     (_req, body: string, done) => {
-      const fields: Record<string, string> = {};
+      const fields: Record<string, string | string[]> = {};
       if (body.length > 0) {
         for (const pair of body.split('&')) {
           if (pair.length === 0) continue;
           const eq = pair.indexOf('=');
           const key = eq === -1 ? pair : pair.slice(0, eq);
           const value = eq === -1 ? '' : pair.slice(eq + 1);
+          let decodedKey: string;
+          let decodedValue: string;
           try {
-            fields[decodeURIComponent(key)] = decodeURIComponent(
-              value.replace(/\+/g, ' '),
-            );
+            decodedKey = decodeURIComponent(key);
+            decodedValue = decodeURIComponent(value.replace(/\+/g, ' '));
           } catch {
-            // Malformed escape; skip this field.
+            continue;
+          }
+          const existing = fields[decodedKey];
+          if (existing === undefined) {
+            fields[decodedKey] = decodedValue;
+          } else if (typeof existing === 'string') {
+            fields[decodedKey] = [existing, decodedValue];
+          } else {
+            existing.push(decodedValue);
           }
         }
       }
@@ -74,6 +88,10 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
   const oauthAccountRepo = opts.oauthClient
     ? new DrizzleOAuthAccountRepo(opts.db)
     : null;
+  const topicTemplateRepo = new DrizzleTopicTemplateRepo(opts.db);
+  const topicRepo = new DrizzleTopicRepo(opts.db);
+
+  await applyDirectorySeed(opts.db);
 
   const clock = opts.clock ?? systemClock;
   // Reap expired session rows so the sessions table doesn't grow without bound.
@@ -94,6 +112,14 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     sessionTtlMs: opts.sessionTtlMs,
   });
 
+  const onboardingService = new OnboardingService({
+    topicTemplateRepo,
+    topicRepo,
+    userRepo,
+    clock,
+    random: opts.random ?? nodeRandom,
+  });
+
   await registerAuthRoutes(app, {
     authService,
     sessionTtlMs: opts.sessionTtlMs ?? SESSION_TTL_MS_DEFAULT,
@@ -101,7 +127,14 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     appBaseUrl: opts.appBaseUrl,
   });
 
-  await registerPageRoutes(app, { appBaseUrl: opts.appBaseUrl });
+  await registerOnboardingRoutes(app, {
+    onboardingService,
+  });
+
+  await registerPageRoutes(app, {
+    appBaseUrl: opts.appBaseUrl,
+    onboardingService,
+  });
 
   return app;
 }

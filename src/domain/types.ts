@@ -1,3 +1,13 @@
+export const TOPIC_CATEGORIES = [
+  'news',
+  'technology',
+  'science',
+  'business',
+  'policy',
+  'unspecified',
+] as const;
+export type TopicCategory = (typeof TOPIC_CATEGORIES)[number];
+
 export type OnboardingState =
   | 'not_started'
   | 'topics_picked'
@@ -56,5 +66,41 @@ export interface OAuthAccount {
   readonly accountId: AccountId;
   readonly provider: OAuthProvider;
   readonly providerSubject: string;
+  readonly createdAt: Date;
+}
+
+export type SourceId = string;
+export type TopicTemplateId = string;
+export type TopicId = string;
+
+export interface Source {
+  readonly id: SourceId;
+  readonly slug: string;
+  readonly name: string;
+  readonly homepageUrl: string;
+}
+
+export interface TopicTemplate {
+  readonly id: TopicTemplateId;
+  readonly slug: string;
+  readonly title: string;
+  readonly blurb: string;
+  readonly category: Exclude<TopicCategory, 'unspecified'>;
+  readonly defaultSourceIds: readonly SourceId[];
+}
+
+export type TopicOrigin =
+  | { readonly kind: 'template'; readonly templateId: TopicTemplateId }
+  | { readonly kind: 'freeform' };
+
+export interface Topic {
+  readonly id: TopicId;
+  readonly userId: UserId;
+  readonly slug: string;
+  readonly title: string;
+  readonly blurb: string;
+  readonly category: TopicCategory;
+  readonly origin: TopicOrigin;
+  readonly sourceIds: readonly SourceId[];
   readonly createdAt: Date;
 }
