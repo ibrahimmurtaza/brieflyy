@@ -292,7 +292,7 @@ describe('HTTP: POST /onboarding/pick-topics', () => {
   });
 });
 
-describe('HTTP: GET /onboarding/delivery-time (placeholder)', () => {
+describe('HTTP: GET /onboarding/delivery-time', () => {
   let app: FastifyInstance;
   let cookie: string;
   beforeEach(async () => {
@@ -304,7 +304,7 @@ describe('HTTP: GET /onboarding/delivery-time (placeholder)', () => {
     await app.close();
   });
 
-  it('renders a placeholder page for signed-in users', async () => {
+  it('renders the form for signed-in users', async () => {
     const response = await app.inject({
       method: 'GET',
       url: '/onboarding/delivery-time',
@@ -312,7 +312,9 @@ describe('HTTP: GET /onboarding/delivery-time (placeholder)', () => {
     });
     expect(response.statusCode).toBe(200);
     expect(response.body).toMatch(/Pick your delivery time/);
-    expect(response.body).toMatch(/coming in the next update/i);
+    expect(response.body).toMatch(/name="hour"/);
+    expect(response.body).toMatch(/name="minute"/);
+    expect(response.body).toMatch(/name="timezone"/);
   });
 
   it('redirects to /signup when not authenticated', async () => {
@@ -322,5 +324,192 @@ describe('HTTP: GET /onboarding/delivery-time (placeholder)', () => {
     });
     expect(response.statusCode).toBe(302);
     expect(response.headers.location).toBe('/signup');
+  });
+});
+
+describe('HTTP: POST /onboarding/delivery-time', () => {
+  let app: FastifyInstance;
+  let cookie: string;
+  beforeEach(async () => {
+    const ctx = await signInFresh();
+    app = ctx.app;
+    cookie = ctx.cookie;
+  });
+  afterEach(async () => {
+    await app.close();
+  });
+
+  it('redirects to /onboarding/welcome on a valid submission', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/onboarding/delivery-time',
+      headers: {
+        cookie,
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      payload: 'hour=8&minute=0&timezone=America%2FNew_York',
+    });
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toBe('/onboarding/welcome');
+  });
+
+  it('returns 400 with a human message for an out-of-range hour', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/onboarding/delivery-time',
+      headers: {
+        cookie,
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      payload: 'hour=99&minute=0&timezone=UTC',
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toMatch(/valid time/);
+  });
+
+  it('returns 400 with a human message for an unknown timezone', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/onboarding/delivery-time',
+      headers: {
+        cookie,
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      payload: 'hour=8&minute=0&timezone=Mars%2FOlympus',
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toMatch(/valid time/);
+  });
+
+  it('redirects to /signup when not authenticated', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/onboarding/delivery-time',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      payload: 'hour=8&minute=0&timezone=UTC',
+    });
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toBe('/signup');
+  });
+});
+
+describe('HTTP: GET /onboarding/welcome', () => {
+  let app: FastifyInstance;
+  let cookie: string;
+  beforeEach(async () => {
+    const ctx = await signInFresh();
+    app = ctx.app;
+    cookie = ctx.cookie;
+  });
+  afterEach(async () => {
+    await app.close();
+  });
+
+  it('redirects to the picker if the user has no settings yet', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/onboarding/welcome',
+      headers: { cookie },
+    });
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toBe('/onboarding/delivery-time');
+  });
+
+  it('shows the confirmation after a delivery time is set', async () => {
+    await app.inject({
+      method: 'POST',
+      url: '/onboarding/delivery-time',
+      headers: {
+        cookie,
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      payload: 'hour=8&minute=0&timezone=America%2FNew_York',
+    });
+    const response = await app.inject({
+      method: 'GET',
+      url: '/onboarding/welcome',
+      headers: { cookie },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatch(/You're set up/);
+    expect(response.body).toMatch(/first brief arrives/i);
+    expect(response.body).toMatch(/America\/New_York/);
+  });
+});
+
+describe('HTTP: GET/POST /settings/delivery', () => {
+  let app: FastifyInstance;
+  let cookie: string;
+  beforeEach(async () => {
+    const ctx = await signInFresh();
+    app = ctx.app;
+    cookie = ctx.cookie;
+  });
+  afterEach(async () => {
+    await app.close();
+  });
+
+  it('GET redirects to the picker when no delivery time is set', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/settings/delivery',
+      headers: { cookie },
+    });
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toBe('/onboarding/delivery-time');
+  });
+
+  it('GET renders the settings form when a delivery time is set', async () => {
+    await app.inject({
+      method: 'POST',
+      url: '/onboarding/delivery-time',
+      headers: {
+        cookie,
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      payload: 'hour=8&minute=0&timezone=America%2FNew_York',
+    });
+    const response = await app.inject({
+      method: 'GET',
+      url: '/settings/delivery',
+      headers: { cookie },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatch(/Delivery time/);
+    expect(response.body).toMatch(/name="hour"/);
+  });
+
+  it('POST updates the delivery time and redirects to the settings page', async () => {
+    await app.inject({
+      method: 'POST',
+      url: '/onboarding/delivery-time',
+      headers: {
+        cookie,
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      payload: 'hour=8&minute=0&timezone=America%2FNew_York',
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/settings/delivery',
+      headers: {
+        cookie,
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      payload: 'hour=9&minute=30&timezone=Europe%2FLondon',
+    });
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toBe('/settings/delivery?saved=1');
+
+    const after = await app.inject({
+      method: 'GET',
+      url: '/settings/delivery?saved=1',
+      headers: { cookie },
+    });
+    expect(after.statusCode).toBe(200);
+    expect(after.body).toMatch(/Delivery time updated/);
+    expect(after.body).toMatch(/value="9"/);
+    expect(after.body).toMatch(/value="30"/);
+    expect(after.body).toMatch(/Europe\/London/);
   });
 });

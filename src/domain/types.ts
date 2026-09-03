@@ -104,3 +104,18 @@ export interface Topic {
   readonly sourceIds: readonly SourceId[];
   readonly createdAt: Date;
 }
+
+export interface DeliveryTime {
+  readonly hour: number;
+  readonly minute: number;
+  readonly timezone: string;
+}
+
+export interface DeliverySettings {
+  readonly userId: UserId;
+  readonly hour: number;
+  readonly minute: number;
+  readonly timezone: string;
+  readonly welcomeSentAt: Date | null;
+  readonly updatedAt: Date;
+}
