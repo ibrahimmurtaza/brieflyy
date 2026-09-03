@@ -107,6 +107,15 @@ CREATE TABLE IF NOT EXISTS topic_sources (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS topic_sources_pk ON topic_sources (topic_id, source_id);
 CREATE INDEX IF NOT EXISTS topic_sources_topic_idx ON topic_sources (topic_id);
+
+CREATE TABLE IF NOT EXISTS delivery_settings (
+  user_id TEXT PRIMARY KEY NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  hour INTEGER NOT NULL,
+  minute INTEGER NOT NULL,
+  timezone TEXT NOT NULL,
+  welcome_sent_at INTEGER,
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+);
 `;
 
 export function applySchema(driver: SqliteDriver): void {

@@ -85,6 +85,142 @@ export async function registerOnboardingRoutes(
       .type('text/html')
       .send(pickTopicsErrorPage(humanReason(outcome.reason)));
   });
+
+  fastify.post('/onboarding/delivery-time', async (req, reply) => {
+    if (!req.auth) {
+      return reply.code(302).header('location', '/signup').send();
+    }
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const hour = parseHour(body.hour);
+    const minute = parseMinute(body.minute);
+    const timezone = typeof body.timezone === 'string' ? body.timezone : '';
+    if (hour === null || minute === null || timezone.length === 0) {
+      return reply
+        .code(400)
+        .type('text/html')
+        .send(deliveryTimeErrorPage(req.auth.account.email, 'Please pick a valid time and timezone.'));
+    }
+    const outcome = await onboardingService.setDeliveryTime({
+      userId: req.auth.user.id,
+      hour,
+      minute,
+      timezone,
+    });
+    if (outcome.status === 'ok') {
+      return reply.code(302).header('location', '/onboarding/welcome').send();
+    }
+    return reply
+      .code(400)
+      .type('text/html')
+      .send(
+        deliveryTimeErrorPage(
+          req.auth.account.email,
+          humanDeliveryTimeReason(outcome.reason),
+        ),
+      );
+  });
+
+  fastify.post('/settings/delivery', async (req, reply) => {
+    if (!req.auth) {
+      return reply.code(302).header('location', '/signup').send();
+    }
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const hour = parseHour(body.hour);
+    const minute = parseMinute(body.minute);
+    const timezone = typeof body.timezone === 'string' ? body.timezone : '';
+    if (hour === null || minute === null || timezone.length === 0) {
+      return reply
+        .code(400)
+        .type('text/html')
+        .send(settingsDeliveryErrorPage('Please pick a valid time and timezone.'));
+    }
+    const outcome = await onboardingService.setDeliveryTime({
+      userId: req.auth.user.id,
+      hour,
+      minute,
+      timezone,
+    });
+    if (outcome.status === 'ok') {
+      return reply.code(302).header('location', '/settings/delivery?saved=1').send();
+    }
+    return reply
+      .code(400)
+      .type('text/html')
+      .send(settingsDeliveryErrorPage(humanDeliveryTimeReason(outcome.reason)));
+  });
+}
+
+function parseHour(value: unknown): number | null {
+  if (typeof value !== 'string') return null;
+  const n = parseInt(value, 10);
+  if (!Number.isInteger(n) || n < 0 || n > 23) return null;
+  return n;
+}
+
+function parseMinute(value: unknown): number | null {
+  if (typeof value !== 'string') return null;
+  const n = parseInt(value, 10);
+  if (!Number.isInteger(n) || n < 0 || n > 59) return null;
+  return n;
+}
+
+function humanDeliveryTimeReason(
+  reason: 'invalid_input' | 'no_user',
+): string {
+  switch (reason) {
+    case 'invalid_input':
+      return 'Please pick a valid time (00:00–23:59) and a timezone.';
+    case 'no_user':
+      return 'Your account could not be found. Please sign in again.';
+  }
+}
+
+function deliveryTimeErrorPage(email: string, message: string): string {
+  const safe = escapeHtml(message);
+  const safeEmail = escapeHtml(email);
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Pick your delivery time · Brieflyy</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 480px; margin: 4rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.4rem; margin: 0 0 0.5rem; }
+    p { color: #b00020; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Pick your delivery time</h1>
+    <p>Signed in as ${safeEmail}.</p>
+    <p>${safe}</p>
+    <p><a href="/onboarding/delivery-time">Try again</a></p>
+  </main>
+</body>
+</html>`;
+}
+
+function settingsDeliveryErrorPage(message: string): string {
+  const safe = escapeHtml(message);
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Delivery time · Brieflyy</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 480px; margin: 4rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.4rem; margin: 0 0 0.5rem; }
+    p { color: #b00020; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Delivery time</h1>
+    <p>${safe}</p>
+    <p><a href="/settings/delivery">Try again</a></p>
+  </main>
+</body>
+</html>`;
 }
 
 function humanReason(

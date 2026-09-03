@@ -6,6 +6,7 @@ import { SESSION_COOKIE_NAME, SESSION_TTL_MS_DEFAULT } from './config.js';
 import type { Db } from './db/client.js';
 import { applyDirectorySeed } from './directory/seed.js';
 import { DrizzleAccountRepo } from './repos/account-repo.js';
+import { DrizzleDeliverySettingsRepo } from './repos/delivery-settings-repo.js';
 import { DrizzleMagicLinkRepo } from './repos/magic-link-repo.js';
 import { DrizzleOAuthAccountRepo } from './repos/oauth-account-repo.js';
 import { DrizzleOAuthStateRepo } from './repos/oauth-state-repo.js';
@@ -90,6 +91,7 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     : null;
   const topicTemplateRepo = new DrizzleTopicTemplateRepo(opts.db);
   const topicRepo = new DrizzleTopicRepo(opts.db);
+  const deliverySettingsRepo = new DrizzleDeliverySettingsRepo(opts.db);
 
   await applyDirectorySeed(opts.db);
 
@@ -116,6 +118,9 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     topicTemplateRepo,
     topicRepo,
     userRepo,
+    accountRepo,
+    deliverySettingsRepo,
+    emailTransport: opts.emailTransport,
     clock,
     random: opts.random ?? nodeRandom,
   });

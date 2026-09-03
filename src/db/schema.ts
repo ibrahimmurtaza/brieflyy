@@ -238,6 +238,22 @@ export const topicSources = sqliteTable(
   }),
 );
 
+export const deliverySettings = sqliteTable(
+  'delivery_settings',
+  {
+    userId: text('user_id')
+      .primaryKey()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    hour: integer('hour').notNull(),
+    minute: integer('minute').notNull(),
+    timezone: text('timezone').notNull(),
+    welcomeSentAt: integer('welcome_sent_at', { mode: 'timestamp_ms' }),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+);
+
 export type UserRow = typeof users.$inferSelect;
 export type NewUserRow = typeof users.$inferInsert;
 export type AccountRow = typeof accounts.$inferSelect;
@@ -260,3 +276,5 @@ export type TopicRow = typeof topics.$inferSelect;
 export type NewTopicRow = typeof topics.$inferInsert;
 export type TopicSourceRow = typeof topicSources.$inferSelect;
 export type NewTopicSourceRow = typeof topicSources.$inferInsert;
+export type DeliverySettingsRow = typeof deliverySettings.$inferSelect;
+export type NewDeliverySettingsRow = typeof deliverySettings.$inferInsert;
