@@ -64,7 +64,10 @@ CREATE TABLE IF NOT EXISTS sources (
   id TEXT PRIMARY KEY NOT NULL,
   slug TEXT NOT NULL,
   name TEXT NOT NULL,
-  homepage_url TEXT NOT NULL
+  homepage_url TEXT NOT NULL,
+  feed_url TEXT,
+  last_polled_at INTEGER,
+  last_success_at INTEGER
 );
 CREATE UNIQUE INDEX IF NOT EXISTS sources_slug_unique ON sources (slug);
 
@@ -116,6 +119,48 @@ CREATE TABLE IF NOT EXISTS delivery_settings (
   welcome_sent_at INTEGER,
   updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
 );
+
+CREATE TABLE IF NOT EXISTS entities (
+  id TEXT PRIMARY KEY NOT NULL,
+  canonical_name TEXT NOT NULL,
+  kind TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS entities_canonical_name_unique ON entities (canonical_name);
+
+CREATE TABLE IF NOT EXISTS articles (
+  id TEXT PRIMARY KEY NOT NULL,
+  source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+  external_id TEXT NOT NULL,
+  url TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  published_at INTEGER NOT NULL,
+  ingested_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+  fingerprint TEXT NOT NULL,
+  story_id TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS articles_source_external_unique ON articles (source_id, external_id);
+CREATE INDEX IF NOT EXISTS articles_source_idx ON articles (source_id);
+CREATE INDEX IF NOT EXISTS articles_fingerprint_idx ON articles (fingerprint);
+CREATE INDEX IF NOT EXISTS articles_story_idx ON articles (story_id);
+CREATE INDEX IF NOT EXISTS articles_published_idx ON articles (published_at);
+
+CREATE TABLE IF NOT EXISTS article_entities (
+  article_id TEXT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+  entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS article_entities_pk ON article_entities (article_id, entity_id);
+CREATE INDEX IF NOT EXISTS article_entities_entity_idx ON article_entities (entity_id);
+
+CREATE TABLE IF NOT EXISTS stories (
+  id TEXT PRIMARY KEY NOT NULL,
+  source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+  fingerprint TEXT NOT NULL,
+  first_seen_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS stories_source_fingerprint_idx ON stories (source_id, fingerprint);
+CREATE INDEX IF NOT EXISTS stories_source_idx ON stories (source_id);
 `;
 
 export function applySchema(driver: SqliteDriver): void {

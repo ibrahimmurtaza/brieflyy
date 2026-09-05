@@ -8,6 +8,7 @@ export interface SeedSource {
   readonly slug: string;
   readonly name: string;
   readonly homepageUrl: string;
+  readonly feedUrl: string | undefined;
 }
 
 export interface SeedTopicTemplate {
@@ -69,6 +70,11 @@ function parseSeed(raw: unknown): DirectorySeed {
         `Directory seed: sources[${i}] must have string slug, name, homepageUrl`,
       );
     }
+    if (obj.feedUrl !== undefined && typeof obj.feedUrl !== 'string') {
+      throw new Error(
+        `Directory seed: sources[${i}] feedUrl must be a string when present`,
+      );
+    }
     if (seenSourceSlugs.has(obj.slug)) {
       throw new Error(`Directory seed: duplicate source slug "${obj.slug}"`);
     }
@@ -77,6 +83,7 @@ function parseSeed(raw: unknown): DirectorySeed {
       slug: obj.slug,
       name: obj.name,
       homepageUrl: obj.homepageUrl,
+      feedUrl: typeof obj.feedUrl === 'string' ? obj.feedUrl : undefined,
     };
   });
 
@@ -133,6 +140,7 @@ export async function applyDirectorySeed(db: Db): Promise<void> {
         slug: s.slug,
         name: s.name,
         homepageUrl: s.homepageUrl,
+        feedUrl: s.feedUrl ?? null,
       })
       .onConflictDoNothing();
   }

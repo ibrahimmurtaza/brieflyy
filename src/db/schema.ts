@@ -130,6 +130,9 @@ export const sources = sqliteTable(
     slug: text('slug').notNull(),
     name: text('name').notNull(),
     homepageUrl: text('homepage_url').notNull(),
+    feedUrl: text('feed_url'),
+    lastPolledAt: integer('last_polled_at', { mode: 'timestamp_ms' }),
+    lastSuccessAt: integer('last_success_at', { mode: 'timestamp_ms' }),
   },
   (t) => ({
     slugUnique: uniqueIndex('sources_slug_unique').on(t.slug),
@@ -278,3 +281,92 @@ export type TopicSourceRow = typeof topicSources.$inferSelect;
 export type NewTopicSourceRow = typeof topicSources.$inferInsert;
 export type DeliverySettingsRow = typeof deliverySettings.$inferSelect;
 export type NewDeliverySettingsRow = typeof deliverySettings.$inferInsert;
+
+export const entities = sqliteTable(
+  'entities',
+  {
+    id: text('id').primaryKey(),
+    canonicalName: text('canonical_name').notNull(),
+    kind: text('kind', {
+      enum: ['person', 'org', 'place', 'product', 'concept'],
+    }).notNull(),
+  },
+  (t) => ({
+    nameUnique: uniqueIndex('entities_canonical_name_unique').on(t.canonicalName),
+  }),
+);
+
+export const articles = sqliteTable(
+  'articles',
+  {
+    id: text('id').primaryKey(),
+    sourceId: text('source_id')
+      .notNull()
+      .references(() => sources.id, { onDelete: 'cascade' }),
+    externalId: text('external_id').notNull(),
+    url: text('url').notNull(),
+    title: text('title').notNull(),
+    body: text('body').notNull(),
+    publishedAt: integer('published_at', { mode: 'timestamp_ms' }).notNull(),
+    ingestedAt: integer('ingested_at', { mode: 'timestamp_ms' })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+    fingerprint: text('fingerprint').notNull(),
+    storyId: text('story_id'),
+  },
+  (t) => ({
+    sourceExternalUnique: uniqueIndex('articles_source_external_unique').on(
+      t.sourceId,
+      t.externalId,
+    ),
+    sourceIdx: index('articles_source_idx').on(t.sourceId),
+    fingerprintIdx: index('articles_fingerprint_idx').on(t.fingerprint),
+    storyIdx: index('articles_story_idx').on(t.storyId),
+    publishedIdx: index('articles_published_idx').on(t.publishedAt),
+  }),
+);
+
+export const articleEntities = sqliteTable(
+  'article_entities',
+  {
+    articleId: text('article_id')
+      .notNull()
+      .references(() => articles.id, { onDelete: 'cascade' }),
+    entityId: text('entity_id')
+      .notNull()
+      .references(() => entities.id, { onDelete: 'cascade' }),
+  },
+  (t) => ({
+    pk: uniqueIndex('article_entities_pk').on(t.articleId, t.entityId),
+    entityIdx: index('article_entities_entity_idx').on(t.entityId),
+  }),
+);
+
+export const stories = sqliteTable(
+  'stories',
+  {
+    id: text('id').primaryKey(),
+    sourceId: text('source_id')
+      .notNull()
+      .references(() => sources.id, { onDelete: 'cascade' }),
+    fingerprint: text('fingerprint').notNull(),
+    firstSeenAt: integer('first_seen_at', { mode: 'timestamp_ms' }).notNull(),
+    lastSeenAt: integer('last_seen_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    sourceFingerprintIdx: index('stories_source_fingerprint_idx').on(
+      t.sourceId,
+      t.fingerprint,
+    ),
+    sourceIdx: index('stories_source_idx').on(t.sourceId),
+  }),
+);
+
+export type EntityRow = typeof entities.$inferSelect;
+export type NewEntityRow = typeof entities.$inferInsert;
+export type ArticleRow = typeof articles.$inferSelect;
+export type NewArticleRow = typeof articles.$inferInsert;
+export type ArticleEntityRow = typeof articleEntities.$inferSelect;
+export type NewArticleEntityRow = typeof articleEntities.$inferInsert;
+export type StoryRow = typeof stories.$inferSelect;
+export type NewStoryRow = typeof stories.$inferInsert;

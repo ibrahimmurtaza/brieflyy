@@ -1,6 +1,6 @@
 {
   "sources": [
-    { "slug": "reuters", "name": "Reuters", "homepageUrl": "https://www.reuters.com" },
+    { "slug": "reuters", "name": "Reuters", "homepageUrl": "https://www.reuters.com", "feedUrl": "https://www.reuters.com/rss/topNews" },
     { "slug": "associated-press", "name": "Associated Press", "homepageUrl": "https://apnews.com" },
     { "slug": "the-guardian", "name": "The Guardian", "homepageUrl": "https://www.theguardian.com" },
     { "slug": "bbc-news", "name": "BBC News", "homepageUrl": "https://www.bbc.com/news" },
