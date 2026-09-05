@@ -72,12 +72,18 @@ export interface OAuthAccount {
 export type SourceId = string;
 export type TopicTemplateId = string;
 export type TopicId = string;
+export type ArticleId = string;
+export type StoryId = string;
+export type EntityId = string;
 
 export interface Source {
   readonly id: SourceId;
   readonly slug: string;
   readonly name: string;
   readonly homepageUrl: string;
+  readonly feedUrl: string | null;
+  readonly lastPolledAt: Date | null;
+  readonly lastSuccessAt: Date | null;
 }
 
 export interface TopicTemplate {
@@ -118,4 +124,36 @@ export interface DeliverySettings {
   readonly timezone: string;
   readonly welcomeSentAt: Date | null;
   readonly updatedAt: Date;
+}
+
+export type EntityKind = 'person' | 'org' | 'place' | 'product' | 'concept';
+
+export interface Entity {
+  readonly id: EntityId;
+  readonly canonicalName: string;
+  readonly kind: EntityKind;
+}
+
+export interface Article {
+  readonly id: ArticleId;
+  readonly sourceId: SourceId;
+  readonly externalId: string;
+  readonly url: string;
+  readonly title: string;
+  readonly body: string;
+  readonly publishedAt: Date;
+  readonly ingestedAt: Date;
+  readonly entities: readonly Entity[];
+  readonly keyPhrases: readonly string[];
+  readonly fingerprint: string;
+  readonly storyId: StoryId | null;
+}
+
+export interface Story {
+  readonly id: StoryId;
+  readonly sourceId: SourceId;
+  readonly fingerprint: string;
+  readonly firstSeenAt: Date;
+  readonly lastSeenAt: Date;
+  readonly articleCount: number;
 }
