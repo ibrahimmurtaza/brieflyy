@@ -54,6 +54,8 @@ function groupSourcesByTopic(
 export interface TopicRepo {
   insert(topic: Topic): Promise<void>;
   listByUser(userId: UserId): Promise<readonly Topic[]>;
+  listAll(): Promise<readonly Topic[]>;
+  getById(id: TopicId): Promise<Topic | null>;
   insertTopicSource(
     topicId: TopicId,
     sourceId: string,
@@ -99,6 +101,40 @@ export class DrizzleTopicRepo implements TopicRepo {
     return tplRows.map((row) =>
       rowToTopic(row, sourcesByTopic.get(row.id) ?? []),
     );
+  }
+
+  async listAll(): Promise<readonly Topic[]> {
+    const tplRows = (await this.db
+      .select()
+      .from(topics)
+      .orderBy(asc(topics.createdAt))) as readonly TopicRow[];
+    if (tplRows.length === 0) return [];
+    const ids = tplRows.map((r) => r.id);
+    const linkRows = (await this.db
+      .select()
+      .from(topicSources)
+      .where(inArray(topicSources.topicId, ids))
+      .orderBy(asc(topicSources.topicId), asc(topicSources.position))) as readonly TopicSourceRow[];
+    const sourcesByTopic = groupSourcesByTopic(linkRows);
+    return tplRows.map((row) =>
+      rowToTopic(row, sourcesByTopic.get(row.id) ?? []),
+    );
+  }
+
+  async getById(id: TopicId): Promise<Topic | null> {
+    const tplRows = (await this.db
+      .select()
+      .from(topics)
+      .where(eq(topics.id, id))) as readonly TopicRow[];
+    const row = tplRows[0];
+    if (!row) return null;
+    const linkRows = (await this.db
+      .select()
+      .from(topicSources)
+      .where(eq(topicSources.topicId, id))
+      .orderBy(asc(topicSources.position))) as readonly TopicSourceRow[];
+    const sourceIds = linkRows.map((l) => l.sourceId);
+    return rowToTopic(row, sourceIds);
   }
 
   async insertTopicSource(

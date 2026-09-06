@@ -6,11 +6,15 @@ import { SESSION_COOKIE_NAME, SESSION_TTL_MS_DEFAULT } from './config.js';
 import type { Db } from './db/client.js';
 import { applyDirectorySeed } from './directory/seed.js';
 import { DrizzleAccountRepo } from './repos/account-repo.js';
+import { DrizzleArticleRepo } from './repos/article-repo.js';
 import { DrizzleDeliverySettingsRepo } from './repos/delivery-settings-repo.js';
 import { DrizzleMagicLinkRepo } from './repos/magic-link-repo.js';
 import { DrizzleOAuthAccountRepo } from './repos/oauth-account-repo.js';
 import { DrizzleOAuthStateRepo } from './repos/oauth-state-repo.js';
 import { DrizzleSessionRepo } from './repos/session-repo.js';
+import { DrizzleSourceRepo } from './repos/source-repo.js';
+import { DrizzleEntityRepo } from './repos/entity-repo.js';
+import { DrizzleStoryRepo } from './repos/story-repo.js';
 import { DrizzleUserRepo } from './repos/user-repo.js';
 import { DrizzleTopicTemplateRepo } from './repos/directory-repo.js';
 import { DrizzleTopicRepo } from './repos/topic-repo.js';
@@ -25,6 +29,11 @@ import type { Clock } from './domain/clock.js';
 import { systemClock } from './domain/clock.js';
 import type { RandomSource } from './domain/crypto.js';
 import { nodeRandom } from './domain/crypto.js';
+import { IngestService } from './ingest/ingest-service.js';
+import { IngestScheduler } from './ingest/ingest-scheduler.js';
+import { RegistryIngestService } from './ingest/registry-ingest-service.js';
+import { registerIngestRoutes } from './ingest/routes.js';
+import type { FeedFetcher } from './ingest/feed-fetcher.js';
 
 export interface CreateAppOptions {
   readonly db: Db;
@@ -36,6 +45,8 @@ export interface CreateAppOptions {
   readonly sessionTtlMs?: number | undefined;
   readonly oauthClient?: OAuthClient | undefined;
   readonly logger?: boolean | undefined;
+  readonly feedFetcher?: FeedFetcher | undefined;
+  readonly ingestScheduler?: IngestScheduler | undefined;
 }
 
 export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance> {
@@ -125,6 +136,13 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     random: opts.random ?? nodeRandom,
   });
 
+  const ingestScheduler = await resolveIngestScheduler({
+    provided: opts.ingestScheduler,
+    db: opts.db,
+    clock,
+    feedFetcher: opts.feedFetcher,
+  });
+
   await registerAuthRoutes(app, {
     authService,
     sessionTtlMs: opts.sessionTtlMs ?? SESSION_TTL_MS_DEFAULT,
@@ -141,7 +159,48 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     onboardingService,
   });
 
+  if (ingestScheduler) {
+    await registerIngestRoutes(app, { scheduler: ingestScheduler });
+  }
+
   return app;
+}
+
+async function resolveIngestScheduler(input: {
+  readonly provided: IngestScheduler | undefined;
+  readonly db: Db;
+  readonly clock: Clock;
+  readonly feedFetcher: FeedFetcher | undefined;
+}): Promise<IngestScheduler | null> {
+  if (input.provided) return input.provided;
+  if (!input.feedFetcher) return null;
+  const sourceRepo = new DrizzleSourceRepo(input.db);
+  const articleRepo = new DrizzleArticleRepo(input.db);
+  const storyRepo = new DrizzleStoryRepo(input.db);
+  const entityRepo = new DrizzleEntityRepo(input.db);
+  const topicRepo = new DrizzleTopicRepo(input.db);
+  const ingestService = new IngestService({
+    sourceRepo,
+    articleRepo,
+    storyRepo,
+    entityRepo,
+    feedFetcher: input.feedFetcher,
+    clock: input.clock,
+    random: nodeRandom,
+  });
+  const registry = new RegistryIngestService({
+    ingest: ingestService,
+    topicRepo,
+    articleRepo,
+    storyRepo,
+    clock: input.clock,
+    cycleIdFn: () => nodeRandom.uuid(),
+  });
+  return new IngestScheduler({
+    registry,
+    sourceRepo,
+    clock: input.clock,
+  });
 }
 
 export { SESSION_COOKIE_NAME };

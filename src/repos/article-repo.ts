@@ -1,4 +1,4 @@
-import { and, eq, gte, sql } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, sql } from 'drizzle-orm';
 
 import type { Db } from '../db/client.js';
 import {
@@ -53,6 +53,10 @@ export interface ArticleRepo {
   findByFingerprintInWindow(input: {
     readonly sourceId: SourceId;
     readonly fingerprint: string;
+    readonly windowStart: Date;
+  }): Promise<readonly Article[]>;
+  listBySourceIdsInWindow(input: {
+    readonly sourceIds: readonly SourceId[];
     readonly windowStart: Date;
   }): Promise<readonly Article[]>;
   assignToStory(articleId: ArticleId, storyId: StoryId): Promise<void>;
@@ -120,6 +124,28 @@ export class DrizzleArticleRepo implements ArticleRepo {
           gte(articles.publishedAt, input.windowStart),
         ),
       )) as readonly ArticleRow[];
+    if (rows.length === 0) return [];
+    const byArticle = await this.loadEntitiesByArticleId(
+      rows.map((r) => r.id),
+    );
+    return rows.map((row) => rowToArticle(row, byArticle.get(row.id) ?? []));
+  }
+
+  async listBySourceIdsInWindow(input: {
+    readonly sourceIds: readonly SourceId[];
+    readonly windowStart: Date;
+  }): Promise<readonly Article[]> {
+    if (input.sourceIds.length === 0) return [];
+    const rows = (await this.db
+      .select()
+      .from(articles)
+      .where(
+        and(
+          inArray(articles.sourceId, input.sourceIds),
+          gte(articles.publishedAt, input.windowStart),
+        ),
+      )
+      .orderBy(asc(articles.publishedAt))) as readonly ArticleRow[];
     if (rows.length === 0) return [];
     const byArticle = await this.loadEntitiesByArticleId(
       rows.map((r) => r.id),

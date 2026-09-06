@@ -1,4 +1,4 @@
-import { and, eq, gte } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray } from 'drizzle-orm';
 
 import type { Db } from '../db/client.js';
 import { articles, stories, type StoryRow } from '../db/schema.js';
@@ -14,6 +14,10 @@ export interface StoryRepo {
     readonly fingerprint: string;
     readonly windowStart: Date;
   }): Promise<Story | null>;
+  listBySourceIdsInWindow(input: {
+    readonly sourceIds: readonly SourceId[];
+    readonly windowStart: Date;
+  }): Promise<readonly Story[]>;
   insert(input: {
     readonly id: StoryId;
     readonly sourceId: SourceId;
@@ -65,6 +69,24 @@ export class DrizzleStoryRepo implements StoryRepo {
     const row = rows[0];
     if (!row) return null;
     return this.hydrate(row);
+  }
+
+  async listBySourceIdsInWindow(input: {
+    readonly sourceIds: readonly SourceId[];
+    readonly windowStart: Date;
+  }): Promise<readonly Story[]> {
+    if (input.sourceIds.length === 0) return [];
+    const rows = (await this.db
+      .select()
+      .from(stories)
+      .where(
+        and(
+          inArray(stories.sourceId, input.sourceIds),
+          gte(stories.lastSeenAt, input.windowStart),
+        ),
+      )
+      .orderBy(asc(stories.lastSeenAt))) as readonly StoryRow[];
+    return Promise.all(rows.map((r) => this.hydrate(r)));
   }
 
   private async hydrate(row: StoryRow): Promise<Story> {
