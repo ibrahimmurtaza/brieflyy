@@ -38,7 +38,6 @@ export interface IngestSchedulerDeps {
   readonly clock: Clock;
   readonly config?: IngestSchedulerConfig;
   readonly sleep?: (ms: number) => Promise<void>;
-  readonly intervalFn?: () => number;
 }
 
 interface SourceBackoff {
@@ -52,7 +51,6 @@ export class IngestScheduler {
   private readonly sourceRepo: SourceRepo;
   private readonly clock: Clock;
   private readonly config: IngestSchedulerConfig;
-  private readonly intervalFn: () => number;
   private sleepFn: (ms: number) => Promise<void>;
 
   private readonly backoffs = new Map<SourceId, SourceBackoff>();
@@ -66,7 +64,6 @@ export class IngestScheduler {
     this.sourceRepo = deps.sourceRepo;
     this.clock = deps.clock;
     this.config = deps.config ?? DEFAULT_INGEST_SCHEDULER_CONFIG;
-    this.intervalFn = deps.intervalFn ?? ((): number => this.config.intervalMs);
     this.sleepFn =
       deps.sleep ??
       ((ms: number): Promise<void> =>
@@ -78,6 +75,10 @@ export class IngestScheduler {
 
   setSleepFn(fn: (ms: number) => Promise<void>): void {
     this.sleepFn = fn;
+  }
+
+  private intervalMs(): number {
+    return this.config.intervalMs;
   }
 
   async tick(): Promise<RegistryIngestCycleReport> {
@@ -105,14 +106,14 @@ export class IngestScheduler {
     while (this.running) {
       const dueAt =
         this.nextDueAt ??
-        new Date(this.clock.now().getTime() + this.intervalFn());
+        new Date(this.clock.now().getTime() + this.intervalMs());
       const delay = Math.max(0, dueAt.getTime() - this.clock.now().getTime());
       await this.sleepFn(delay);
       if (!this.running) break;
       try {
         await this.tick();
-      } catch {
-        // Swallow tick errors; per-source backoff tracking continues.
+      } catch (err) {
+        console.error('[IngestScheduler] tick failed:', err);
       }
     }
   }
@@ -182,7 +183,7 @@ export class IngestScheduler {
         existing.consecutiveFailures = 0;
         existing.lastError = null;
         existing.nextAttemptAt = new Date(
-          cycleFinishedAt.getTime() + this.intervalFn(),
+          cycleFinishedAt.getTime() + this.intervalMs(),
         );
       } else {
         existing.consecutiveFailures += 1;
@@ -212,7 +213,7 @@ export class IngestScheduler {
   private computeNextAttemptAtForSource(source: Source, now: Date): Date {
     const backoff = this.backoffs.get(source.id);
     if (backoff) return backoff.nextAttemptAt;
-    const interval = this.intervalFn();
+    const interval = this.intervalMs();
     if (source.lastPolledAt) {
       return new Date(source.lastPolledAt.getTime() + interval);
     }
@@ -220,7 +221,7 @@ export class IngestScheduler {
   }
 
   private computeNextDueAt(now: Date): Date {
-    let earliest = new Date(now.getTime() + this.intervalFn());
+    let earliest = new Date(now.getTime() + this.intervalMs());
     for (const backoff of this.backoffs.values()) {
       if (backoff.nextAttemptAt.getTime() < earliest.getTime()) {
         earliest = backoff.nextAttemptAt;

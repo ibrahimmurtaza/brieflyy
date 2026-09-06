@@ -2,11 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { IngestService } from './ingest-service.js';
 import { RegistryIngestService } from './registry-ingest-service.js';
-import type {
-  FeedFetcher,
-  RawFeed,
-  RawFeedEntry,
-} from './feed-fetcher.js';
+import type { FeedFetcher, RawFeed, RawFeedEntry } from './feed-fetcher.js';
 import { createTestDb } from '../testing/test-db.js';
 import {
   deterministicRandom,
@@ -19,40 +15,8 @@ import { DrizzleSourceRepo } from '../repos/source-repo.js';
 import { DrizzleStoryRepo } from '../repos/story-repo.js';
 import { DrizzleTopicRepo } from '../repos/topic-repo.js';
 import { DrizzleUserRepo } from '../repos/user-repo.js';
-import type {
-  Source,
-  TopicCategory,
-  TopicId,
-  UserId,
-} from '../domain/types.js';
-
-class StaticFeedFetcher implements FeedFetcher {
-  constructor(private readonly feed: RawFeed) {}
-  async fetch(_url: string): Promise<RawFeed> {
-    return this.feed;
-  }
-}
-
-function makeEntry(
-  externalId: string,
-  publishedAt: Date,
-  title: string,
-  body: string,
-  urlPrefix: string,
-): RawFeedEntry {
-  return {
-    externalId,
-    url: `${urlPrefix}/${externalId}`,
-    title,
-    body,
-    publishedAt,
-  };
-}
-
-const BODY_A =
-  'Acme Corp today unveiled a new AI product called Foo, analysts said. The launch changes the landscape for enterprise customers worldwide.';
-const BODY_B =
-  'BrandX Inc announced today that it acquired TinyCo for $2B. The deal closed on Tuesday.';
+import type { Source, TopicCategory, TopicId, UserId } from '../domain/types.js';
+import { StaticFeedFetcher, makeEntry, BODY_A, BODY_B } from './test-constants.js';
 
 interface BuildInput {
   readonly reutersEntries?: readonly RawFeedEntry[];

@@ -27,13 +27,7 @@ import type {
   TopicId,
   UserId,
 } from '../domain/types.js';
-
-class StaticFeedFetcher implements FeedFetcher {
-  constructor(private readonly feed: RawFeed) {}
-  async fetch(_url: string): Promise<RawFeed> {
-    return this.feed;
-  }
-}
+import { StaticFeedFetcher, makeEntry, BODY_A, BODY_B } from './test-constants.js';
 
 class FailingFeedFetcher implements FeedFetcher {
   constructor(private readonly message: string) {}
@@ -41,27 +35,6 @@ class FailingFeedFetcher implements FeedFetcher {
     throw new Error(this.message);
   }
 }
-
-function makeEntry(
-  externalId: string,
-  publishedAt: Date,
-  title: string,
-  body: string,
-  urlPrefix: string,
-): RawFeedEntry {
-  return {
-    externalId,
-    url: `${urlPrefix}/${externalId}`,
-    title,
-    body,
-    publishedAt,
-  };
-}
-
-const BODY_A =
-  'Acme Corp today unveiled a new AI product called Foo, analysts said. The launch changes the landscape for enterprise customers worldwide.';
-const BODY_B =
-  'BrandX Inc announced today that it acquired TinyCo for $2B. The deal closed on Tuesday.';
 
 interface BuildInput {
   readonly pollAt?: Date;
