@@ -5,6 +5,9 @@ import { createDatabase } from './db/client.js';
 import { createApp } from './app.js';
 import { createEmailTransport } from './email/index.js';
 import { GoogleOAuthClient } from './oauth/google-client.js';
+import { HttpFeedFetcher } from './ingest/http-feed-fetcher.js';
+import { systemHttpClient } from './ingest/system-http-client.js';
+import type { FeedFetcher } from './ingest/feed-fetcher.js';
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -34,6 +37,12 @@ function envOauthProvider(
   return undefined;
 }
 
+function envIngestEnabled(name: string): boolean {
+  const raw = process.env[name];
+  if (raw === undefined) return true;
+  return raw === '1' || raw.toLowerCase() === 'true';
+}
+
 async function main(): Promise<void> {
   const databaseUrl = requireEnv('DATABASE_URL').replace(/^file:/, '');
   const appBaseUrl = requireEnv('APP_BASE_URL');
@@ -55,6 +64,11 @@ async function main(): Promise<void> {
     oauthClient = new GoogleOAuthClient({ clientId, clientSecret });
   }
 
+  let feedFetcher: FeedFetcher | undefined;
+  if (envIngestEnabled('INGEST_ENABLED')) {
+    feedFetcher = new HttpFeedFetcher({ http: systemHttpClient });
+  }
+
   const app = await createApp({
     db,
     emailTransport,
@@ -62,6 +76,7 @@ async function main(): Promise<void> {
     cookieSecure: envBool('COOKIE_SECURE', process.env.NODE_ENV === 'production'),
     logger: true,
     oauthClient,
+    feedFetcher,
   });
 
   const port = Number(process.env.PORT ?? 3000);
