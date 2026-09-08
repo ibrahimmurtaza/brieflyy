@@ -161,6 +161,26 @@ CREATE TABLE IF NOT EXISTS stories (
 );
 CREATE INDEX IF NOT EXISTS stories_source_fingerprint_idx ON stories (source_id, fingerprint);
 CREATE INDEX IF NOT EXISTS stories_source_idx ON stories (source_id);
+
+CREATE TABLE IF NOT EXISTS clusters (
+  id TEXT PRIMARY KEY NOT NULL,
+  topic_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  bullet_points TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL,
+  article_count INTEGER NOT NULL,
+  velocity INTEGER NOT NULL,
+  source_ids TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS clusters_topic_idx ON clusters (topic_id);
+
+CREATE TABLE IF NOT EXISTS cluster_stories (
+  cluster_id TEXT NOT NULL REFERENCES clusters(id) ON DELETE CASCADE,
+  story_id TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS cluster_stories_pk ON cluster_stories (cluster_id, story_id);
 `;
 
 export function applySchema(driver: SqliteDriver): void {

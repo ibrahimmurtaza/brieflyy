@@ -149,6 +149,21 @@ export interface Article {
   readonly storyId: StoryId | null;
 }
 
+export type ClusterId = string;
+
+export interface Cluster {
+  readonly id: ClusterId;
+  readonly topicId: string;
+  readonly title: string;
+  readonly summary: string;
+  readonly bulletPoints: readonly string[];
+  readonly createdAt: Date;
+  readonly lastSeenAt: Date;
+  readonly articleCount: number;
+  readonly velocity: number;
+  readonly sourceIds: readonly string[];
+}
+
 export interface Story {
   readonly id: StoryId;
   readonly sourceId: SourceId;

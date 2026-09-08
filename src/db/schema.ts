@@ -354,11 +354,45 @@ export const stories = sqliteTable(
     lastSeenAt: integer('last_seen_at', { mode: 'timestamp_ms' }).notNull(),
   },
   (t) => ({
-    sourceFingerprintIdx: index('stories_source_fingerprint_idx').on(
+    sourceFingerprintIdx: uniqueIndex('stories_source_fingerprint_idx').on(
       t.sourceId,
       t.fingerprint,
     ),
     sourceIdx: index('stories_source_idx').on(t.sourceId),
+  }),
+);
+
+export const clusters = sqliteTable(
+  'clusters',
+  {
+    id: text('id').primaryKey(),
+    topicId: text('topic_id').notNull(),
+    title: text('title').notNull(),
+    summary: text('summary').notNull(),
+    bulletPoints: text('bullet_points').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    lastSeenAt: integer('last_seen_at', { mode: 'timestamp_ms' }).notNull(),
+    articleCount: integer('article_count').notNull(),
+    velocity: integer('velocity').notNull(),
+    sourceIds: text('source_ids').notNull(),
+  },
+  (t) => ({
+    topicIdx: index('clusters_topic_idx').on(t.topicId),
+  }),
+);
+
+export const clusterStories = sqliteTable(
+  'cluster_stories',
+  {
+    clusterId: text('cluster_id')
+      .notNull()
+      .references(() => clusters.id, { onDelete: 'cascade' }),
+    storyId: text('story_id')
+      .notNull()
+      .references(() => stories.id, { onDelete: 'cascade' }),
+  },
+  (t) => ({
+    pk: uniqueIndex('cluster_stories_pk').on(t.clusterId, t.storyId),
   }),
 );
 
@@ -370,3 +404,5 @@ export type ArticleEntityRow = typeof articleEntities.$inferSelect;
 export type NewArticleEntityRow = typeof articleEntities.$inferInsert;
 export type StoryRow = typeof stories.$inferSelect;
 export type NewStoryRow = typeof stories.$inferInsert;
+export type ClusterRow = typeof clusters.$inferSelect;
+export type ClusterStoryRow = typeof clusterStories.$inferSelect;
