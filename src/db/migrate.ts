@@ -172,7 +172,8 @@ CREATE TABLE IF NOT EXISTS clusters (
   last_seen_at INTEGER NOT NULL,
   article_count INTEGER NOT NULL,
   velocity INTEGER NOT NULL,
-  source_ids TEXT NOT NULL
+  source_ids TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'active'
 );
 CREATE INDEX IF NOT EXISTS clusters_topic_idx ON clusters (topic_id);
 

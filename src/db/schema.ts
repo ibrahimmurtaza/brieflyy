@@ -375,6 +375,7 @@ export const clusters = sqliteTable(
     articleCount: integer('article_count').notNull(),
     velocity: integer('velocity').notNull(),
     sourceIds: text('source_ids').notNull(),
+    state: text('state', { enum: ['active', 'archive'] }).notNull().default('active'),
   },
   (t) => ({
     topicIdx: index('clusters_topic_idx').on(t.topicId),
