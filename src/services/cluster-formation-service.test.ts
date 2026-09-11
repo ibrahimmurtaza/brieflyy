@@ -81,6 +81,7 @@ async function buildService(): Promise<BuildResult> {
     storyRepo,
     articleRepo,
     clusterRepo,
+    topicRepo,
     clock: { now: () => new Date('2026-09-02T12:00:00Z') },
   });
 

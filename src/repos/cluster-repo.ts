@@ -47,6 +47,7 @@ function rowToCluster(
     articleCount: row.articleCount,
     velocity: row.velocity,
     sourceIds,
+    state: (row.state as 'active' | 'archive') ?? 'active',
   };
 }
 
@@ -75,10 +76,14 @@ export class DrizzleClusterRepo implements ClusterRepo {
         .from(stories)
         .where(inArray(stories.id, storyIds as string[])))
         .map((r: { sourceId: string | null }) => r.sourceId).filter((id): id is string => id !== null);
-      sourceIds.add(...storySourceIds);
+      for (const sid of storySourceIds) {
+        sourceIds.add(sid);
+      }
     }
 
-    return rowToCluster(rows[0], storyIds, Array.from(sourceIds));
+    const row = rows[0];
+    if (!row) return null;
+    return rowToCluster(row, storyIds, Array.from(sourceIds));
   }
 
   async listByTopicId(topicId: string): Promise<readonly Cluster[]> {
@@ -114,7 +119,9 @@ export class DrizzleClusterRepo implements ClusterRepo {
         .from(stories)
         .where(inArray(stories.id, allStoryIds)))
         .map(r => r.sourceId);
-      allSourceIds.add(...storySourceIds);
+      for (const sid of storySourceIds) {
+        if (sid) allSourceIds.add(sid);
+      }
     }
 
     return rows.map(row =>
@@ -134,6 +141,7 @@ export class DrizzleClusterRepo implements ClusterRepo {
       articleCount: cluster.articleCount,
       velocity: cluster.velocity,
       sourceIds: cluster.sourceIds.join(','),
+      state: cluster.state ?? 'active',
     });
     for (const sid of storyIds) {
       await this.db.insert(clusterStories).values({ clusterId: cluster.id, storyId: sid }).onConflictDoNothing();
@@ -148,7 +156,7 @@ export class DrizzleClusterRepo implements ClusterRepo {
   }
 
   private async hydrate(row: ClusterRow, inputStoryIds?: string[]): Promise<Cluster> {
-    const storyIds = inputStoryIds ?? (await this.db
+    const storyIds: string[] = inputStoryIds ?? (await this.db
       .select()
       .from(clusterStories)
       .where(eq(clusterStories.clusterId, row.id))
@@ -158,7 +166,7 @@ export class DrizzleClusterRepo implements ClusterRepo {
       ? (await this.db
         .select({ sourceId: stories.sourceId })
         .from(stories)
-        .where(inArray(stories.id, storyIds)))
+        .where(inArray(stories.id, storyIds as readonly string[])))
         .map(r => r.sourceId)
       : [];
 
@@ -169,12 +177,15 @@ export class DrizzleClusterRepo implements ClusterRepo {
       topicId: row.topicId,
       title: row.title,
       summary: row.summary,
-      bulletPoints: row.bulletPoints,
+      bulletPoints: typeof row.bulletPoints === 'string'
+        ? (row.bulletPoints ? JSON.parse(row.bulletPoints) : [])
+        : (row.bulletPoints ?? []),
       createdAt: row.createdAt,
       lastSeenAt: row.lastSeenAt,
       articleCount: row.articleCount,
       velocity: row.velocity,
       sourceIds,
+      state: (row.state as 'active' | 'archive') ?? 'active',
     };
   }
 
@@ -210,8 +221,9 @@ export class DrizzleClusterRepo implements ClusterRepo {
     for (const story of candidateStories) {
       if (currentClusterStories.length === 0) {
         currentClusterStories = [story.id];
-        currentClusterArticleCount = story.articleCount;
-        currentClusterVelocity = story.articleCount;
+        const artCount = storyArticleCounts.get(story.id) ?? 0;
+        currentClusterArticleCount = artCount;
+        currentClusterVelocity = artCount;
         continue;
       }
 
@@ -222,10 +234,12 @@ export class DrizzleClusterRepo implements ClusterRepo {
       const storyOverlap = await this.computeStoryOverlap(story.id, previousStory.id);
 
       if (storyOverlap > 0.5) {
+        const artCount = storyArticleCounts.get(story.id) ?? 0;
         currentClusterStories.push(story.id);
-        currentClusterArticleCount += story.articleCount;
-        currentClusterVelocity = Math.max(currentClusterVelocity, story.articleCount);
+        currentClusterArticleCount += artCount;
+        currentClusterVelocity = Math.max(currentClusterVelocity, artCount);
       } else {
+        const artCount = storyArticleCounts.get(story.id) ?? 0;
         await this.finalizeCluster(
           topicId,
           currentClusterStories,
@@ -236,8 +250,8 @@ export class DrizzleClusterRepo implements ClusterRepo {
           clusters,
         );
         currentClusterStories = [story.id];
-        currentClusterArticleCount = story.articleCount;
-        currentClusterVelocity = story.articleCount;
+        currentClusterArticleCount = artCount;
+        currentClusterVelocity = artCount;
       }
     }
 
@@ -283,7 +297,7 @@ export class DrizzleClusterRepo implements ClusterRepo {
     topicId: string,
     storyIds: StoryId[],
     articleCount: number,
-    velocity: number,
+    _velocity: number,
     windowStart: Date,
     windowEnd: Date,
     clusters: Cluster[],
@@ -302,10 +316,19 @@ export class DrizzleClusterRepo implements ClusterRepo {
     const entities = extractEntities(`${title}\n${body}`);
     const keyPhrases = extractKeyPhrases(body);
 
-    const summary = entities.length > 0 ? entities[0] : title;
+    const summary = (entities.length > 0 ? entities[0] : title) ?? '';
     const bulletPoints = keyPhrases.slice(0, 3);
 
-    const clusterId = `cluster-${topicId}-${windowStart.toISOString()}-${storyIds[0] ?? '0'}`;
+    const articleSourceIds = new Set<string>();
+    for (const article of articlesInCluster) {
+      if (article.sourceId) articleSourceIds.add(article.sourceId);
+    }
+
+    const days = Math.max(1, (windowEnd.getTime() - windowStart.getTime()) / (1000 * 60 * 60 * 24));
+    const computedVelocity = Math.max(0, storyIds.length / days);
+    const state = computedVelocity > 0 ? 'active' : 'archive';
+
+    const clusterId = `cluster-${topicId}-${windowStart.toISOString()}-${storyIds.sort().join('-')}`;
     const cluster: Cluster = {
       id: clusterId,
       topicId,
@@ -315,11 +338,12 @@ export class DrizzleClusterRepo implements ClusterRepo {
       createdAt: windowEnd,
       lastSeenAt: windowEnd,
       articleCount,
-      velocity: storyIds.length > 0 ? (articleCount / Math.max(1, (windowEnd.getTime() - windowStart.getTime()) / (1000 * 60 * 60 * 24))) : 0,
-      sourceIds: ['src-test'],
+      velocity: computedVelocity,
+      sourceIds: Array.from(articleSourceIds),
+      state,
     };
 
-    await this.insert(cluster);
+    await this.insert(cluster, storyIds);
     // Write cluster story links
     for (const sid of storyIds) {
       await this.db.insert(clusterStories).values({ clusterId, storyId: sid }).onConflictDoNothing();

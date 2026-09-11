@@ -162,6 +162,7 @@ export interface Cluster {
   readonly articleCount: number;
   readonly velocity: number;
   readonly sourceIds: readonly string[];
+  readonly state: 'active' | 'archive';
 }
 
 export interface Story {
