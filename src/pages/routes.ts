@@ -1,13 +1,19 @@
 import type { FastifyInstance } from 'fastify';
 
-import { type Topic, type TopicTemplate } from '../domain/types.js';
+import { type Topic, type TopicTemplate, type Cluster } from '../domain/types.js';
 import { isValidIanaTimezone, partsInTz } from '../domain/timezone.js';
 import type { OnboardingService } from '../onboarding/onboarding-service.js';
+import type { ClusterRepo } from '../repos/cluster-repo.js';
+import type { SourceRepo } from '../repos/source-repo.js';
+import type { TopicRepo } from '../repos/topic-repo.js';
 import { escapeHtml } from './html.js';
 
 export interface PageRoutesOptions {
   readonly appBaseUrl: string;
   readonly onboardingService: OnboardingService;
+  readonly clusterRepo: ClusterRepo;
+  readonly topicRepo: TopicRepo;
+  readonly sourceRepo: SourceRepo;
 }
 
 const COMMON_TIMEZONES: readonly string[] = [
@@ -134,6 +140,50 @@ export async function registerPageRoutes(
   fastify.get('/', async (_req, reply) => {
     return reply.code(302).header('location', '/signup').send();
   });
+
+  fastify.get('/topics', async (req, reply) => {
+    if (!req.auth) {
+      return reply.code(302).header('location', '/signup').send();
+    }
+    const topics = await opts.onboardingService.listTopics(req.auth.user.id);
+    return reply.type('text/html').send(homePage({ email: req.auth.account.email, topics }));
+  });
+
+  fastify.get<{ Params: { slug: string } }>(
+    '/topics/:slug',
+    async (req, reply) => {
+      if (!req.auth) {
+        return reply.code(302).header('location', '/signup').send();
+      }
+      const topic = await opts.topicRepo.listByUser(req.auth.user.id).then((rows) =>
+        rows.find((t) => t.slug === req.params.slug),
+      );
+      if (!topic) {
+        return reply
+          .code(404)
+          .type('text/html')
+          .send(notFoundPage(req.auth.account.email, `Topic "${req.params.slug}" not found`));
+      }
+      const clusters = await opts.clusterRepo.listByTopicId(topic.id);
+      const activeClusters = clusters.filter((c) => c.state === 'active');
+      const sourcesById = new Map(
+        (await opts.sourceRepo.list()).map((s) => [s.id, s] as const),
+      );
+      const visibleSources = new Set<string>();
+      for (const c of activeClusters) {
+        for (const sid of c.sourceIds) visibleSources.add(sid);
+      }
+      return reply.type('text/html').send(
+        topicPage({
+          email: req.auth.account.email,
+          topic,
+          clusters: activeClusters,
+          sourcesById,
+          visibleSourceIds: visibleSources,
+        }),
+      );
+    },
+  );
 }
 
 function signupPage(): string {
@@ -557,4 +607,153 @@ function formatHumanTime(date: Date, timezone: string): string {
   const hour = pad2(parts.hour);
   const minute = pad2(parts.minute);
   return `${weekday}, ${day} ${month} at ${hour}:${minute}`;
+}
+
+function homePage(input: {
+  email: string;
+  topics: readonly Topic[];
+}): string {
+  const safeEmail = escapeHtml(input.email);
+  const rows = input.topics
+    .map(
+      (t) => `<li>
+        <a href="/topics/${escapeHtml(t.slug)}">${escapeHtml(t.title)}</a>
+        <span class="muted"> · ${escapeHtml(t.category)}</span>
+      </li>`,
+    )
+    .join('\n');
+  const emptyState = input.topics.length === 0
+    ? `<p class="muted">You haven't picked any topics yet. <a href="/onboarding/pick-topics">Pick 3 to get started</a>.</p>`
+    : '';
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Your topics · Brieflyy</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 3rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.6rem; margin: 0 0 0.25rem; }
+    p.lede { color: #555; margin-top: 0; }
+    ul.topics { list-style: none; padding: 0; margin: 1rem 0; }
+    ul.topics li { padding: 0.75rem 0; border-bottom: 1px solid #eee; }
+    a { color: #1f6feb; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .muted { color: #888; }
+    .nav { margin-top: 2rem; }
+    .nav a { margin-right: 1rem; }
+    form.logout { display: inline; }
+    form.logout button { background: none; color: inherit; border: 0; padding: 0; cursor: pointer; text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Your topics</h1>
+    <p class="lede">Signed in as ${safeEmail}. Pick a topic to open its living brief.</p>
+    ${emptyState}
+    <ul class="topics">${rows}</ul>
+    <div class="nav">
+      <a href="/onboarding/pick-topics">Manage topics</a>
+      <a href="/settings/delivery">Delivery time</a>
+      <form class="logout" method="POST" action="/auth/logout"><button type="submit">Sign out</button></form>
+    </div>
+  </main>
+</body>
+</html>`;
+}
+
+function topicPage(input: {
+  email: string;
+  topic: Topic;
+  clusters: readonly Cluster[];
+  sourcesById: Map<string, { id: string; name: string }>;
+  visibleSourceIds: Set<string>;
+}): string {
+  const safeEmail = escapeHtml(input.email);
+  const safeTitle = escapeHtml(input.topic.title);
+  const rows = input.clusters
+    .map((c) => {
+      const bullets = c.bulletPoints
+        .map((b) => `<li>${escapeHtml(b)}</li>`)
+        .join('\n');
+      const sources = c.sourceIds
+        .filter((sid) => input.visibleSourceIds.has(sid))
+        .map((sid) => {
+          const name = input.sourcesById.get(sid)?.name ?? sid;
+          return `<span class="source">${escapeHtml(name)}</span>`;
+        })
+        .join('\n');
+      return `<article class="cluster">
+        <h2>${escapeHtml(c.summary || c.title)}</h2>
+        ${bullets ? `<ul>${bullets}</ul>` : ''}
+        <p class="sources">${sources || '<span class="muted">No sources</span>'}</p>
+      </article>`;
+    })
+    .join('\n');
+  const emptyState = input.clusters.length === 0
+    ? `<p class="muted">No stories yet for this topic. Check back after the next ingest.</p>`
+    : '';
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${safeTitle} · Brieflyy</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, sans-serif; max-width: 760px; margin: 3rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.6rem; margin: 0 0 0.25rem; }
+    p.lede { color: #555; margin-top: 0; }
+    .cluster { padding: 1rem 0; border-top: 1px solid #eee; }
+    .cluster h2 { font-size: 1.05rem; margin: 0 0 0.5rem; }
+    .cluster ul { margin: 0 0 0.5rem; padding-left: 1.2rem; }
+    .sources { color: #555; font-size: 0.9rem; }
+    .source { display: inline-block; margin-right: 0.5rem; background: #eef; padding: 0.1rem 0.4rem; border-radius: 4px; }
+    .muted { color: #888; }
+    .nav { margin-top: 2rem; }
+    .nav a { margin-right: 1rem; }
+    form.logout { display: inline; }
+    form.logout button { background: none; color: inherit; border: 0; padding: 0; cursor: pointer; text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>${safeTitle}</h1>
+    <p class="lede">Signed in as ${safeEmail} · ${escapeHtml(input.topic.category)} · ${input.clusters.length} active cluster${input.clusters.length === 1 ? '' : 's'}</p>
+    ${emptyState}
+    ${rows}
+    <div class="nav">
+      <a href="/topics">All topics</a>
+      <a href="/onboarding/pick-topics">Manage topics</a>
+      <form class="logout" method="POST" action="/auth/logout"><button type="submit">Sign out</button></form>
+    </div>
+  </main>
+</body>
+</html>`;
+}
+
+function notFoundPage(email: string, message: string): string {
+  const safeEmail = escapeHtml(email);
+  const safe = escapeHtml(message);
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Not found · Brieflyy</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 480px; margin: 4rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.4rem; }
+    p { color: #444; }
+    a { color: #1f6feb; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Not found</h1>
+    <p>${safe}</p>
+    <p><a href="/topics">Back to your topics</a></p>
+  </main>
+</body>
+</html>`;
 }
