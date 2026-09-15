@@ -12,12 +12,13 @@ import { DrizzleMagicLinkRepo } from './repos/magic-link-repo.js';
 import { DrizzleOAuthAccountRepo } from './repos/oauth-account-repo.js';
 import { DrizzleOAuthStateRepo } from './repos/oauth-state-repo.js';
 import { DrizzleSessionRepo } from './repos/session-repo.js';
-import { DrizzleSourceRepo } from './repos/source-repo.js';
 import { DrizzleEntityRepo } from './repos/entity-repo.js';
 import { DrizzleStoryRepo } from './repos/story-repo.js';
 import { DrizzleUserRepo } from './repos/user-repo.js';
 import { DrizzleTopicTemplateRepo } from './repos/directory-repo.js';
+import { DrizzleClusterRepo } from './repos/cluster-repo.js';
 import { DrizzleTopicRepo } from './repos/topic-repo.js';
+import { DrizzleSourceRepo } from './repos/source-repo.js';
 import { AuthService } from './auth/auth-service.js';
 import { registerAuthRoutes } from './auth/routes.js';
 import type { OAuthClient } from './oauth/client.js';
@@ -102,6 +103,8 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     : null;
   const topicTemplateRepo = new DrizzleTopicTemplateRepo(opts.db);
   const topicRepo = new DrizzleTopicRepo(opts.db);
+  const clusterRepo = new DrizzleClusterRepo(opts.db);
+  const sourceRepo = new DrizzleSourceRepo(opts.db);
   const deliverySettingsRepo = new DrizzleDeliverySettingsRepo(opts.db);
 
   await applyDirectorySeed(opts.db);
@@ -157,6 +160,9 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
   await registerPageRoutes(app, {
     appBaseUrl: opts.appBaseUrl,
     onboardingService,
+    clusterRepo,
+    topicRepo,
+    sourceRepo,
   });
 
   if (ingestScheduler) {
