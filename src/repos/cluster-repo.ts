@@ -26,6 +26,7 @@ export interface ClusterRepo {
   findById(id: ClusterId): Promise<Cluster | null>;
   listByTopicId(topicId: string): Promise<readonly Cluster[]>;
   listArticlesByTopicId(topicId: string): Promise<readonly Article[]>;
+  listArticlesByClusterId(clusterId: string): Promise<readonly Article[]>;
   insert(cluster: Cluster, storyIds: readonly StoryId[]): Promise<void>;
   computeAndInsertClusters(topicId: string, windowStart: Date, windowEnd: Date): Promise<readonly Cluster[]>;
 }
@@ -131,6 +132,23 @@ export class DrizzleClusterRepo implements ClusterRepo {
     return articleRows.map((row) =>
       rowToArticle(row, byArticle.get(row.id) ?? []),
     );
+  }
+
+  async listArticlesByClusterId(clusterId: string): Promise<readonly Article[]> {
+    const storyRows = (await this.db
+      .select()
+      .from(clusterStories)
+      .where(eq(clusterStories.clusterId, clusterId))) as { clusterId: string; storyId: string }[];
+    const storyIds = storyRows.map((sr) => sr.storyId);
+    if (storyIds.length === 0) return [];
+    const articleRows = (await this.db
+      .select()
+      .from(articles)
+      .where(inArray(articles.storyId, storyIds))
+      .orderBy(asc(articles.publishedAt))) as readonly ArticleRow[];
+    if (articleRows.length === 0) return [];
+    const byArticle = await this.loadEntitiesByArticleId(articleRows.map((r) => r.id));
+    return articleRows.map((row) => rowToArticle(row, byArticle.get(row.id) ?? []));
   }
 
   private async loadEntitiesByArticleId(

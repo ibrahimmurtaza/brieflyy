@@ -149,7 +149,7 @@ export async function registerPageRoutes(
     return reply.type('text/html').send(homePage({ email: req.auth.account.email, topics }));
   });
 
-  fastify.get<{ Params: { slug: string } }>(
+  fastify.get<{ Params: { slug: string }; Querystring: { source?: string; hide?: string } }>(
     '/topics/:slug',
     async (req, reply) => {
       if (!req.auth) {
@@ -165,7 +165,21 @@ export async function registerPageRoutes(
           .send(notFoundPage(req.auth.account.email, `Topic "${req.params.slug}" not found`));
       }
       const clusters = await opts.clusterRepo.listByTopicId(topic.id);
-      const activeClusters = clusters.filter((c) => c.state === 'active');
+      let activeClusters = clusters
+        .filter((c) => c.state === 'active')
+        .sort((a, b) => b.lastSeenAt.getTime() - a.lastSeenAt.getTime());
+      const sourceFilter = req.query.source ? String(req.query.source) : null;
+      if (sourceFilter) {
+        activeClusters = activeClusters.filter((c) => c.sourceIds.includes(sourceFilter));
+      }
+      const hiddenIds = new Set<string>(
+        (req.query.hide ? String(req.query.hide) : '').split(',').filter((s) => s.length > 0),
+      );
+      activeClusters = activeClusters.filter((c) => !hiddenIds.has(c.id));
+      const clusterArticles = new Map<string, readonly import('../domain/types.js').Article[]>();
+      for (const c of activeClusters) {
+        clusterArticles.set(c.id, await opts.clusterRepo.listArticlesByClusterId(c.id));
+      }
       const sourcesById = new Map(
         (await opts.sourceRepo.list()).map((s) => [s.id, s] as const),
       );
@@ -180,6 +194,7 @@ export async function registerPageRoutes(
           clusters: activeClusters,
           sourcesById,
           visibleSourceIds: visibleSources,
+          clusterArticles,
         }),
       );
     },
@@ -669,6 +684,7 @@ function topicPage(input: {
   clusters: readonly Cluster[];
   sourcesById: Map<string, { id: string; name: string }>;
   visibleSourceIds: Set<string>;
+  clusterArticles?: Map<string, readonly import('../domain/types.js').Article[]>;
 }): string {
   const safeEmail = escapeHtml(input.email);
   const safeTitle = escapeHtml(input.topic.title);
@@ -677,17 +693,25 @@ function topicPage(input: {
       const bullets = c.bulletPoints
         .map((b) => `<li>${escapeHtml(b)}</li>`)
         .join('\n');
+      const articles = input.clusterArticles?.get(c.id) ?? [];
+      const articleLinks = articles
+        .map((a) => `<a href="${escapeHtml(a.url)}" target="_blank" rel="noopener">${escapeHtml(a.title || 'Source article')}</a>`)
+        .join(', ');
+      const hideLink = `<a href="?hide=${encodeURIComponent(String(c.id))}" class="hide-btn">Hide</a>`;
       const sources = c.sourceIds
         .filter((sid) => input.visibleSourceIds.has(sid))
         .map((sid) => {
           const name = input.sourcesById.get(sid)?.name ?? sid;
-          return `<span class="source">${escapeHtml(name)}</span>`;
+          const filterHref = `?source=${encodeURIComponent(sid)}`;
+          return `<a href="${escapeHtml(filterHref)}" class="source">${escapeHtml(name)}</a>`;
         })
-        .join('\n');
+        .join(' ');
       return `<article class="cluster">
         <h2>${escapeHtml(c.summary || c.title)}</h2>
+        <div class="hide-row">${hideLink}</div>
         ${bullets ? `<ul>${bullets}</ul>` : ''}
         <p class="sources">${sources || '<span class="muted">No sources</span>'}</p>
+        ${articleLinks ? `<p class="article-links">${articleLinks}</p>` : ''}
       </article>`;
     })
     .join('\n');
@@ -711,6 +735,12 @@ function topicPage(input: {
     .sources { color: #555; font-size: 0.9rem; }
     .source { display: inline-block; margin-right: 0.5rem; background: #eef; padding: 0.1rem 0.4rem; border-radius: 4px; }
     .muted { color: #888; }
+    .hide-row { margin: -0.5rem 0 0.5rem 0; }
+    .hide-btn { font-size: 0.8rem; color: #888; text-decoration: none; border: 1px solid #ccc; padding: 0.1rem 0.3rem; border-radius: 4px; }
+    .hide-btn:hover { color: #b00020; border-color: #b00020; }
+    .article-links { margin-top: 0.5rem; font-size: 0.85rem; color: #555; }
+    .article-links a { color: #1f6feb; text-decoration: none; }
+    .article-links a:hover { text-decoration: underline; }
     .nav { margin-top: 2rem; }
     .nav a { margin-right: 1rem; }
     form.logout { display: inline; }
