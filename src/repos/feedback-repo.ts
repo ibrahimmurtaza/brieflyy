@@ -66,7 +66,14 @@ export class DrizzleFeedbackRepo implements FeedbackRepo {
         ),
       )
       .orderBy(desc(feedbackEvents.timestamp))) as readonly FeedbackEventRow[];
-    return rows.map(rowToFeedbackEvent);
+    // Latest event per feedback type (latest wins per spec / ADR 0004)
+    const latestByType = new Map<string, FeedbackEvent>();
+    for (const row of rows) {
+      if (!latestByType.has(row.feedbackType)) {
+        latestByType.set(row.feedbackType, rowToFeedbackEvent(row));
+      }
+    }
+    return Array.from(latestByType.values());
   }
 
   async listByUser(userId: UserId): Promise<readonly FeedbackEvent[]> {

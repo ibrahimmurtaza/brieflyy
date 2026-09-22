@@ -197,9 +197,21 @@ export async function registerPageRoutes(
       if (sourceFilter) {
         activeClusters = activeClusters.filter((c) => c.sourceIds.includes(sourceFilter));
       }
-      const hiddenIds = new Set<string>(
-        (req.query.hide ? String(req.query.hide) : '').split(',').filter((s) => s.length > 0),
-      );
+
+      // Apply feedback-based filtering: hide clusters with active hide_source events
+      let hiddenIds = new Set<string>();
+      const queryHidden = (req.query.hide ? String(req.query.hide) : '').split(',').filter((s) => s.length > 0);
+      hiddenIds = new Set(queryHidden);
+      if (opts.feedbackRepo) {
+        const userEvents = await opts.feedbackRepo.listByUser(req.auth.user.id);
+        const hideEvents = userEvents.filter((e) => e.feedbackType === 'hide_source');
+        for (const ev of hideEvents) {
+          // Hide events reference clusters; apply scope to filter clusters
+          if (ev.scope === 'global' || (ev.scope === 'this_topic' && ev.clusterId)) {
+            hiddenIds.add(ev.clusterId);
+          }
+        }
+      }
       activeClusters = activeClusters.filter((c) => !hiddenIds.has(c.id));
       const clusterArticles = new Map<string, readonly import('../domain/types.js').Article[]>();
       for (const c of activeClusters) {
