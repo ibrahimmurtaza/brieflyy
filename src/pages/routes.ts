@@ -6,6 +6,7 @@ import type { OnboardingService } from '../onboarding/onboarding-service.js';
 import type { ClusterRepo } from '../repos/cluster-repo.js';
 import type { SourceRepo } from '../repos/source-repo.js';
 import type { TopicRepo } from '../repos/topic-repo.js';
+import type { FeedbackRepo } from '../repos/feedback-repo.js';
 import { escapeHtml } from './html.js';
 
 export interface PageRoutesOptions {
@@ -14,6 +15,7 @@ export interface PageRoutesOptions {
   readonly clusterRepo: ClusterRepo;
   readonly topicRepo: TopicRepo;
   readonly sourceRepo: SourceRepo;
+  readonly feedbackRepo?: FeedbackRepo;
 }
 
 const COMMON_TIMEZONES: readonly string[] = [
@@ -149,6 +151,29 @@ export async function registerPageRoutes(
     return reply.type('text/html').send(homePage({ email: req.auth.account.email, topics }));
   });
 
+  fastify.post<{ Params: { slug: string }; Body: { clusterId?: string; type?: string; scope?: string } }>(
+    '/topics/:slug/feedback',
+    async (req, reply) => {
+      if (!req.auth || !opts.feedbackRepo) {
+        return reply.code(302).header('location', '/signup').send();
+      }
+      const clusterId = req.body.clusterId ? String(req.body.clusterId) : '';
+      const feedbackType = (req.body.type ? String(req.body.type) : 'thumbs_up') as 'thumbs_up' | 'thumbs_down' | 'hide_source' | 'more_like_this' | 'less_like_this';
+      if (!clusterId || !feedbackType) {
+        return reply.code(400).type('text/html').send('Invalid feedback');
+      }
+      await opts.feedbackRepo.insert({
+        id: `fe-${req.auth.user.id}-${clusterId}-${feedbackType}-${Date.now()}`,
+        userId: req.auth.user.id,
+        clusterId,
+        feedbackType,
+        scope: feedbackType === 'hide_source' ? (req.body.scope === 'global' ? 'global' : 'this_topic') : null,
+        timestamp: new Date(),
+      });
+      return reply.code(302).header('location', `/topics/${req.params.slug}`).send();
+    },
+  );
+
   fastify.get<{ Params: { slug: string }; Querystring: { source?: string; hide?: string } }>(
     '/topics/:slug',
     async (req, reply) => {
@@ -191,6 +216,7 @@ export async function registerPageRoutes(
         topicPage({
           email: req.auth.account.email,
           topic,
+          topicSlug: req.params.slug,
           clusters: activeClusters,
           sourcesById,
           visibleSourceIds: visibleSources,
@@ -681,6 +707,7 @@ function homePage(input: {
 function topicPage(input: {
   email: string;
   topic: Topic;
+  topicSlug: string;
   clusters: readonly Cluster[];
   sourcesById: Map<string, { id: string; name: string }>;
   visibleSourceIds: Set<string>;
@@ -698,6 +725,14 @@ function topicPage(input: {
         .map((a) => `<a href="${escapeHtml(a.url)}" target="_blank" rel="noopener">${escapeHtml(a.title || 'Source article')}</a>`)
         .join(', ');
       const hideLink = `<a href="?hide=${encodeURIComponent(String(c.id))}" class="hide-btn">Hide</a>`;
+      const feedbackButtons = `<form method="POST" action="/topics/${escapeHtml(input.topicSlug)}/feedback" style="display:inline;margin-right:0.5rem;">
+        <input type="hidden" name="clusterId" value="${escapeHtml(c.id)}">
+        <button type="submit" name="type" value="thumbs_up" style="font-size:0.75rem;padding:0.1rem 0.4rem;border-radius:4px;background:#e6f4ea;border:1px solid #a3d4a8;cursor:pointer;">👍</button>
+        <button type="submit" name="type" value="thumbs_down" style="font-size:0.75rem;padding:0.1rem 0.4rem;border-radius:4px;background:#fff5f5;border:1px solid #f0baba;cursor:pointer;">👎</button>
+        <button type="submit" name="type" value="more_like_this" style="font-size:0.75rem;padding:0.1rem 0.4rem;border-radius:4px;background:#eef5ff;border:1px solid #c2d6f2;cursor:pointer;">More</button>
+        <button type="submit" name="type" value="less_like_this" style="font-size:0.75rem;padding:0.1rem 0.4rem;border-radius:4px;background:#fff8e6;border:1px solid #e0c66b;cursor:pointer;">Less</button>
+        <button type="submit" name="type" value="hide_source" style="font-size:0.75rem;padding:0.1rem 0.4rem;border-radius:4px;background:#f5f0ee;border:1px solid #ccc;cursor:pointer;">Hide source</button>
+      </form>`;
       const sources = c.sourceIds
         .filter((sid) => input.visibleSourceIds.has(sid))
         .map((sid) => {
@@ -708,7 +743,7 @@ function topicPage(input: {
         .join(' ');
       return `<article class="cluster">
         <h2>${escapeHtml(c.summary || c.title)}</h2>
-        <div class="hide-row">${hideLink}</div>
+        <div class="hide-row">${feedbackButtons}${hideLink}</div>
         ${bullets ? `<ul>${bullets}</ul>` : ''}
         <p class="sources">${sources || '<span class="muted">No sources</span>'}</p>
         ${articleLinks ? `<p class="article-links">${articleLinks}</p>` : ''}

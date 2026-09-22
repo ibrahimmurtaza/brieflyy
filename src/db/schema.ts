@@ -407,3 +407,43 @@ export type StoryRow = typeof stories.$inferSelect;
 export type NewStoryRow = typeof stories.$inferInsert;
 export type ClusterRow = typeof clusters.$inferSelect;
 export type ClusterStoryRow = typeof clusterStories.$inferSelect;
+
+export const feedbackEvents = sqliteTable(
+  'feedback_events',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    clusterId: text('cluster_id')
+      .notNull()
+      .references(() => clusters.id, { onDelete: 'cascade' }),
+    feedbackType: text('feedback_type', {
+      enum: [
+        'thumbs_up',
+        'thumbs_down',
+        'hide_source',
+        'more_like_this',
+        'less_like_this',
+      ],
+    }).notNull(),
+    scope: text('scope', { enum: ['this_topic', 'global'] }),
+    timestamp: integer('timestamp', { mode: 'timestamp_ms' })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    userClusterTypeIdx: index('feedback_events_user_cluster_type_idx').on(
+      t.userId,
+      t.clusterId,
+      t.feedbackType,
+    ),
+    userClusterIdx: index('feedback_events_user_cluster_idx').on(
+      t.userId,
+      t.clusterId,
+    ),
+  }),
+);
+
+export type FeedbackEventRow = typeof feedbackEvents.$inferSelect;
+export type NewFeedbackEventRow = typeof feedbackEvents.$inferInsert;

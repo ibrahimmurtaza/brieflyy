@@ -173,3 +173,23 @@ export interface Story {
   readonly lastSeenAt: Date;
   readonly articleCount: number;
 }
+
+export const FEEDBACK_TYPES = [
+  'thumbs_up',
+  'thumbs_down',
+  'hide_source',
+  'more_like_this',
+  'less_like_this',
+] as const;
+export type FeedbackType = (typeof FEEDBACK_TYPES)[number];
+
+export type FeedbackScope = 'this_topic' | 'global';
+
+export interface FeedbackEvent {
+  readonly id: string;
+  readonly userId: UserId;
+  readonly clusterId: ClusterId;
+  readonly feedbackType: FeedbackType;
+  readonly scope: FeedbackScope | null;
+  readonly timestamp: Date;
+}
