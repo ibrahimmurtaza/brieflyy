@@ -19,6 +19,7 @@ import { DrizzleTopicTemplateRepo } from './repos/directory-repo.js';
 import { DrizzleClusterRepo } from './repos/cluster-repo.js';
 import { DrizzleTopicRepo } from './repos/topic-repo.js';
 import { DrizzleSourceRepo } from './repos/source-repo.js';
+import { DrizzleFeedbackRepo } from './repos/feedback-repo.js';
 import { AuthService } from './auth/auth-service.js';
 import { registerAuthRoutes } from './auth/routes.js';
 import type { OAuthClient } from './oauth/client.js';
@@ -105,6 +106,7 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
   const topicRepo = new DrizzleTopicRepo(opts.db);
   const clusterRepo = new DrizzleClusterRepo(opts.db);
   const sourceRepo = new DrizzleSourceRepo(opts.db);
+  const feedbackRepo = new DrizzleFeedbackRepo(opts.db);
   const deliverySettingsRepo = new DrizzleDeliverySettingsRepo(opts.db);
 
   await applyDirectorySeed(opts.db);
@@ -163,6 +165,7 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     clusterRepo,
     topicRepo,
     sourceRepo,
+    feedbackRepo,
   });
 
   if (ingestScheduler) {
