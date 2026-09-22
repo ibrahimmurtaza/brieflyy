@@ -44,24 +44,28 @@ export const CLUSTER_A_ENTRIES: readonly RawFeedEntry[] = [
     new Date('2026-09-02T10:00:00Z'),
     'Acme Corp launches new AI product',
     CLUSTER_A_BODY,
+    'https://example.com/feed',
   ),
   makeEntry(
     'a-2',
     new Date('2026-09-02T10:30:00Z'),
     'Acme Corp unveils new AI product',
     CLUSTER_A_BODY,
+    'https://example.com/feed',
   ),
   makeEntry(
     'a-3',
     new Date('2026-09-02T11:00:00Z'),
     'Acme Corp announces new AI product',
     CLUSTER_A_BODY,
+    'https://example.com/feed',
   ),
   makeEntry(
     'a-4',
     new Date('2026-09-02T11:30:00Z'),
     'Acme Corp debuts new AI product',
     CLUSTER_A_BODY,
+    'https://example.com/feed',
   ),
 ];
 
@@ -74,17 +78,20 @@ export const CLUSTER_B_ENTRIES: readonly RawFeedEntry[] = [
     new Date('2026-09-02T12:00:00Z'),
     'BrandX Inc acquires TinyCo',
     CLUSTER_B_BODY,
+    'https://example.com/feed',
   ),
   makeEntry(
     'b-2',
     new Date('2026-09-02T12:30:00Z'),
     'BrandX Inc completes TinyCo acquisition',
     CLUSTER_B_BODY,
+    'https://example.com/feed',
   ),
   makeEntry(
     'b-3',
     new Date('2026-09-02T13:00:00Z'),
     'TinyCo bought by BrandX Inc',
     CLUSTER_B_BODY,
+    'https://example.com/feed',
   ),
 ];

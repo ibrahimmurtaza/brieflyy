@@ -182,6 +182,17 @@ CREATE TABLE IF NOT EXISTS cluster_stories (
   story_id TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE
 );
 CREATE UNIQUE INDEX IF NOT EXISTS cluster_stories_pk ON cluster_stories (cluster_id, story_id);
+
+CREATE TABLE IF NOT EXISTS feedback_events (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  cluster_id TEXT NOT NULL REFERENCES clusters(id) ON DELETE CASCADE,
+  feedback_type TEXT NOT NULL,
+  scope TEXT,
+  timestamp INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+);
+CREATE INDEX IF NOT EXISTS feedback_events_user_cluster_type_idx ON feedback_events (user_id, cluster_id, feedback_type);
+CREATE INDEX IF NOT EXISTS feedback_events_user_cluster_idx ON feedback_events (user_id, cluster_id);
 `;
 
 export function applySchema(driver: SqliteDriver): void {
