@@ -108,6 +108,7 @@ export interface Topic {
   readonly category: TopicCategory;
   readonly origin: TopicOrigin;
   readonly sourceIds: readonly SourceId[];
+  readonly cadence: Cadence;
   readonly createdAt: Date;
 }
 
@@ -184,6 +185,37 @@ export const FEEDBACK_TYPES = [
 export type FeedbackType = (typeof FEEDBACK_TYPES)[number];
 
 export type FeedbackScope = 'this_topic' | 'global';
+
+export type Cadence = 'daily' | 'weekly' | 'never';
+
+export interface BriefPlan {
+  readonly id: string;
+  readonly topicId: TopicId;
+  readonly userId: UserId;
+  readonly createdAt: Date;
+  readonly clusterIds: readonly ClusterId[];
+}
+
+export interface BriefSnapshot {
+  readonly id: string;
+  readonly briefPlanId: string;
+  readonly userId: UserId;
+  readonly topicId: TopicId;
+  readonly createdAt: Date;
+  readonly html: string;
+  readonly unsubscribeToken: string;
+  readonly globalUnsubscribeToken: string;
+}
+
+export interface EmailDelivery {
+  readonly id: string;
+  readonly userId: UserId;
+  readonly briefSnapshotId: string;
+  readonly topicId: TopicId;
+  readonly sentAt: Date;
+  readonly unsubscribeToken: string;
+  readonly globalUnsubscribeToken: string;
+}
 
 export interface FeedbackEvent {
   readonly id: string;

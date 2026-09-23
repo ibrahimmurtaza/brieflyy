@@ -211,6 +211,9 @@ export const topics = sqliteTable(
       () => topicTemplates.id,
       { onDelete: 'set null' },
     ),
+    cadence: text('cadence', { enum: ['daily', 'weekly', 'never'] })
+      .notNull()
+      .default('daily'),
     createdAt: integer('created_at', { mode: 'timestamp_ms' })
       .notNull()
       .default(sql`(unixepoch() * 1000)`),
@@ -447,3 +450,76 @@ export const feedbackEvents = sqliteTable(
 
 export type FeedbackEventRow = typeof feedbackEvents.$inferSelect;
 export type NewFeedbackEventRow = typeof feedbackEvents.$inferInsert;
+
+export const briefPlans = sqliteTable(
+  'brief_plans',
+  {
+    id: text('id').primaryKey(),
+    topicId: text('topic_id')
+      .notNull()
+      .references(() => topics.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    clusterIds: text('cluster_ids').notNull().default(''),
+  },
+  (t) => ({
+    topicUserIdx: uniqueIndex('brief_plans_topic_user_idx').on(
+      t.topicId,
+      t.userId,
+      t.createdAt,
+    ),
+    userIdx: index('brief_plans_user_idx').on(t.userId),
+  }),
+);
+
+export const briefSnapshots = sqliteTable(
+  'brief_snapshots',
+  {
+    id: text('id').primaryKey(),
+    briefPlanId: text('brief_plan_id')
+      .notNull()
+      .references(() => briefPlans.id, { onDelete: 'cascade' }),
+    userId: text('user_id').notNull(),
+    topicId: text('topic_id').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    html: text('html').notNull(),
+    unsubscribeToken: text('unsubscribe_token').notNull(),
+    globalUnsubscribeToken: text('global_unsubscribe_token').notNull(),
+  },
+  (t) => ({
+    userTopicIdx: index('brief_snapshots_user_topic_idx').on(
+      t.userId,
+      t.topicId,
+    ),
+  }),
+);
+
+export const emailDeliveries = sqliteTable(
+  'email_deliveries',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id').notNull(),
+    briefSnapshotId: text('brief_snapshot_id')
+      .notNull()
+      .references(() => briefSnapshots.id, { onDelete: 'cascade' }),
+    topicId: text('topic_id').notNull(),
+    sentAt: integer('sent_at', { mode: 'timestamp_ms' }).notNull(),
+    unsubscribeToken: text('unsubscribe_token').notNull(),
+    globalUnsubscribeToken: text('global_unsubscribe_token').notNull(),
+  },
+  (t) => ({
+    userSnapshotIdx: index('email_deliveries_user_snapshot_idx').on(
+      t.userId,
+      t.briefSnapshotId,
+    ),
+  }),
+);
+
+export type BriefPlanRow = typeof briefPlans.$inferSelect;
+export type NewBriefPlanRow = typeof briefPlans.$inferInsert;
+export type BriefSnapshotRow = typeof briefSnapshots.$inferSelect;
+export type NewBriefSnapshotRow = typeof briefSnapshots.$inferInsert;
+export type EmailDeliveryRow = typeof emailDeliveries.$inferSelect;
+export type NewEmailDeliveryRow = typeof emailDeliveries.$inferInsert;
