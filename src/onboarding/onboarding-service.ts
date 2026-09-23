@@ -152,6 +152,7 @@ export class OnboardingService {
           templateId: t.id as TopicTemplateId,
         },
         sourceIds: [...t.defaultSourceIds],
+        cadence: 'daily',
         createdAt: now,
       };
       await this.topicRepo.insert(topic);
@@ -177,6 +178,7 @@ export class OnboardingService {
         category: 'unspecified',
         origin: { kind: 'freeform' },
         sourceIds: [],
+        cadence: 'daily',
         createdAt: now,
       };
       await this.topicRepo.insert(topic);

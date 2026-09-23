@@ -13,6 +13,7 @@ import type {
   TopicOrigin,
   TopicTemplate,
   UserId,
+  Cadence,
 } from '../domain/types.js';
 
 function rowToTopic(row: TopicRow, sourceIds: readonly string[]): Topic {
@@ -29,6 +30,7 @@ function rowToTopic(row: TopicRow, sourceIds: readonly string[]): Topic {
     category: row.category as TopicTemplate['category'],
     origin,
     sourceIds,
+    cadence: (row.cadence ?? 'daily') as Cadence,
     createdAt: row.createdAt,
   };
 }
@@ -78,6 +80,7 @@ export class DrizzleTopicRepo implements TopicRepo {
       category: topic.category,
       originKind: topic.origin.kind,
       originTemplateId,
+      cadence: topic.cadence ?? 'daily',
       createdAt: topic.createdAt,
     });
   }

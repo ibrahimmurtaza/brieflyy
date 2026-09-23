@@ -98,6 +98,7 @@ CREATE TABLE IF NOT EXISTS topics (
   category TEXT NOT NULL,
   origin_kind TEXT NOT NULL,
   origin_template_id TEXT REFERENCES topic_templates(id) ON DELETE SET NULL,
+  cadence TEXT NOT NULL DEFAULT 'daily',
   created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS topics_user_slug_unique ON topics (user_id, slug);
@@ -193,6 +194,39 @@ CREATE TABLE IF NOT EXISTS feedback_events (
 );
 CREATE INDEX IF NOT EXISTS feedback_events_user_cluster_type_idx ON feedback_events (user_id, cluster_id, feedback_type);
 CREATE INDEX IF NOT EXISTS feedback_events_user_cluster_idx ON feedback_events (user_id, cluster_id);
+
+CREATE TABLE IF NOT EXISTS brief_plans (
+  id TEXT PRIMARY KEY NOT NULL,
+  topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  cluster_ids TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS brief_plans_topic_user_idx ON brief_plans (topic_id, user_id, created_at);
+CREATE INDEX IF NOT EXISTS brief_plans_user_idx ON brief_plans (user_id);
+
+CREATE TABLE IF NOT EXISTS brief_snapshots (
+  id TEXT PRIMARY KEY NOT NULL,
+  brief_plan_id TEXT NOT NULL REFERENCES brief_plans(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL,
+  topic_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  html TEXT NOT NULL,
+  unsubscribe_token TEXT NOT NULL,
+  global_unsubscribe_token TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS brief_snapshots_user_topic_idx ON brief_snapshots (user_id, topic_id);
+
+CREATE TABLE IF NOT EXISTS email_deliveries (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL,
+  brief_snapshot_id TEXT NOT NULL REFERENCES brief_snapshots(id) ON DELETE CASCADE,
+  topic_id TEXT NOT NULL,
+  sent_at INTEGER NOT NULL,
+  unsubscribe_token TEXT NOT NULL,
+  global_unsubscribe_token TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS email_deliveries_user_snapshot_idx ON email_deliveries (user_id, brief_snapshot_id);
 `;
 
 export function applySchema(driver: SqliteDriver): void {
