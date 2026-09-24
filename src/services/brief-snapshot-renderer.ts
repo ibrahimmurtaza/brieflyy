@@ -5,7 +5,6 @@ import type { LLMSummaryClient, LLMSummaryOutput } from '../domain/llm.js';
 export interface BriefSnapshotRendererDeps {
   readonly clusterRepo: ClusterRepo;
   readonly llmClient?: LLMSummaryClient | undefined;
-  readonly llmTimeoutMs?: number;
   readonly maxLlmClusters?: number;
 }
 
