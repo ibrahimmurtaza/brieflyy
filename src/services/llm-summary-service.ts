@@ -81,11 +81,13 @@ export class OpenAILLMSummaryService implements LLMSummaryClient {
 
       const summary = typeof obj.summary === 'string' ? obj.summary : '';
       const bulletsRaw = Array.isArray(obj.bulletPoints) ? obj.bulletPoints : [];
+      const allowedUrls = new Set(articles.map((a) => a.url));
       const bulletPoints: LLMBulletPoint[] = bulletsRaw
         .map((b) => {
           if (!b || typeof b !== 'object') return null;
           const bb = b as Record<string, unknown>;
           if (typeof bb.text !== 'string' || typeof bb.articleUrl !== 'string') return null;
+          if (!allowedUrls.has(bb.articleUrl)) return null; // enforce citation constraint
           return { text: bb.text, articleUrl: bb.articleUrl } as LLMBulletPoint;
         })
         .filter((b): b is LLMBulletPoint => b !== null);
