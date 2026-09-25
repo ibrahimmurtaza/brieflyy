@@ -225,3 +225,23 @@ export interface FeedbackEvent {
   readonly scope: FeedbackScope | null;
   readonly timestamp: Date;
 }
+
+export interface TrendWindow {
+  readonly observationStart: Date;
+  readonly observationEnd: Date;
+  readonly baselineStart: Date;
+  readonly baselineEnd: Date;
+}
+
+export interface EmergingEntity {
+  readonly entityId: EntityId;
+  readonly canonicalName: string;
+  readonly lift: number;
+}
+
+export interface TopicTrend {
+  readonly topicId: TopicId;
+  readonly computedAt: Date;
+  readonly volumeOverTime: readonly { date: string; count: number }[];
+  readonly entities: readonly EmergingEntity[];
+}
