@@ -6,11 +6,14 @@ export interface BriefSnapshotRendererDeps {
   readonly clusterRepo: ClusterRepo;
   readonly llmClient?: LLMSummaryClient | undefined;
   readonly maxLlmClusters?: number;
+  readonly briefLlmTimeoutMs?: number;
 }
 
 export class BriefSnapshotRenderer {
   constructor(private readonly deps: BriefSnapshotRendererDeps) {}
 
+  // The HTML produced here is intended to be saved once as BriefSnapshot.html.
+  // It should not be regenerated on view — the snapshot is immutable.
   async render(plan: BriefPlan, appBaseUrl: string): Promise<string> {
     const clusters = await this.deps.clusterRepo.listByTopicId(plan.topicId);
     const selectedClusters = clusters.filter((c) => plan.clusterIds.includes(c.id as string));
@@ -18,10 +21,16 @@ export class BriefSnapshotRenderer {
     const llmEnabled = !!this.deps.llmClient && selectedClusters.length > 0;
 
     const llmResults = new Map<string, LLMSummaryOutput | null>();
+    const briefTimeoutMs = this.deps.briefLlmTimeoutMs ?? 15000;
+    const briefStart = Date.now();
     if (llmEnabled) {
       let callsMade = 0;
       for (const cluster of selectedClusters) {
         if (callsMade >= maxLlm) break;
+        // Global brief-level timeout: if exceeded, fall back for all remaining clusters
+        if (Date.now() - briefStart > briefTimeoutMs) {
+          break;
+        }
         callsMade++;
         try {
           const articles = await this.deps.clusterRepo.listArticlesByClusterId(cluster.id as string);
