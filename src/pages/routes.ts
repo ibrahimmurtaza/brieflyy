@@ -139,6 +139,16 @@ export async function registerPageRoutes(
     },
   );
 
+  fastify.get('/archive/search', async (req, reply) => {
+    if (!req.auth) {
+      return reply.code(302).header('location', '/signup').send();
+    }
+    // Minimal archive search page for full vertical slice (#14)
+    return reply.type('text/html').send(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Archive search · Brieflyy</title></head>
+<body><h1>Archive search</h1><p>Search results will appear here.</p></body></html>`);
+  });
+
   fastify.get('/', async (_req, reply) => {
     return reply.code(302).header('location', '/signup').send();
   });
