@@ -67,9 +67,10 @@ export const magicLinks = sqliteTable(
   'magic_links',
   {
     id: text('id').primaryKey(),
-    accountId: text('account_id')
-      .notNull()
-      .references(() => accounts.id, { onDelete: 'cascade' }),
+    // Null until the link is verified: the account it belongs to does not exist
+    // until someone proves they can read the address' mail.
+    accountId: text('account_id').references(() => accounts.id, { onDelete: 'cascade' }),
+    email: text('email').notNull(),
     tokenHash: text('token_hash').notNull(),
     createdAt: integer('created_at', { mode: 'timestamp_ms' })
       .notNull()
@@ -80,6 +81,7 @@ export const magicLinks = sqliteTable(
   (t) => ({
     tokenHashUnique: uniqueIndex('magic_links_token_hash_unique').on(t.tokenHash),
     accountIdx: index('magic_links_account_idx').on(t.accountId),
+    emailIdx: index('magic_links_email_idx').on(t.email),
   }),
 );
 

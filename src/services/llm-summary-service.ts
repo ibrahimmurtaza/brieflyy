@@ -3,11 +3,15 @@ import type {
   LLMSummaryOutput,
   LLMBulletPoint,
 } from '../domain/llm.js';
+import { readOptionalString, readString } from '../env.js';
+import { OPENAI_API_URL_DEFAULT } from '../config.js';
 
 export interface LLMSummaryServiceOptions {
   readonly timeoutMs?: number;
   readonly apiKey?: string;
   readonly endpointUrl?: string;
+  /** Where to read configuration from; defaults to the process environment. */
+  readonly env?: Readonly<Record<string, string | undefined>>;
 }
 
 export class OpenAILLMSummaryService implements LLMSummaryClient {
@@ -16,9 +20,10 @@ export class OpenAILLMSummaryService implements LLMSummaryClient {
   private readonly endpointUrl: string;
 
   constructor(opts: LLMSummaryServiceOptions = {}) {
+    const env = opts.env ?? process.env;
     this.timeoutMs = opts.timeoutMs ?? 8000;
-    this.apiKey = opts.apiKey ?? process.env.OPENAI_API_KEY;
-    this.endpointUrl = opts.endpointUrl ?? (process.env.OPENAI_API_URL ?? 'https://api.openai.com/v1/chat/completions');
+    this.apiKey = opts.apiKey ?? readOptionalString(env, 'OPENAI_API_KEY');
+    this.endpointUrl = opts.endpointUrl ?? readString(env, 'OPENAI_API_URL', OPENAI_API_URL_DEFAULT);
   }
 
   async generateSummary(

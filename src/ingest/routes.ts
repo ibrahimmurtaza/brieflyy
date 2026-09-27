@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 
+import { AUTHENTICATED_ROUTE_CONFIG, requireAuth } from '../http/access.js';
 import { escapeHtml } from '../pages/html.js';
 import type { IngestScheduler } from './ingest-scheduler.js';
 
@@ -13,31 +14,38 @@ export async function registerIngestRoutes(
 ): Promise<void> {
   const { scheduler } = opts;
 
-  fastify.get('/api/ingest/status', async (_req, reply) => {
-    const status = await scheduler.statusHydrated();
-    return reply.send({
-      running: status.running,
-      lastCycleAt: status.lastCycleAt?.toISOString() ?? null,
-      lastCycleId: status.lastCycleId,
-      nextDueAt: status.nextDueAt?.toISOString() ?? null,
-      sources: status.sources.map((s) => ({
-        sourceId: s.sourceId,
-        lastPolledAt: s.lastPolledAt?.toISOString() ?? null,
-        lastSuccessAt: s.lastSuccessAt?.toISOString() ?? null,
-        consecutiveFailures: s.consecutiveFailures,
-        nextAttemptAt: s.nextAttemptAt.toISOString(),
-        lastError: s.lastError,
-      })),
-    });
-  });
+  fastify.get(
+    '/api/ingest/status',
+    AUTHENTICATED_ROUTE_CONFIG,
+    async (req, reply) => {
+      if (!requireAuth(req, reply, { json: true })) return reply;
+      const status = await scheduler.statusHydrated();
+      return reply.send({
+        running: status.running,
+        lastCycleAt: status.lastCycleAt?.toISOString() ?? null,
+        lastCycleId: status.lastCycleId,
+        nextDueAt: status.nextDueAt?.toISOString() ?? null,
+        sources: status.sources.map((s) => ({
+          sourceId: s.sourceId,
+          lastPolledAt: s.lastPolledAt?.toISOString() ?? null,
+          lastSuccessAt: s.lastSuccessAt?.toISOString() ?? null,
+          consecutiveFailures: s.consecutiveFailures,
+          nextAttemptAt: s.nextAttemptAt.toISOString(),
+          lastError: s.lastError,
+        })),
+      });
+    },
+  );
 
-  fastify.get('/admin/ingest', async (_req, reply) => {
+  fastify.get('/admin/ingest', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
+    if (!requireAuth(req, reply)) return reply;
     const status = await scheduler.statusHydrated();
     const html = renderDashboard(status);
     return reply.type('text/html; charset=utf-8').send(html);
   });
 
-  fastify.post('/api/ingest/tick', async (_req, reply) => {
+  fastify.post('/api/ingest/tick', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
+    if (!requireAuth(req, reply, { json: true })) return reply;
     const report = await scheduler.tick();
     return reply.send({
       cycleId: report.cycleId,

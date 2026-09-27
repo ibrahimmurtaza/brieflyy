@@ -19,6 +19,7 @@ import type { EmailTransport } from '../email/transport.js';
 import type { OAuthClient } from '../oauth/client.js';
 import type {
   Account,
+  MagicLink,
   Session,
   User,
 } from '../domain/types.js';
@@ -55,9 +56,12 @@ export const emailSchema = z
 
 export type RequestMagicLinkInput = { readonly email: string };
 
+/**
+ * The same shape whether or not the address already has an account. A response
+ * that varied would let anyone learn who has signed up.
+ */
 export interface RequestMagicLinkOutcome {
   readonly email: string;
-  readonly sentTo: 'existing' | 'new';
 }
 
 export const RequestMagicLinkError = {
@@ -187,6 +191,12 @@ export class AuthService {
     this.oauthStateTtlMs = deps.oauthStateTtlMs ?? OAUTH_STATE_TTL_MS_DEFAULT;
   }
 
+  /**
+   * Record the request against the address and mail the link. Deliberately does
+   * not create a User or an Account: an address that asks for a link and never
+   * opens it is not a person, and a row per address is a list of everyone who
+   * ever typed one. The account appears when the link is verified.
+   */
   async requestMagicLink(
     input: RequestMagicLinkInput,
   ): Promise<RequestMagicLinkOutcome> {
@@ -197,33 +207,12 @@ export class AuthService {
     const email = parsed.data;
     const now = this.clock.now();
 
-    let account = await this.accountRepo.getByEmail(email);
-    let sentTo: 'existing' | 'new';
-    if (!account) {
-      const user: User = {
-        id: this.random.uuid(),
-        createdAt: now,
-        onboardingState: 'not_started',
-      };
-      account = {
-        id: this.random.uuid(),
-        userId: user.id,
-        email,
-        emailVerifiedAt: null,
-        createdAt: now,
-      };
-      await this.userRepo.insert(user);
-      await this.accountRepo.insert(account);
-      sentTo = 'new';
-    } else {
-      sentTo = 'existing';
-    }
-
     const token = generateMagicLinkToken(this.random);
     const tokenHash = hashMagicLinkToken(token);
     const magicLink = {
       id: this.random.uuid(),
-      accountId: account.id,
+      accountId: null,
+      email,
       tokenHash,
       createdAt: now,
       expiresAt: new Date(now.getTime() + this.magicLinkTtlMs),
@@ -238,12 +227,12 @@ export class AuthService {
       ttlMinutes,
     });
     await this.emailTransport.send({
-      to: account.email,
+      to: email,
       subject,
       text,
     });
 
-    return { email, sentTo };
+    return { email };
   }
 
   async verifyMagicLink(
@@ -265,14 +254,11 @@ export class AuthService {
       return { status: 'invalid', reason: 'expired' };
     }
 
-    const account = await this.accountRepo.getById(link.accountId);
-    if (!account) {
+    const resolved = await this.resolveAccountForLink(link, now);
+    if (!resolved) {
       return { status: 'invalid', reason: 'unknown_token' };
     }
-    const user = await this.userRepo.getById(account.userId);
-    if (!user) {
-      return { status: 'invalid', reason: 'unknown_token' };
-    }
+    const { account, user } = resolved;
 
     const sessionId = generateSessionId(this.random);
     const session: Session = {
@@ -290,6 +276,59 @@ export class AuthService {
     await this.magicLinkRepo.markConsumed(link.id, now);
 
     return { status: 'ok', session, user, account };
+  }
+
+  /**
+   * The account a verified link belongs to, creating it on first verification.
+   * Returns null when the link names an email that cannot have a User.
+   */
+  private async resolveAccountForLink(
+    link: MagicLink,
+    now: Date,
+  ): Promise<{ account: Account; user: User } | null> {
+    const linked = link.accountId ? await this.accountRepo.getById(link.accountId) : null;
+    const account = linked ?? (await this.accountRepo.getByEmail(link.email));
+    if (account) {
+      const user = await this.userRepo.getById(account.userId);
+      return user ? { account, user } : null;
+    }
+    if (linked) return null;
+    return this.createAccountForEmail(link, now);
+  }
+
+  private async createAccountForEmail(
+    link: MagicLink,
+    now: Date,
+  ): Promise<{ account: Account; user: User }> {
+    const user: User = {
+      id: this.random.uuid(),
+      createdAt: now,
+      onboardingState: 'not_started',
+    };
+    const account: Account = {
+      id: this.random.uuid(),
+      userId: user.id,
+      email: link.email,
+      emailVerifiedAt: now,
+      createdAt: now,
+    };
+    try {
+      await this.userRepo.insert(user);
+      await this.accountRepo.insert(account);
+    } catch (err) {
+      // Two links for the same fresh address can be opened at once. The address
+      // is unique, so the loser of that race adopts the account the winner made
+      // rather than failing the sign-in. Its own User row goes with it: a User
+      // without an Account is not a thing this application keeps.
+      const raced = await this.accountRepo.getByEmail(link.email);
+      await this.userRepo.delete(user.id);
+      if (!raced) throw err;
+      const owner = await this.userRepo.getById(raced.userId);
+      if (!owner) throw err;
+      return { account: raced, user: owner };
+    }
+    await this.magicLinkRepo.attachAccount(link.id, account.id);
+    return { account, user };
   }
 
   async getCurrentAuth(sessionId: string): Promise<CurrentAuth | null> {

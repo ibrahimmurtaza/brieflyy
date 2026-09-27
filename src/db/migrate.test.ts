@@ -142,6 +142,32 @@ afterEach(() => {
   }
 });
 
+/** A database from before magic links carried the address instead of an account. */
+const PRE_MAGIC_LINK_EMAIL_SQL = `
+CREATE TABLE users (
+  id TEXT PRIMARY KEY NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+  onboarding_state TEXT NOT NULL DEFAULT 'not_started'
+);
+CREATE TABLE accounts (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  email TEXT NOT NULL,
+  email_verified_at INTEGER,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+);
+CREATE TABLE magic_links (
+  id TEXT PRIMARY KEY NOT NULL,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+  expires_at INTEGER NOT NULL,
+  consumed_at INTEGER
+);
+CREATE UNIQUE INDEX magic_links_token_hash_unique ON magic_links (token_hash);
+CREATE INDEX magic_links_account_idx ON magic_links (account_id);
+`;
+
 describe('applySchema', () => {
   it('adds topics.cadence to a database created before the column existed', async () => {
     const driver = createInMemorySqliteDriver();
@@ -308,6 +334,66 @@ describe('applySchema', () => {
         )
         .run('story-2', 'src-1', 'same-fingerprint', 2, 2),
     ).not.toThrow();
+  });
+
+  it('lets a magic link exist before the account it will create', () => {
+    const driver = createInMemorySqliteDriver();
+    driver.exec(PRE_MAGIC_LINK_EMAIL_SQL);
+    applySchema(driver);
+
+    const columns = (
+      driver.prepare(`SELECT name, "notnull" AS not_null FROM pragma_table_info(?)`).all('magic_links') as {
+        name: string;
+        not_null: number;
+      }[]
+    );
+    const byName = new Map(columns.map((c) => [c.name, c.not_null === 1]));
+    expect(byName.get('email')).toBe(true);
+    expect(byName.get('account_id')).toBe(false);
+    expect(foreignKeys(driver, 'magic_links')).toEqual([
+      { from: 'account_id', table: 'accounts' },
+    ]);
+
+    expect(() =>
+      driver
+        .prepare(
+          `INSERT INTO magic_links (id, account_id, email, token_hash, created_at, expires_at, consumed_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run('link-1', null, 'iris@example.com', 'hash-1', 1, 2, null),
+    ).not.toThrow();
+  });
+
+  it('keeps the rows of a magic link it rebuilds, and stops demanding an account', () => {
+    const driver = createInMemorySqliteDriver();
+    driver.exec(PRE_MAGIC_LINK_EMAIL_SQL);
+    driver.prepare(`INSERT INTO users (id) VALUES (?)`).run('user-1');
+    driver
+      .prepare(
+        `INSERT INTO accounts (id, user_id, email, created_at) VALUES (?, ?, ?, ?)`,
+      )
+      .run('account-1', 'user-1', 'iris@example.com', 1);
+    driver
+      .prepare(
+        `INSERT INTO magic_links (id, account_id, token_hash, created_at, expires_at, consumed_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run('link-1', 'account-1', 'hash-1', 1, 2, 3);
+
+    applySchema(driver);
+
+    const kept = driver
+      .prepare(`SELECT id, account_id, email, token_hash, consumed_at FROM magic_links WHERE id = ?`)
+      .get('link-1') as
+      | { id: string; account_id: string; email: string; token_hash: string; consumed_at: number }
+      | undefined;
+    expect(kept).toEqual({
+      id: 'link-1',
+      account_id: 'account-1',
+      email: 'iris@example.com',
+      token_hash: 'hash-1',
+      consumed_at: 3,
+    });
   });
 
   it('is a no-op when run twice', () => {

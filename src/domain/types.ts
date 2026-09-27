@@ -41,9 +41,14 @@ export interface Session {
   readonly revokedAt: Date | null;
 }
 
+/**
+ * A sign-in link sent to an address. `accountId` is null until the link is
+ * verified, because the account does not exist until then.
+ */
 export interface MagicLink {
   readonly id: MagicLinkId;
-  readonly accountId: AccountId;
+  readonly accountId: AccountId | null;
+  readonly email: string;
   readonly tokenHash: string;
   readonly createdAt: Date;
   readonly expiresAt: Date;

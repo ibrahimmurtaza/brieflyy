@@ -17,6 +17,7 @@ import { DrizzleOAuthStateRepo } from '../repos/oauth-state-repo.js';
 import { DrizzleSessionRepo } from '../repos/session-repo.js';
 import { DrizzleUserRepo } from '../repos/user-repo.js';
 import { createTestDb } from '../testing/test-db.js';
+import { extractMagicLinkToken } from '../testing/email.js';
 import {
   deterministicRandom,
   makeTestClock,
@@ -121,6 +122,19 @@ async function startAndCapture(ctx: Awaited<ReturnType<typeof makeService>>) {
   return { start, stateHash, stateRow: stateRow! };
 }
 
+/** Ask for a sign-in link and open it, so the address has an account. */
+async function signUpByMagicLink(
+  ctx: Awaited<ReturnType<typeof makeService>>,
+  email: string,
+): Promise<string> {
+  await ctx.service.requestMagicLink({ email });
+  const sent = ctx.transport.snapshot();
+  const token = extractMagicLinkToken(sent[sent.length - 1]!.text);
+  const verified = await ctx.service.verifyMagicLink({ token });
+  if (verified.status !== 'ok') throw new Error('expected ok');
+  return verified.user.id;
+}
+
 describe('AuthService.startGoogleOAuth', () => {
   beforeEach(() => {
     resetDeterministic();
@@ -169,7 +183,7 @@ describe('AuthService.completeWithGoogle', () => {
 
   it('links the Google account to an existing email-based User instead of creating a duplicate', async () => {
     const ctx = makeService();
-    await ctx.service.requestMagicLink({ email: 'iris@example.com' });
+    const userId = await signUpByMagicLink(ctx, 'iris@example.com');
 
     const { start, stateHash } = await startAndCapture(ctx);
     const outcome = await ctx.service.completeWithGoogle({
@@ -184,6 +198,7 @@ describe('AuthService.completeWithGoogle', () => {
     if (outcome.status !== 'ok') throw new Error('expected ok');
 
     expect(outcome.account.userId).toBe(outcome.user.id);
+    expect(outcome.user.id).toBe(userId);
 
     const userRow = await ctx.userRepo.getById(outcome.user.id);
     expect(userRow).not.toBeNull();
@@ -196,22 +211,24 @@ describe('AuthService.completeWithGoogle', () => {
     expect(link!.accountId).toBe(outcome.account.id);
   });
 
-  it('marks the existing magic-link email as verified on first Google sign-in', async () => {
+  it('joins a Google sign-in to the address an outstanding magic link was sent to', async () => {
     const ctx = makeService();
     await ctx.service.requestMagicLink({ email: 'iris@example.com' });
-    const accountBefore = await ctx.accountRepo.getByEmail('iris@example.com');
-    expect(accountBefore!.emailVerifiedAt).toBeNull();
+    expect(await ctx.accountRepo.getByEmail('iris@example.com')).toBeNull();
 
     const { start, stateHash } = await startAndCapture(ctx);
-    await ctx.service.completeWithGoogle({
+    const outcome = await ctx.service.completeWithGoogle({
       code: 'auth-code',
       state: start.state,
       stateHash,
       codeVerifier: start.codeVerifier,
       redirectUri: 'https://app.brieflyy.test/auth/google/callback',
     });
+    if (outcome.status !== 'ok') throw new Error('expected ok');
 
     const accountAfter = await ctx.accountRepo.getByEmail('iris@example.com');
+    expect(accountAfter).not.toBeNull();
+    expect(accountAfter!.id).toBe(outcome.account.id);
     expect(accountAfter!.emailVerifiedAt).not.toBeNull();
   });
 

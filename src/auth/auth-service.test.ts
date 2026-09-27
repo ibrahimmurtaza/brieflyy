@@ -16,6 +16,8 @@ import {
   resetDeterministic,
 } from '../testing/test-clocks.js';
 import type { EmailMessage } from '../email/transport.js';
+import { countRows } from '../testing/db.js';
+import { extractMagicLinkToken } from '../testing/email.js';
 import { hashMagicLinkToken } from '../domain/crypto.js';
 
 function makeService(opts?: {
@@ -23,7 +25,7 @@ function makeService(opts?: {
   magicLinkTtlMs?: number;
   sessionTtlMs?: number;
 }) {
-  const { db } = createTestDb();
+  const { db, driver } = createTestDb();
   const transport = new ConsoleEmailTransport({ logger: () => {} });
   const userRepo = new DrizzleUserRepo(db);
   const accountRepo = new DrizzleAccountRepo(db);
@@ -42,13 +44,12 @@ function makeService(opts?: {
     magicLinkTtlMs: opts?.magicLinkTtlMs,
     sessionTtlMs: opts?.sessionTtlMs,
   });
-  return { service, transport, db, accountRepo, userRepo, sessionRepo, magicLinkRepo, tc };
+  const count = (table: 'users' | 'accounts'): number => countRows(driver, table);
+  return { service, transport, db, driver, count, accountRepo, userRepo, sessionRepo, magicLinkRepo, tc };
 }
 
 function extractToken(message: EmailMessage): string {
-  const match = message.text.match(/\btoken=([^\s&]+)/);
-  if (!match) throw new Error('token not found in magic link email');
-  return decodeURIComponent(match[1]!);
+  return extractMagicLinkToken(message.text);
 }
 
 describe('AuthService.requestMagicLink', () => {
@@ -56,12 +57,11 @@ describe('AuthService.requestMagicLink', () => {
     resetDeterministic();
   });
 
-  it('creates a User + Account and sends a magic link for a new email', async () => {
-    const { service, transport } = makeService();
+  it('sends a magic link for an address nobody has signed up with yet', async () => {
+    const { service, transport, accountRepo, count } = makeService();
 
     const outcome = await service.requestMagicLink({ email: '  Iris@example.com  ' });
 
-    expect(outcome.sentTo).toBe('new');
     expect(outcome.email).toBe('iris@example.com');
 
     const sent = transport.snapshot();
@@ -71,19 +71,38 @@ describe('AuthService.requestMagicLink', () => {
     expect(message.subject).toMatch(/sign in/i);
     expect(message.text).toContain('https://app.brieflyy.test/auth/magic-link/verify?token=');
     expect(message.text).toMatch(/expires in \d+ minutes/);
+
+    // Asking is not joining. Nothing about the address is retained yet.
+    expect(await accountRepo.getByEmail('iris@example.com')).toBeNull();
+    expect(count('users')).toBe(0);
+    expect(count('accounts')).toBe(0);
   });
 
-  it('does not create a duplicate User when the email already exists', async () => {
-    const { service, accountRepo, userRepo } = makeService();
+  it('answers the same way for an address that already has an account', async () => {
+    const { service, transport } = makeService();
+    const first = await service.requestMagicLink({ email: 'iris@example.com' });
+    const token = extractToken(transport.snapshot()[0]!);
+    await service.verifyMagicLink({ token });
+
+    const second = await service.requestMagicLink({ email: 'iris@example.com' });
+
+    expect(second).toEqual(first);
+  });
+
+  it('does not create a second User when the same address asks twice', async () => {
+    const { service, transport, count } = makeService();
 
     await service.requestMagicLink({ email: 'Iris@example.com' });
+    const first = extractToken(transport.snapshot()[0]!);
     await service.requestMagicLink({ email: 'iris@example.com' });
+    const sent = transport.snapshot();
+    const second = extractToken(sent[sent.length - 1]!);
 
-    const account = await accountRepo.getByEmail('iris@example.com');
-    expect(account).not.toBeNull();
-    const user = await userRepo.getById(account!.userId);
-    expect(user).not.toBeNull();
-    expect(user!.onboardingState).toBe('not_started');
+    await service.verifyMagicLink({ token: first });
+    await service.verifyMagicLink({ token: second });
+
+    expect(count('users')).toBe(1);
+    expect(count('accounts')).toBe(1);
   });
 
   it('rejects an invalid email with a validation error', async () => {
@@ -199,8 +218,9 @@ describe('AuthService.verifyMagicLink', () => {
   });
 
   it('creates a User and Account for a brand-new email on first verification', async () => {
-    const { service, transport, userRepo, accountRepo } = makeService();
+    const { service, transport, userRepo, accountRepo, count } = makeService();
     await service.requestMagicLink({ email: 'newuser@example.com' });
+    expect(count('users')).toBe(0);
     const token = extractToken(transport.snapshot()[0]!);
 
     const outcome = await service.verifyMagicLink({ token });
@@ -212,6 +232,64 @@ describe('AuthService.verifyMagicLink', () => {
     const account = await accountRepo.getById(outcome.account.id);
     expect(account!.email).toBe('newuser@example.com');
     expect(account!.userId).toBe(user!.id);
+    expect(count('users')).toBe(1);
+    expect(count('accounts')).toBe(1);
+  });
+
+  it('points the verified link at the account it created', async () => {
+    const { service, transport, magicLinkRepo } = makeService();
+    await service.requestMagicLink({ email: 'newuser@example.com' });
+    const token = extractToken(transport.snapshot()[0]!);
+
+    const before = await magicLinkRepo.getByTokenHash(hashMagicLinkToken(token));
+    expect(before?.accountId).toBeNull();
+    expect(before?.email).toBe('newuser@example.com');
+
+    const outcome = await service.verifyMagicLink({ token });
+    if (outcome.status !== 'ok') throw new Error('expected ok');
+
+    const after = await magicLinkRepo.getByTokenHash(hashMagicLinkToken(token));
+    expect(after?.accountId).toBe(outcome.account.id);
+  });
+
+  it('reuses the existing account when a verified link names a known address', async () => {
+    const { service, transport, count } = makeService();
+    await service.requestMagicLink({ email: 'iris@example.com' });
+    const first = extractToken(transport.snapshot()[0]!);
+    const created = await service.verifyMagicLink({ token: first });
+    if (created.status !== 'ok') throw new Error('expected ok');
+
+    await service.requestMagicLink({ email: 'iris@example.com' });
+    const sent = transport.snapshot();
+    const second = extractToken(sent[sent.length - 1]!);
+    const again = await service.verifyMagicLink({ token: second });
+    if (again.status !== 'ok') throw new Error('expected ok');
+
+    expect(again.user.id).toBe(created.user.id);
+    expect(again.account.id).toBe(created.account.id);
+    expect(count('users')).toBe(1);
+  });
+
+  it('gives two links for one fresh address the same account when both are opened', async () => {
+    const { service, transport, count } = makeService();
+    await service.requestMagicLink({ email: 'iris@example.com' });
+    const first = extractToken(transport.snapshot()[0]!);
+    await service.requestMagicLink({ email: 'iris@example.com' });
+    const sent = transport.snapshot();
+    const second = extractToken(sent[sent.length - 1]!);
+
+    // Both verifications run at once, as two tabs would.
+    const [one, two] = await Promise.all([
+      service.verifyMagicLink({ token: first }),
+      service.verifyMagicLink({ token: second }),
+    ]);
+
+    expect(one.status).toBe('ok');
+    expect(two.status).toBe('ok');
+    if (one.status !== 'ok' || two.status !== 'ok') throw new Error('expected ok');
+    expect(one.user.id).toBe(two.user.id);
+    expect(count('users')).toBe(1);
+    expect(count('accounts')).toBe(1);
   });
 });
 

@@ -2,9 +2,17 @@ import fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import fastifySensible from '@fastify/sensible';
 
-import { SESSION_COOKIE_NAME, SESSION_TTL_MS_DEFAULT } from './config.js';
+import {
+  MAGIC_LINK_RATE_LIMITS,
+  MAGIC_LINK_RATE_LIMIT_SCOPES,
+  SESSION_COOKIE_NAME,
+  SESSION_TTL_MS_DEFAULT,
+  type MagicLinkRateLimits,
+} from './config.js';
 import type { Db } from './db/client.js';
 import { applyDirectorySeed } from './directory/seed.js';
+import { attachRouteManifest } from './http/access.js';
+import { FixedWindowRateLimiter } from './http/rate-limit.js';
 import { DrizzleAccountRepo } from './repos/account-repo.js';
 import { DrizzleArticleRepo } from './repos/article-repo.js';
 import { DrizzleDeliverySettingsRepo } from './repos/delivery-settings-repo.js';
@@ -49,12 +57,20 @@ export interface CreateAppOptions {
   readonly logger?: boolean | undefined;
   readonly feedFetcher?: FeedFetcher | undefined;
   readonly ingestScheduler?: IngestScheduler | undefined;
+  readonly magicLinkRateLimits?: MagicLinkRateLimits | undefined;
+  /** Believe `X-Forwarded-For`, so per-caller limits work behind a proxy. */
+  readonly trustProxy?: boolean | undefined;
 }
 
 export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance> {
   const app = fastify({
     logger: opts.logger ?? false,
+    trustProxy: opts.trustProxy ?? false,
   });
+
+  // Record every route as it is registered, so the route guard test can check
+  // the real application rather than a description of it.
+  attachRouteManifest(app);
 
   await app.register(fastifyCookie, {});
   await app.register(fastifySensible);
@@ -148,11 +164,21 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     feedFetcher: opts.feedFetcher,
   });
 
+  const rateLimits = opts.magicLinkRateLimits ?? MAGIC_LINK_RATE_LIMITS;
+  const magicLinkRateLimiter = new FixedWindowRateLimiter(
+    {
+      [MAGIC_LINK_RATE_LIMIT_SCOPES.perAddress]: rateLimits.perAddress,
+      [MAGIC_LINK_RATE_LIMIT_SCOPES.perSource]: rateLimits.perSource,
+    },
+    clock,
+  );
+
   await registerAuthRoutes(app, {
     authService,
     sessionTtlMs: opts.sessionTtlMs ?? SESSION_TTL_MS_DEFAULT,
     cookieSecure: opts.cookieSecure ?? false,
     appBaseUrl: opts.appBaseUrl,
+    magicLinkRateLimiter,
   });
 
   await registerOnboardingRoutes(app, {

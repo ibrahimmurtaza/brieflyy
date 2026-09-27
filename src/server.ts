@@ -4,84 +4,50 @@ import { applySchema } from './db/migrate.js';
 import { createDatabase } from './db/client.js';
 import { createApp } from './app.js';
 import { createEmailTransport } from './email/index.js';
+import { loadServerConfig } from './env.js';
 import { GoogleOAuthClient } from './oauth/google-client.js';
 import { HttpFeedFetcher } from './ingest/http-feed-fetcher.js';
 import { systemHttpClient } from './ingest/system-http-client.js';
 import type { FeedFetcher } from './ingest/feed-fetcher.js';
 
-function requireEnv(name: string): string {
-  const value = process.env[name];
-  if (!value || value.length === 0) {
-    throw new Error(`Missing required env var: ${name}`);
-  }
-  return value;
-}
-
-function envBool(name: string, fallback: boolean): boolean {
-  const raw = process.env[name];
-  if (raw === undefined) return fallback;
-  return raw === '1' || raw.toLowerCase() === 'true';
-}
-
-function envDriver(name: string, fallback: 'console' | 'resend'): 'console' | 'resend' {
-  const raw = process.env[name];
-  if (raw === 'resend' || raw === 'console') return raw;
-  return fallback;
-}
-
-function envOauthProvider(
-  name: string,
-): 'google' | undefined {
-  const raw = process.env[name];
-  if (raw === 'google') return 'google';
-  return undefined;
-}
-
-function envIngestEnabled(name: string): boolean {
-  const raw = process.env[name];
-  if (raw === undefined) return true;
-  return raw === '1' || raw.toLowerCase() === 'true';
-}
-
 async function main(): Promise<void> {
-  const databaseUrl = requireEnv('DATABASE_URL').replace(/^file:/, '');
-  const appBaseUrl = requireEnv('APP_BASE_URL');
-  const driver = new Database(databaseUrl);
+  const config = loadServerConfig(process.env);
+
+  const driver = new Database(config.databaseUrl);
   applySchema(driver);
   const db = createDatabase({ driver });
 
   const emailTransport = createEmailTransport({
-    driver: envDriver('EMAIL_TRANSPORT', 'console'),
-    defaultFrom: process.env.EMAIL_FROM ?? 'Brieflyy <hello@brieflyy.dev>',
-    resendApiKey: process.env.RESEND_API_KEY,
+    driver: config.emailTransport,
+    defaultFrom: config.emailFrom,
+    resendApiKey: config.resendApiKey,
   });
 
-  const oauthProvider = envOauthProvider('OAUTH_PROVIDER');
   let oauthClient = undefined;
-  if (oauthProvider === 'google') {
-    const clientId = requireEnv('GOOGLE_OAUTH_CLIENT_ID');
-    const clientSecret = requireEnv('GOOGLE_OAUTH_CLIENT_SECRET');
-    oauthClient = new GoogleOAuthClient({ clientId, clientSecret });
+  if (config.oauthProvider === 'google') {
+    oauthClient = new GoogleOAuthClient({
+      clientId: config.googleOAuthClientId!,
+      clientSecret: config.googleOAuthClientSecret!,
+    });
   }
 
   let feedFetcher: FeedFetcher | undefined;
-  if (envIngestEnabled('INGEST_ENABLED')) {
+  if (config.ingestEnabled) {
     feedFetcher = new HttpFeedFetcher({ http: systemHttpClient });
   }
 
   const app = await createApp({
     db,
     emailTransport,
-    appBaseUrl,
-    cookieSecure: envBool('COOKIE_SECURE', process.env.NODE_ENV === 'production'),
+    appBaseUrl: config.appBaseUrl,
+    cookieSecure: config.cookieSecure,
+    trustProxy: config.trustProxy,
     logger: true,
     oauthClient,
     feedFetcher,
   });
 
-  const port = Number(process.env.PORT ?? 3000);
-  const host = process.env.HOST ?? '0.0.0.0';
-  await app.listen({ port, host });
+  await app.listen({ port: config.port, host: config.host });
 }
 
 main().catch((err) => {

@@ -14,6 +14,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "secrets:check": "tsx src/verify/check-staged-secrets.ts",
+    "verify": "pnpm typecheck && pnpm test && pnpm secrets:check",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts",
     "db:push": "drizzle-kit push"

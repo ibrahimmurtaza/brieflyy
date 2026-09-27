@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 
 import type { SqliteDriver } from './client.js';
+import { readRequiredString } from '../env.js';
 import { pathToFileURL } from 'node:url';
 
 const SCHEMA_SQL = `
@@ -33,7 +34,8 @@ CREATE INDEX IF NOT EXISTS sessions_expires_idx ON sessions (expires_at);
 
 CREATE TABLE IF NOT EXISTS magic_links (
   id TEXT PRIMARY KEY NOT NULL,
-  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  account_id TEXT REFERENCES accounts(id) ON DELETE CASCADE,
+  email TEXT NOT NULL,
   token_hash TEXT NOT NULL,
   created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
   expires_at INTEGER NOT NULL,
@@ -41,6 +43,7 @@ CREATE TABLE IF NOT EXISTS magic_links (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS magic_links_token_hash_unique ON magic_links (token_hash);
 CREATE INDEX IF NOT EXISTS magic_links_account_idx ON magic_links (account_id);
+CREATE INDEX IF NOT EXISTS magic_links_email_idx ON magic_links (email);
 
 CREATE TABLE IF NOT EXISTS oauth_states (
   id TEXT PRIMARY KEY NOT NULL,
@@ -244,6 +247,18 @@ interface TableRebuild {
   readonly createSql: string;
   readonly columns: readonly string[];
   readonly foreignKeys: readonly { readonly column: string; readonly table: string }[];
+  /**
+   * Columns the current shape requires to be `NOT NULL`. SQLite cannot relax a
+   * constraint on an existing table, so a table that has one of these columns
+   * nullable is rebuilt even when its foreign keys are already right.
+   */
+  readonly notNull?: readonly string[];
+  /**
+   * SQL for a column the old table does not have, written against the old table
+   * and its aliases. Needed when a new required column can only be worked out
+   * from the rows already stored.
+   */
+  readonly backfill?: Readonly<Record<string, string>>;
 }
 
 /** Whether a table exists in this database. */
@@ -264,6 +279,14 @@ function columnNames(driver: SqliteDriver, table: string): Set<string> {
   return new Set(rows.map((r) => r.name));
 }
 
+/** Columns of a table that are declared `NOT NULL`. */
+function notNullColumns(driver: SqliteDriver, table: string): Set<string> {
+  const rows = driver
+    .prepare(`SELECT name, "notnull" AS is_not_null FROM pragma_table_info(?)`)
+    .all(table) as { name: string; is_not_null: number }[];
+  return new Set(rows.filter((r) => r.is_not_null === 1).map((r) => r.name));
+}
+
 function foreignKeyPairs(
   driver: SqliteDriver,
   table: string,
@@ -277,10 +300,14 @@ function foreignKeyPairs(
 function rebuildTable(driver: SqliteDriver, rebuild: TableRebuild): void {
   if (!tableExists(driver, rebuild.table)) return;
   const present = foreignKeyPairs(driver, rebuild.table);
-  const needsRebuild = rebuild.foreignKeys.some(
+  const missingForeignKey = rebuild.foreignKeys.some(
     (fk) => !present.has(`${fk.column}->${fk.table}`),
   );
-  if (!needsRebuild) return;
+  const presentNotNull = notNullColumns(driver, rebuild.table);
+  const missingNotNull = (rebuild.notNull ?? []).some(
+    (column) => !presentNotNull.has(column),
+  );
+  if (!missingForeignKey && !missingNotNull) return;
 
   const temp = `${rebuild.table}__rebuild`;
   const existing = columnNames(driver, rebuild.table);
@@ -298,10 +325,15 @@ function rebuildTable(driver: SqliteDriver, rebuild: TableRebuild): void {
           `CREATE TABLE ${temp}`,
         ),
       );
-      const shared = rebuild.columns.filter((c) => existing.has(c));
+      const shared = rebuild.columns.filter(
+        (c) => existing.has(c) || rebuild.backfill?.[c] !== undefined,
+      );
       const columnList = shared.join(', ');
+      const selectList = shared
+        .map((c) => rebuild.backfill?.[c] ?? c)
+        .join(', ');
       driver.exec(
-        `INSERT INTO ${temp} (${columnList}) SELECT ${columnList} FROM ${rebuild.table}`,
+        `INSERT INTO ${temp} (${columnList}) SELECT ${selectList} FROM ${rebuild.table}`,
       );
       driver.exec(`DROP TABLE ${rebuild.table}`);
       driver.exec(`ALTER TABLE ${temp} RENAME TO ${rebuild.table}`);
@@ -410,6 +442,36 @@ const TABLE_REBUILDS: readonly TableRebuild[] = [
   global_unsubscribe_token TEXT NOT NULL
 )`,
   },
+  {
+    // Magic links used to name an Account, which meant a User and an Account had
+    // to exist before the link was verified. They now carry the address and are
+    // pointed at the account on verification, so account_id has to become
+    // nullable and the address needs a column of its own.
+    table: 'magic_links',
+    foreignKeys: [{ column: 'account_id', table: 'accounts' }],
+    notNull: ['id', 'email', 'token_hash', 'created_at', 'expires_at'],
+    backfill: {
+      email: "COALESCE((SELECT a.email FROM accounts a WHERE a.id = magic_links.account_id), '')",
+    },
+    columns: [
+      'id',
+      'account_id',
+      'email',
+      'token_hash',
+      'created_at',
+      'expires_at',
+      'consumed_at',
+    ],
+    createSql: `CREATE TABLE IF NOT EXISTS magic_links (
+  id TEXT PRIMARY KEY NOT NULL,
+  account_id TEXT REFERENCES accounts(id) ON DELETE CASCADE,
+  email TEXT NOT NULL,
+  token_hash TEXT NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+  expires_at INTEGER NOT NULL,
+  consumed_at INTEGER
+)`,
+  },
 ];
 
 interface ColumnMigration {
@@ -447,6 +509,7 @@ function hasColumn(
 
 function applyColumnMigrations(driver: SqliteDriver): void {
   for (const migration of COLUMN_MIGRATIONS) {
+    if (!tableExists(driver, migration.table)) continue;
     if (!hasColumn(driver, migration.table, migration.column)) {
       driver.exec(migration.ddl);
     }
@@ -460,9 +523,12 @@ function applyTableRebuilds(driver: SqliteDriver): void {
 }
 
 export function applySchema(driver: SqliteDriver): void {
-  driver.exec(SCHEMA_SQL);
+  // Tables and columns that changed shape are brought up to date first, so the
+  // DDL below already matches what they became: an index on a column an older
+  // table does not have would otherwise fail against the table as it stands.
   applyTableRebuilds(driver);
   applyColumnMigrations(driver);
+  driver.exec(SCHEMA_SQL);
   rebuildNonUniqueIndexes(driver);
   // Recreate any index the rebuilds dropped with their tables.
   driver.exec(SCHEMA_SQL);
@@ -489,11 +555,7 @@ export function migrateToDatabaseFile(filename: string): void {
 }
 
 function databaseFileFromEnv(): string {
-  const raw = process.env['DATABASE_URL'];
-  if (!raw || raw.length === 0) {
-    throw new Error('Missing required env var: DATABASE_URL');
-  }
-  return raw.replace(/^file:/, '');
+  return readRequiredString(process.env, 'DATABASE_URL').replace(/^file:/, '');
 }
 
 function runCli(): void {
