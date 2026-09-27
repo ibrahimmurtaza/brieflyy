@@ -28,6 +28,6 @@ describe('FeedbackService', () => {
 
     const events = await service.getLatestEventsForCluster('user-1', 'cluster-1');
     expect(events.length).toBe(1);
-    expect(events[0].feedbackType).toBe('thumbs_up');
+    expect(events[0]?.feedbackType).toBe('thumbs_up');
   });
 });

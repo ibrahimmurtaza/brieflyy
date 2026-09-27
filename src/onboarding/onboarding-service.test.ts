@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { DrizzleAccountRepo } from '../repos/account-repo.js';
+import { DrizzleDeliverySettingsRepo } from '../repos/delivery-settings-repo.js';
+import { ConsoleEmailTransport } from '../email/console-transport.js';
 import { DrizzleTopicTemplateRepo } from '../repos/directory-repo.js';
 import { DrizzleTopicRepo } from '../repos/topic-repo.js';
 import { DrizzleUserRepo } from '../repos/user-repo.js';
@@ -36,6 +38,9 @@ async function makeHarness(): Promise<Harness> {
     topicTemplateRepo,
     topicRepo,
     userRepo,
+    accountRepo,
+    deliverySettingsRepo: new DrizzleDeliverySettingsRepo(db),
+    emailTransport: new ConsoleEmailTransport({ logger: () => {} }),
     clock: clock.clock,
     random: deterministicRandom,
   });
@@ -126,11 +131,12 @@ describe('OnboardingService.selectTopics', () => {
     const { service, signedInUser, userRepo } = await makeHarness();
     const { userId } = await signedInUser('iris@example.com');
     const allTemplates = await service.listTemplates();
-    const [id1, id2, id3] = allTemplates.slice(0, 3);
+    const [t1, t2, t3] = allTemplates.slice(0, 3);
+    if (!t1 || !t2 || !t3) throw new Error('expected three templates');
 
     const outcome = await service.selectTopics({
       userId,
-      templateIds: [id1!.id, id2!.id, id3!.id],
+      templateIds: [t1.id, t2.id, t3.id],
     });
 
     expect(outcome.status).toBe('ok');
@@ -140,7 +146,7 @@ describe('OnboardingService.selectTopics', () => {
       expect(topic.userId).toBe(userId);
       expect(topic.origin.kind).toBe('template');
       if (topic.origin.kind === 'template') {
-        expect([id1.id, id2.id, id3.id]).toContain(topic.origin.templateId);
+        expect([t1.id, t2.id, t3.id]).toContain(topic.origin.templateId);
       }
     }
 

@@ -49,7 +49,7 @@ interface FetchCall {
 }
 
 function makeFetch(impl: (call: FetchCall) => Promise<Response>): typeof fetch {
-  return ((input: RequestInfo | URL, init?: RequestInit) =>
+  return ((input: Parameters<typeof fetch>[0], init?: RequestInit) =>
     impl({ url: String(input), init: init ?? {} })) as unknown as typeof fetch;
 }
 

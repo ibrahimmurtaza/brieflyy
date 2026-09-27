@@ -8,7 +8,6 @@ import { DrizzleUserRepo } from '../repos/user-repo.js';
 import { createTestDb } from '../testing/test-db.js';
 import { applyDirectorySeed } from '../directory/seed.js';
 import { ConsoleEmailTransport } from '../email/console-transport.js';
-import type { EmailTransport } from '../email/transport.js';
 import {
   deterministicRandom,
   makeTestClock,
@@ -18,7 +17,7 @@ import { OnboardingService } from './onboarding-service.js';
 
 interface Harness {
   service: OnboardingService;
-  emailTransport: EmailTransport;
+  emailTransport: ConsoleEmailTransport;
   deliverySettingsRepo: DrizzleDeliverySettingsRepo;
   clock: ReturnType<typeof makeTestClock>;
   signedInUser: (email: string, state?: 'not_started' | 'topics_picked') => Promise<{ userId: string; email: string }>;

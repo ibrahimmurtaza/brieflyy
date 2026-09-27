@@ -33,7 +33,7 @@ describe('DiscoverService', () => {
       templates: [
         { id: 't1', slug: 'ai', title: 'AI', blurb: '', category: 'technology', defaultSourceIds: [] },
       ],
-      trends: [{ topicId: 't1', lift: 4.2 }],
+      trends: [{ templateId: 't1', lift: 4.2 }],
     });
     const trending = svc.getTrending();
     expect(trending[0]?.lift).toBe(4.2);

@@ -58,8 +58,8 @@ async function makeTestApp(
   const { db, driver } = createTestDb();
   const transport = new ConsoleEmailTransport({ logger: () => {} });
   const fetchCalls = { count: 0 };
-  let tokenResponse: { status: number; body?: string } = {};
-  const fetchImpl = (async (input: RequestInfo | URL, _init?: RequestInit) => {
+  let tokenResponse: { status: number; body?: string } = { status: 200 };
+  const fetchImpl = (async (input: Parameters<typeof fetch>[0], _init?: RequestInit) => {
     fetchCalls.count++;
     void _init;
     const url = String(input);
@@ -231,6 +231,31 @@ describe('HTTP /auth/google/callback', () => {
     });
     expect(onboarding.statusCode).toBe(200);
     expect(onboarding.body).toContain('iris@example.com');
+  });
+
+  it('sends a returning, fully set-up user to their topics', async () => {
+    const first = await startOAuth();
+    const firstState = new URL(first.location).searchParams.get('state')!;
+    await handle.app.inject({
+      method: 'GET',
+      url: `/auth/google/callback?code=auth-code&state=${encodeURIComponent(firstState)}`,
+      headers: {
+        cookie: `brieflyy_oauth_state=${first.stateCookie}; brieflyy_oauth_verifier=${first.verifierCookie}`,
+      },
+    });
+    handle.driver.prepare(`UPDATE users SET onboarding_state = ?`).run('delivery_set');
+
+    const second = await startOAuth();
+    const secondState = new URL(second.location).searchParams.get('state')!;
+    const callback = await handle.app.inject({
+      method: 'GET',
+      url: `/auth/google/callback?code=auth-code&state=${encodeURIComponent(secondState)}`,
+      headers: {
+        cookie: `brieflyy_oauth_state=${second.stateCookie}; brieflyy_oauth_verifier=${second.verifierCookie}`,
+      },
+    });
+    expect(callback.statusCode).toBe(302);
+    expect(callback.headers['location']).toBe('/topics');
   });
 
   it('renders an error page when the state cookie is missing', async () => {

@@ -12,6 +12,7 @@ import { DrizzleStoryRepo } from '../repos/story-repo.js';
 import { DrizzleTopicRepo } from '../repos/topic-repo.js';
 import { DrizzleUserRepo } from '../repos/user-repo.js';
 import { createTestDb } from '../testing/test-db.js';
+import { makeTopic } from '../testing/fixtures.js';
 import {
   deterministicRandom,
   makeTestClock,
@@ -75,17 +76,9 @@ async function build(opts?: {
     createdAt: new Date('2026-09-01T00:00:00Z'),
     onboardingState: 'topics_picked',
   });
-  await topicRepo.insert({
-    id: 't' as TopicId,
-    userId: 'u' as UserId,
-    slug: 't',
-    title: 'Topic',
-    blurb: '',
-    category: 'news' as TopicCategory,
-    origin: { kind: 'freeform' },
-    sourceIds: [],
-    createdAt: new Date('2026-09-01T00:00:00Z'),
-  });
+  await topicRepo.insert(
+    makeTopic({ id: 't', userId: 'u' }),
+  );
   await topicRepo.insertTopicSource('t' as TopicId, 'reuters', 0);
 
   const pollAt = opts?.pollAt ?? new Date('2026-09-02T12:00:00Z');
@@ -107,7 +100,6 @@ async function build(opts?: {
     storyRepo,
     entityRepo,
     feedFetcher: new StaticFeedFetcher({
-      sourceId: 'reuters',
       entries,
     }),
     clock: clock.clock,

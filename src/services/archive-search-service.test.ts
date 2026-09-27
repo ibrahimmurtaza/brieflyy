@@ -45,8 +45,8 @@ describe('ArchiveSearchService', () => {
       tier: 'paid',
       now: new Date('2026-09-25T00:00:00Z'),
       archiveItems: [
-        { kind: 'cluster', id: 'c1', entities: ['Tesla'] },
-        { kind: 'cluster', id: 'c2', entities: ['Apple'] },
+        { kind: 'cluster', id: 'c1', entities: ['Tesla'], createdAt: new Date('2026-09-20T00:00:00Z') },
+        { kind: 'cluster', id: 'c2', entities: ['Apple'], createdAt: new Date('2026-09-20T00:00:00Z') },
       ],
     });
     const results = svc.search({ entity: 'Tesla' });
@@ -81,8 +81,8 @@ describe('ArchiveSearchService', () => {
       tier: 'paid',
       now: new Date('2026-09-25T00:00:00Z'),
       archiveItems: [
-        { kind: 'cluster', id: 'c1', summary: 'Tesla earnings rise' },
-        { kind: 'snapshot', id: 'snap1', html: '<p>Apple earnings fall</p>' },
+        { kind: 'cluster', id: 'c1', summary: 'Tesla earnings rise', createdAt: new Date('2026-09-20T00:00:00Z') },
+        { kind: 'snapshot', id: 'snap1', html: '<p>Apple earnings fall</p>', createdAt: new Date('2026-09-20T00:00:00Z') },
       ],
     });
     const teslaResults = svc.search({ query: 'Tesla' });

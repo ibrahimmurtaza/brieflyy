@@ -21,7 +21,7 @@ describe('DrizzleFeedbackRepo', () => {
     });
     const all = await repo.listByUser('user-1');
     expect(all.length).toBe(1);
-    expect(all[0].feedbackType).toBe('thumbs_up');
+    expect(all[0]?.feedbackType).toBe('thumbs_up');
   });
 
   it('lists events by user and cluster', async () => {
@@ -39,6 +39,6 @@ describe('DrizzleFeedbackRepo', () => {
     });
     const events = await repo.listByUserAndCluster('user-1', 'cluster-1');
     expect(events.length).toBe(1);
-    expect(events[0].scope).toBe('this_topic');
+    expect(events[0]?.scope).toBe('this_topic');
   });
 });
