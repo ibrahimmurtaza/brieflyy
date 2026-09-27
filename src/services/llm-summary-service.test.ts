@@ -3,7 +3,7 @@ import { OpenAILLMSummaryService } from './llm-summary-service.js';
 
 describe('OpenAILLMSummaryService', () => {
   it('returns null when apiKey is missing', async () => {
-    const service = new OpenAILLMSummaryService({ apiKey: undefined, endpointUrl: '' });
+    const service = new OpenAILLMSummaryService({ endpointUrl: '' });
     const result = await service.generateSummary('Title', 'Summary', [{ url: 'http://example.com', title: 'T', body: 'B' }]);
     expect(result).toBeNull();
   });

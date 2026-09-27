@@ -9,6 +9,7 @@ import type {
   RawFeedEntry,
 } from './feed-fetcher.js';
 import { createTestDb } from '../testing/test-db.js';
+import { makeTopic } from '../testing/fixtures.js';
 import {
   deterministicRandom,
   makeTestClock,
@@ -92,7 +93,6 @@ async function buildHarness(opts: BuildInput = {}): Promise<BuildResult> {
     [
       reuters.feedUrl!,
       new StaticFeedFetcher({
-        sourceId: 'reuters',
         entries: [
           makeEntry(
             'r-1',
@@ -107,7 +107,6 @@ async function buildHarness(opts: BuildInput = {}): Promise<BuildResult> {
     [
       guardian.feedUrl!,
       new StaticFeedFetcher({
-        sourceId: 'the-guardian',
         entries: [
           makeEntry(
             'g-1',
@@ -192,17 +191,13 @@ async function insertTopicWithSources(
     createdAt: new Date('2026-09-01T00:00:00Z'),
     onboardingState: 'topics_picked',
   });
-  await topicRepo.insert({
-    id: input.id as TopicId,
-    userId: input.userId as UserId,
-    slug: input.id,
-    title: `Topic ${input.id}`,
-    blurb: '',
-    category: 'news' as TopicCategory,
-    origin: { kind: 'freeform' },
-    sourceIds: [],
-    createdAt: new Date('2026-09-01T00:00:00Z'),
-  });
+  await topicRepo.insert(
+    makeTopic({
+      id: input.id,
+      userId: input.userId,
+      sourceIds: input.sourceIds,
+    }),
+  );
   for (let i = 0; i < input.sourceIds.length; i++) {
     await topicRepo.insertTopicSource(
       input.id as TopicId,
@@ -344,7 +339,6 @@ describe('IngestScheduler', () => {
 
     setFetcher(
       new StaticFeedFetcher({
-        sourceId: 'reuters',
         entries: [],
       }),
     );
@@ -413,23 +407,23 @@ describe('IngestScheduler', () => {
       sourceIds: ['reuters'],
     });
 
-    let resolveSleep: (() => void) | null = null;
+    const sleep: { release: (() => void) | null } = { release: null };
     scheduler.setSleepFn(
       () =>
         new Promise<void>((resolve) => {
-          resolveSleep = resolve;
+          sleep.release = resolve;
         }),
     );
 
     const runPromise = scheduler.runForever();
     expect(scheduler.status().running).toBe(true);
 
-    resolveSleep?.();
+    sleep.release?.();
     await new Promise((r) => setImmediate(r));
     const cyclesSeen = scheduler.status().lastCycleId;
 
     scheduler.stop();
-    resolveSleep?.();
+    sleep.release?.();
     await runPromise;
 
     expect(scheduler.status().running).toBe(false);

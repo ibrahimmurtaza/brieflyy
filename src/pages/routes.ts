@@ -8,6 +8,11 @@ import type { SourceRepo } from '../repos/source-repo.js';
 import type { TopicRepo } from '../repos/topic-repo.js';
 import type { FeedbackRepo } from '../repos/feedback-repo.js';
 import { escapeHtml } from './html.js';
+import {
+  AUTHENTICATED_ROUTE_CONFIG,
+  PUBLIC_ROUTE_CONFIG,
+  requireAuthPage,
+} from '../http/access.js';
 
 export interface PageRoutesOptions {
   readonly appBaseUrl: string;
@@ -56,14 +61,12 @@ export async function registerPageRoutes(
 ): Promise<void> {
   const { onboardingService } = opts;
 
-  fastify.get('/signup', async (_req, reply) => {
+  fastify.get('/signup', PUBLIC_ROUTE_CONFIG, async (_req, reply) => {
     return reply.type('text/html').send(signupPage());
   });
 
-  fastify.get('/onboarding/pick-topics', async (req, reply) => {
-    if (!req.auth) {
-      return reply.code(302).header('location', '/signup').send();
-    }
+  fastify.get('/onboarding/pick-topics', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
+    if (!requireAuthPage(req, reply)) return reply;
     const templates = await onboardingService.listTemplates();
     const existing = await onboardingService.listTopics(req.auth.user.id);
     const atCap = existing.length >= 3;
@@ -79,10 +82,8 @@ export async function registerPageRoutes(
       );
   });
 
-  fastify.get('/onboarding/delivery-time', async (req, reply) => {
-    if (!req.auth) {
-      return reply.code(302).header('location', '/signup').send();
-    }
+  fastify.get('/onboarding/delivery-time', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
+    if (!requireAuthPage(req, reply)) return reply;
     const existing = await onboardingService.getDeliveryTime(req.auth.user.id);
     const first = await onboardingService.firstBriefAt(req.auth.user.id);
     return reply.type('text/html').send(
@@ -96,10 +97,8 @@ export async function registerPageRoutes(
     );
   });
 
-  fastify.get('/onboarding/welcome', async (req, reply) => {
-    if (!req.auth) {
-      return reply.code(302).header('location', '/signup').send();
-    }
+  fastify.get('/onboarding/welcome', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
+    if (!requireAuthPage(req, reply)) return reply;
     const settings = await onboardingService.getDeliveryTime(req.auth.user.id);
     if (!settings) {
       return reply.code(302).header('location', '/onboarding/delivery-time').send();
@@ -116,10 +115,9 @@ export async function registerPageRoutes(
 
   fastify.get<{ Querystring: { saved?: string } }>(
     '/settings/delivery',
+    AUTHENTICATED_ROUTE_CONFIG,
     async (req, reply) => {
-      if (!req.auth) {
-        return reply.code(302).header('location', '/signup').send();
-      }
+      if (!requireAuthPage(req, reply)) return reply;
       const existing = await onboardingService.getDeliveryTime(
         req.auth.user.id,
       );
@@ -139,34 +137,29 @@ export async function registerPageRoutes(
     },
   );
 
-  fastify.get('/archive/search', async (req, reply) => {
-    if (!req.auth) {
-      return reply.code(302).header('location', '/signup').send();
-    }
+  fastify.get('/archive/search', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
+    if (!requireAuthPage(req, reply)) return reply;
     // Minimal archive search page for full vertical slice (#14)
     return reply.type('text/html').send(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Archive search · Brieflyy</title></head>
 <body><h1>Archive search</h1><p>Search results will appear here.</p></body></html>`);
   });
 
-  fastify.get('/', async (_req, reply) => {
+  fastify.get('/', PUBLIC_ROUTE_CONFIG, async (_req, reply) => {
     return reply.code(302).header('location', '/signup').send();
   });
 
-  fastify.get('/topics', async (req, reply) => {
-    if (!req.auth) {
-      return reply.code(302).header('location', '/signup').send();
-    }
+  fastify.get('/topics', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
+    if (!requireAuthPage(req, reply)) return reply;
     const topics = await opts.onboardingService.listTopics(req.auth.user.id);
     return reply.type('text/html').send(homePage({ email: req.auth.account.email, topics }));
   });
 
   fastify.post<{ Params: { slug: string }; Body: { clusterId?: string; type?: string; scope?: string } }>(
     '/topics/:slug/feedback',
+    AUTHENTICATED_ROUTE_CONFIG,
     async (req, reply) => {
-      if (!req.auth || !opts.feedbackRepo) {
-        return reply.code(302).header('location', '/signup').send();
-      }
+      if (!opts.feedbackRepo || !requireAuthPage(req, reply)) return reply;
       const clusterId = req.body.clusterId ? String(req.body.clusterId) : '';
       const feedbackType = (req.body.type ? String(req.body.type) : 'thumbs_up') as 'thumbs_up' | 'thumbs_down' | 'hide_source' | 'more_like_this' | 'less_like_this';
       if (!clusterId || !feedbackType) {
@@ -186,10 +179,9 @@ export async function registerPageRoutes(
 
   fastify.get<{ Params: { slug: string }; Querystring: { source?: string; hide?: string } }>(
     '/topics/:slug',
+    AUTHENTICATED_ROUTE_CONFIG,
     async (req, reply) => {
-      if (!req.auth) {
-        return reply.code(302).header('location', '/signup').send();
-      }
+      if (!requireAuthPage(req, reply)) return reply;
       const topic = await opts.topicRepo.listByUser(req.auth.user.id).then((rows) =>
         rows.find((t) => t.slug === req.params.slug),
       );
@@ -313,6 +305,11 @@ function signupPage(): string {
           });
           if (resp.status === 400) {
             status.textContent = 'That email looks invalid. Try again.';
+            status.className = 'status error';
+            return;
+          }
+          if (resp.status === 429) {
+            status.textContent = 'Too many sign-in links requested. Try again later.';
             status.className = 'status error';
             return;
           }

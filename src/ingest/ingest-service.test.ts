@@ -150,12 +150,7 @@ async function buildService(input: BuildInput): Promise<BuildResult> {
 
   const initialFetcher: FeedFetcher =
     input.fetcher ??
-    new StaticFeedFetcher(
-      input.entries ?? {
-        sourceId: source.id,
-        entries: [],
-      },
-    );
+    new StaticFeedFetcher(input.entries ?? { entries: [] });
 
   let activeFetcher: FeedFetcher = initialFetcher;
 
@@ -208,7 +203,7 @@ describe('IngestService', () => {
       });
     }
     const { service, storyRepo, articleRepo, source } = await buildService({
-      entries: { sourceId: 'reuters', entries: variants },
+      entries: { entries: variants },
     });
 
     const report = await service.ingestSource(source.id);
@@ -237,7 +232,7 @@ describe('IngestService', () => {
   it('clusters two distinct stories into separate Stories with correct article counts', async () => {
     const entries = [...CLUSTER_A_ENTRIES, ...CLUSTER_B_ENTRIES];
     const { service, storyRepo, articleRepo, source } = await buildService({
-      entries: { sourceId: 'reuters', entries },
+      entries: { entries },
     });
     const report = await service.ingestSource(source.id);
     expect(report.success).toBe(true);
@@ -268,7 +263,7 @@ describe('IngestService', () => {
   it('is idempotent: re-ingesting the same feed reports no new merges', async () => {
     const entries = [...CLUSTER_A_ENTRIES, ...CLUSTER_B_ENTRIES];
     const { service, source } = await buildService({
-      entries: { sourceId: 'reuters', entries },
+      entries: { entries },
     });
     const r1 = await service.ingestSource(source.id);
     expect(r1.inserted + r1.merged).toBe(entries.length);
@@ -313,7 +308,7 @@ describe('IngestService', () => {
 
   it('persists the linked entities for each article', async () => {
     const { service, articleRepo, source } = await buildService({
-      entries: { sourceId: 'reuters', entries: CLUSTER_A_ENTRIES },
+      entries: { entries: CLUSTER_A_ENTRIES },
     });
     await service.ingestSource(source.id);
 
@@ -335,7 +330,7 @@ describe('IngestService', () => {
     const secondEntry = CLUSTER_A_ENTRIES[1]!;
     const { service, storyRepo, articleRepo, source, clock, replaceFetcher } =
       await buildService({
-        entries: { sourceId: 'reuters', entries: [firstEntry] },
+        entries: { entries: [firstEntry] },
       });
     const t0 = clock.clock.now();
     await service.ingestSource(source.id);
@@ -344,9 +339,8 @@ describe('IngestService', () => {
       await articleRepo.findByExternalId(source.id, firstEntry.externalId)
     )?.storyId;
     expect(initialStoryId).not.toBeNull();
-    const initialStory =
-      initialStoryId &&
-      (await storyRepo.getById(initialStoryId as never));
+    if (!initialStoryId) throw new Error('expected a story id');
+    const initialStory = await storyRepo.getById(initialStoryId as never);
     const firstSeen = initialStory?.firstSeenAt;
     expect(firstSeen?.getTime()).toBe(t0.getTime());
 
@@ -354,7 +348,6 @@ describe('IngestService', () => {
     const t1 = clock.clock.now();
     replaceFetcher(
       new StaticFeedFetcher({
-        sourceId: 'reuters',
         entries: [secondEntry],
       }),
     );
@@ -373,7 +366,6 @@ describe('IngestService', () => {
     const { service, storyRepo, articleRepo, source, replaceFetcher, clock } =
       await buildService({
         entries: {
-          sourceId: 'reuters',
           entries: [
             { ...baseEntry, externalId: 'old', publishedAt: t0 },
           ],
@@ -392,7 +384,6 @@ describe('IngestService', () => {
     clock.set(tFuture);
     replaceFetcher(
       new StaticFeedFetcher({
-        sourceId: 'reuters',
         entries: [
           { ...baseEntry, externalId: 'new', publishedAt: new Date(tFuture) },
         ],
@@ -424,7 +415,6 @@ describe('IngestService', () => {
     const { service, storyRepo, articleRepo, source, replaceFetcher, clock } =
       await buildService({
         entries: {
-          sourceId: 'reuters',
           entries: [
             { ...baseEntry, externalId: 'first', publishedAt: t0 },
           ],
@@ -436,7 +426,6 @@ describe('IngestService', () => {
 
     replaceFetcher(
       new StaticFeedFetcher({
-        sourceId: 'reuters',
         entries: [
           {
             ...baseEntry,

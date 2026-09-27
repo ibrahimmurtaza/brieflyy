@@ -2,39 +2,52 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 
 import { createApp } from '../app.js';
+import type { MagicLinkRateLimits } from '../config.js';
 import { ConsoleEmailTransport } from '../email/console-transport.js';
 import { createTestDb } from '../testing/test-db.js';
 import {
   deterministicRandom,
   makeTestClock,
   resetDeterministic,
+  type TestClock,
 } from '../testing/test-clocks.js';
 
-async function makeTestApp(): Promise<{
+async function makeTestApp(opts?: {
+  readonly rateLimits?: MagicLinkRateLimits;
+}): Promise<{
   app: FastifyInstance;
   transport: ConsoleEmailTransport;
+  driver: ReturnType<typeof createTestDb>['driver'];
+  clock: TestClock;
 }> {
   resetDeterministic();
-  const { db } = createTestDb();
+  const { db, driver } = createTestDb();
   const transport = new ConsoleEmailTransport({ logger: () => {} });
+  const clock = makeTestClock(new Date('2026-01-01T00:00:00Z'));
   const app = await createApp({
     db,
     emailTransport: transport,
     appBaseUrl: 'https://app.brieflyy.test',
     cookieSecure: false,
-    clock: makeTestClock(new Date('2026-01-01T00:00:00Z')).clock,
+    clock: clock.clock,
     random: deterministicRandom,
+    ...(opts?.rateLimits ? { magicLinkRateLimits: opts.rateLimits } : {}),
   });
-  return { app, transport };
+  return { app, transport, driver, clock };
 }
+
+import { countRows } from '../testing/db.js';
+import { extractMagicLinkToken as extractToken } from '../testing/email.js';
 
 describe('HTTP: /auth/magic-link/request', () => {
   let app: FastifyInstance;
   let transport: ConsoleEmailTransport;
+  let driver: ReturnType<typeof createTestDb>['driver'];
   beforeEach(async () => {
     const ctx = await makeTestApp();
     app = ctx.app;
     transport = ctx.transport;
+    driver = ctx.driver;
   });
   afterEach(async () => {
     await app.close();
@@ -48,11 +61,67 @@ describe('HTTP: /auth/magic-link/request', () => {
     });
 
     expect(response.statusCode).toBe(202);
-    const body = response.json() as { email: string; sentTo: string };
-    expect(body.email).toBe('iris@example.com');
-    expect(body.sentTo).toBe('new');
-
+    expect(response.json()).toEqual({ email: 'iris@example.com' });
     expect(transport.snapshot()).toHaveLength(1);
+  });
+
+  it('answers a known address exactly as it answers an unknown one', async () => {
+    const first = await app.inject({
+      method: 'POST',
+      url: '/auth/magic-link/request',
+      payload: { email: 'iris@example.com' },
+    });
+    const token = extractToken(transport.snapshot()[0]!.text);
+    await app.inject({
+      method: 'GET',
+      url: `/auth/magic-link/verify?token=${encodeURIComponent(token)}`,
+    });
+
+    const known = await app.inject({
+      method: 'POST',
+      url: '/auth/magic-link/request',
+      payload: { email: 'iris@example.com' },
+    });
+    const unknown = await app.inject({
+      method: 'POST',
+      url: '/auth/magic-link/request',
+      payload: { email: 'stranger@example.com' },
+    });
+
+    expect(known.statusCode).toBe(unknown.statusCode);
+    expect(Object.keys(known.json()).sort()).toEqual(Object.keys(unknown.json()).sort());
+    expect(JSON.stringify(known.json()).replace(/iris/g, 'x')).toBe(
+      JSON.stringify(unknown.json()).replace(/stranger/g, 'x'),
+    );
+  });
+
+  it('does not say whether the address is new', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/auth/magic-link/request',
+      payload: { email: 'iris@example.com' },
+    });
+    expect(response.body).not.toMatch(/new|existing|sentTo/i);
+  });
+
+  it('creates no User and no Account until the link is verified', async () => {
+    const requested = await app.inject({
+      method: 'POST',
+      url: '/auth/magic-link/request',
+      payload: { email: 'iris@example.com' },
+    });
+    expect(requested.statusCode).toBe(202);
+    expect(countRows(driver, 'users')).toBe(0);
+    expect(countRows(driver, 'accounts')).toBe(0);
+
+    const token = extractToken(transport.snapshot()[0]!.text);
+    const verified = await app.inject({
+      method: 'GET',
+      url: `/auth/magic-link/verify?token=${encodeURIComponent(token)}`,
+    });
+    expect(verified.statusCode).toBe(302);
+    expect(countRows(driver, 'users')).toBe(1);
+    expect(countRows(driver, 'accounts')).toBe(1);
   });
 
   it('returns 400 for an invalid email', async () => {
@@ -74,6 +143,97 @@ describe('HTTP: /auth/magic-link/request', () => {
   });
 });
 
+describe('HTTP: /auth/magic-link/request rate limit', () => {
+  let app: FastifyInstance;
+  let transport: ConsoleEmailTransport;
+  let clock: TestClock;
+  beforeEach(async () => {
+    const ctx = await makeTestApp({
+      rateLimits: {
+        perAddress: { limit: 2, windowMs: 60_000 },
+        perSource: { limit: 5, windowMs: 60_000 },
+      },
+    });
+    app = ctx.app;
+    transport = ctx.transport;
+    clock = ctx.clock;
+  });
+  afterEach(async () => {
+    await app.close();
+  });
+
+  function request(email: string, remoteAddress?: string) {
+    return app.inject({
+      method: 'POST',
+      url: '/auth/magic-link/request',
+      payload: { email },
+      ...(remoteAddress ? { remoteAddress } : {}),
+    });
+  }
+
+  it('refuses the request after the per-address limit, with 429 and a retry hint', async () => {
+    expect((await request('iris@example.com')).statusCode).toBe(202);
+    expect((await request('iris@example.com')).statusCode).toBe(202);
+
+    const refused = await request('iris@example.com');
+
+    expect(refused.statusCode).toBe(429);
+    expect(refused.json()).toEqual({ error: 'rate_limited' });
+    expect(Number(refused.headers['retry-after'])).toBeGreaterThan(0);
+    expect(transport.snapshot()).toHaveLength(2);
+  });
+
+  it('refuses the request after the per-source limit, across different addresses', async () => {
+    for (let i = 0; i < 5; i++) {
+      expect((await request(`user-${i}@example.com`)).statusCode).toBe(202);
+    }
+
+    const refused = await request('user-5@example.com');
+
+    expect(refused.statusCode).toBe(429);
+    expect(refused.json()).toEqual({ error: 'rate_limited' });
+    expect(transport.snapshot()).toHaveLength(5);
+  });
+
+  it('counts each caller separately', async () => {
+    for (let i = 0; i < 5; i++) {
+      await request(`user-${i}@example.com`, '10.0.0.1');
+    }
+    expect((await request('user-5@example.com', '10.0.0.1')).statusCode).toBe(429);
+    expect((await request('user-5@example.com', '10.0.0.2')).statusCode).toBe(202);
+  });
+
+  it('lets an address try again in the next window', async () => {
+    await request('iris@example.com');
+    await request('iris@example.com');
+    expect((await request('iris@example.com')).statusCode).toBe(429);
+
+    clock.advance(60_000);
+
+    expect((await request('iris@example.com')).statusCode).toBe(202);
+  });
+
+  it('does not count a request for an invalid address against the limit', async () => {
+    expect((await request('not-an-email')).statusCode).toBe(400);
+    expect((await request('iris@example.com')).statusCode).toBe(202);
+    expect((await request('iris@example.com')).statusCode).toBe(202);
+    expect((await request('iris@example.com')).statusCode).toBe(429);
+  });
+
+  it('does not spend the per-source quota on requests the per-address limit refused', async () => {
+    // 4 requests to one address: the first 2 pass and 2 are refused per address.
+    await request('iris@example.com');
+    await request('iris@example.com');
+    expect((await request('iris@example.com')).statusCode).toBe(429);
+    expect((await request('iris@example.com')).statusCode).toBe(429);
+
+    // The per-source limit is 5, and only the 2 that were sent used it up.
+    for (let i = 0; i < 3; i++) {
+      expect((await request(`other-${i}@example.com`)).statusCode).toBe(202);
+    }
+  });
+});
+
 describe('HTTP: /auth/magic-link/verify', () => {
   let app: FastifyInstance;
   let transport: ConsoleEmailTransport;
@@ -85,12 +245,6 @@ describe('HTTP: /auth/magic-link/verify', () => {
   afterEach(async () => {
     await app.close();
   });
-
-  function extractToken(text: string): string {
-    const m = text.match(/\btoken=([^\s&]+)/);
-    if (!m) throw new Error('token missing');
-    return decodeURIComponent(m[1]!);
-  }
 
   it('redirects to onboarding and sets the session cookie on first verification', async () => {
     await app.inject({
@@ -163,12 +317,6 @@ describe('HTTP: /auth/magic-link/verify → authenticated session', () => {
     await app.close();
   });
 
-  function extractToken(text: string): string {
-    const m = text.match(/\btoken=([^\s&]+)/);
-    if (!m) throw new Error('token missing');
-    return decodeURIComponent(m[1]!);
-  }
-
   it('lets an authenticated user reach the onboarding page', async () => {
     await app.inject({
       method: 'POST',
@@ -197,6 +345,76 @@ describe('HTTP: /auth/magic-link/verify → authenticated session', () => {
   });
 });
 
+describe('HTTP: /auth/magic-link/verify → post-signin redirect', () => {
+  let app: FastifyInstance;
+  let transport: ConsoleEmailTransport;
+  let driver: ReturnType<typeof createTestDb>['driver'];
+  beforeEach(async () => {
+    const ctx = await makeTestApp();
+    app = ctx.app;
+    transport = ctx.transport;
+    driver = ctx.driver;
+  });
+  afterEach(async () => {
+    await app.close();
+  });
+
+  async function signIn(): Promise<{ location: string; cookie: string }> {
+    await app.inject({
+      method: 'POST',
+      url: '/auth/magic-link/request',
+      payload: { email: 'iris@example.com' },
+    });
+    const snapshot = transport.snapshot();
+    const token = extractToken(snapshot[snapshot.length - 1]!.text);
+    const response = await app.inject({
+      method: 'GET',
+      url: `/auth/magic-link/verify?token=${encodeURIComponent(token)}`,
+    });
+    expect(response.statusCode).toBe(302);
+    const raw = response.headers['set-cookie'];
+    const setCookieText = Array.isArray(raw) ? raw.join(';') : (raw ?? '');
+    return {
+      location: String(response.headers.location),
+      cookie: setCookieText.split(';')[0]!,
+    };
+  }
+
+  function setOnboardingState(state: string): void {
+    driver.prepare(`UPDATE users SET onboarding_state = ?`).run(state);
+  }
+
+  it('sends a brand-new user to topic selection', async () => {
+    const { location, cookie } = await signIn();
+    expect(location).toBe('/onboarding/pick-topics');
+    expect(cookie).toMatch(/^brieflyy_session=/);
+  });
+
+  it('sends a user who has picked topics to the delivery-time step', async () => {
+    await signIn();
+    setOnboardingState('topics_picked');
+
+    const { location } = await signIn();
+    expect(location).toBe('/onboarding/delivery-time');
+  });
+
+  it('sends a fully set-up user straight to their topics', async () => {
+    await signIn();
+    setOnboardingState('delivery_set');
+
+    const { location } = await signIn();
+    expect(location).toBe('/topics');
+  });
+
+  it('sends a completed user to their topics', async () => {
+    await signIn();
+    setOnboardingState('completed');
+
+    const { location } = await signIn();
+    expect(location).toBe('/topics');
+  });
+});
+
 describe('HTTP: /auth/logout', () => {
   let app: FastifyInstance;
   let transport: ConsoleEmailTransport;
@@ -208,12 +426,6 @@ describe('HTTP: /auth/logout', () => {
   afterEach(async () => {
     await app.close();
   });
-
-  function extractToken(text: string): string {
-    const m = text.match(/\btoken=([^\s&]+)/);
-    if (!m) throw new Error('token missing');
-    return decodeURIComponent(m[1]!);
-  }
 
   it('ends the session: subsequent requests to gated pages redirect to /signup', async () => {
     await app.inject({

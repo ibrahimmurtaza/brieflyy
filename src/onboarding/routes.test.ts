@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { createApp } from '../app.js';
 import { ConsoleEmailTransport } from '../email/console-transport.js';
 import { createTestDb } from '../testing/test-db.js';
+import { extractMagicLinkToken } from '../testing/email.js';
 import {
   deterministicRandom,
   makeTestClock,
@@ -40,9 +41,7 @@ async function signInFresh(): Promise<{
     payload: { email: 'iris@example.com' },
   });
   const text = transport.snapshot()[0]!.text;
-  const tokenMatch = text.match(/\btoken=([^\s&]+)/);
-  if (!tokenMatch) throw new Error('token missing');
-  const token = decodeURIComponent(tokenMatch[1]!);
+  const token = extractMagicLinkToken(text);
   const verify = await app.inject({
     method: 'GET',
     url: `/auth/magic-link/verify?token=${encodeURIComponent(token)}`,

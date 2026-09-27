@@ -4,6 +4,7 @@ import { IngestService } from './ingest-service.js';
 import { RegistryIngestService } from './registry-ingest-service.js';
 import type { FeedFetcher, RawFeed, RawFeedEntry } from './feed-fetcher.js';
 import { createTestDb } from '../testing/test-db.js';
+import { makeTopic } from '../testing/fixtures.js';
 import {
   deterministicRandom,
   makeTestClock,
@@ -91,7 +92,6 @@ async function buildService(opts: BuildInput = {}): Promise<BuildResult> {
   ];
 
   let activeFetcher: FeedFetcher = new StaticFeedFetcher({
-    sourceId: 'reuters',
     entries: reutersEntries,
   });
 
@@ -107,7 +107,6 @@ async function buildService(opts: BuildInput = {}): Promise<BuildResult> {
         }
         if (url === guardian.feedUrl) {
           return new StaticFeedFetcher({
-            sourceId: 'the-guardian',
             entries: guardianEntries,
           }).fetch(url);
         }
@@ -161,17 +160,9 @@ async function insertTopicWithSources(
     createdAt: new Date('2026-09-01T00:00:00Z'),
     onboardingState: 'topics_picked',
   });
-  await topicRepo.insert({
-    id: input.id as TopicId,
-    userId: input.userId as UserId,
-    slug: input.id,
-    title: `Topic ${input.id}`,
-    blurb: '',
-    category: 'news' as TopicCategory,
-    origin: { kind: 'freeform' },
-    sourceIds: [],
-    createdAt: new Date('2026-09-01T00:00:00Z'),
-  });
+  await topicRepo.insert(
+    makeTopic({ id: input.id, userId: input.userId }),
+  );
   for (let i = 0; i < input.sourceIds.length; i++) {
     await topicRepo.insertTopicSource(
       input.id as TopicId,

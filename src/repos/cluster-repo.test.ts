@@ -1,13 +1,20 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { createTestDb } from '../testing/test-db.js';
+import { makeTopic, makeCluster } from '../testing/fixtures.js';
 import { DrizzleClusterRepo } from './cluster-repo.js';
 import { DrizzleStoryRepo } from './story-repo.js';
 import { DrizzleArticleRepo } from './article-repo.js';
 import { DrizzleSourceRepo } from './source-repo.js';
 import { DrizzleTopicRepo } from './topic-repo.js';
 import { DrizzleUserRepo } from './user-repo.js';
-import type { Source, StoryId, Cluster, TopicId } from '../domain/types.js';
+import type {
+  Source,
+  StoryId,
+  Cluster,
+  TopicId,
+  UserId,
+} from '../domain/types.js';
 import type { ArticleId } from '../domain/types.js';
 import { makeEntry, BODY_A, BODY_B } from '../ingest/test-constants.js';
 
@@ -25,17 +32,9 @@ async function insertTopicWithSources(
     createdAt: new Date('2026-09-01T00:00:00Z'),
     onboardingState: 'topics_picked',
   });
-  await topicRepo.insert({
-    id: input.id as TopicId,
-    userId: input.userId as UserId,
-    slug: input.id,
-    title: `Topic ${input.id}`,
-    blurb: '',
-    category: 'news' as TopicCategory,
-    origin: { kind: 'freeform' },
-    sourceIds: [],
-    createdAt: new Date('2026-09-01T00:00:00Z'),
-  });
+  await topicRepo.insert(
+    makeTopic({ id: input.id, userId: input.userId }),
+  );
   for (let i = 0; i < input.sourceIds.length; i++) {
     await topicRepo.insertTopicSource(
       input.id as TopicId,
@@ -62,6 +61,12 @@ describe('DrizzleClusterRepo', () => {
     sourceRepo = new DrizzleSourceRepo(db);
     topicRepo = new DrizzleTopicRepo(db);
     userRepo = new DrizzleUserRepo(db);
+    await userRepo.insert({
+      id: 'user-1' as UserId,
+      createdAt: new Date('2026-09-01T00:00:00Z'),
+      onboardingState: 'completed',
+    });
+    await topicRepo.insert(makeTopic({ id: 'topic-1', userId: 'user-1' }));
   });
 
   it('creates a Cluster with extractive summary and bullet points from Stories', async () => {
@@ -107,11 +112,12 @@ describe('DrizzleClusterRepo', () => {
       entityIds: [],
     });
 
-    const cluster: Cluster = {
+    const cluster: Cluster = makeCluster({
       id: 'cluster-1',
       topicId,
       title: 'Acme Corp launches AI product',
-      summary: 'Acme Corp today unveiled a new AI product called Foo, analysts said.',
+      summary:
+        'Acme Corp today unveiled a new AI product called Foo, analysts said.',
       bulletPoints: [
         'Acme Corp today unveiled a new AI product called Foo, analysts said.',
         'The launch changes the landscape for enterprise customers worldwide.',
@@ -121,7 +127,7 @@ describe('DrizzleClusterRepo', () => {
       articleCount: 1,
       velocity: 1.0,
       sourceIds: [source.id],
-    };
+    });
 
     await clusterRepo.insert(cluster, [storyId]);
 
@@ -162,7 +168,7 @@ describe('DrizzleClusterRepo', () => {
       lastSeenAt: now,
     });
 
-    const cluster1: Cluster = {
+    const cluster1: Cluster = makeCluster({
       id: 'cluster-1',
       topicId,
       title: 'Cluster 1',
@@ -173,11 +179,11 @@ describe('DrizzleClusterRepo', () => {
       articleCount: 1,
       velocity: 1.0,
       sourceIds: [source.id],
-    };
+    });
 
     await clusterRepo.insert(cluster1, [storyId]);
 
-    const cluster2: Cluster = {
+    const cluster2: Cluster = makeCluster({
       id: 'cluster-2',
       topicId,
       title: 'Cluster 2',
@@ -188,7 +194,7 @@ describe('DrizzleClusterRepo', () => {
       articleCount: 1,
       velocity: 0.5,
       sourceIds: [source.id],
-    };
+    });
 
     await clusterRepo.insert(cluster2, [storyId]);
 
@@ -199,5 +205,3 @@ describe('DrizzleClusterRepo', () => {
     expect(clusters.map((c) => c.title)).toEqual(['Cluster 1', 'Cluster 2']);
   });
 });
-
-import type { UserId, TopicCategory } from '../domain/types.js';

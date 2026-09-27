@@ -1,13 +1,17 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import {
+  MAGIC_LINK_RATE_LIMIT_SCOPES,
   OAUTH_STATE_COOKIE_NAME,
   OAUTH_STATE_TTL_MS_DEFAULT,
   OAUTH_VERIFIER_COOKIE_NAME,
   SESSION_COOKIE_NAME,
 } from '../config.js';
 import type { AuthService, CurrentAuth } from './auth-service.js';
-import { googleCallbackPath, makeGoogleCallbackUrl } from './auth-service.js';
+import { emailSchema, googleCallbackPath, makeGoogleCallbackUrl } from './auth-service.js';
+import { postSigninPath } from './post-signin.js';
+import { PUBLIC_ROUTE_CONFIG } from '../http/access.js';
+import type { FixedWindowRateLimiter } from '../http/rate-limit.js';
 import { hashOauthState } from '../domain/crypto.js';
 import { escapeHtml } from '../pages/html.js';
 
@@ -22,6 +26,7 @@ export interface AuthRoutesOptions {
   readonly sessionTtlMs: number;
   readonly cookieSecure: boolean;
   readonly appBaseUrl: string;
+  readonly magicLinkRateLimiter: FixedWindowRateLimiter;
 }
 
 function readSessionCookie(req: FastifyRequest): string {
@@ -106,24 +111,53 @@ export async function registerAuthRoutes(
     }
   });
 
-  fastify.post('/auth/magic-link/request', async (req, reply) => {
-    const body = (req.body ?? {}) as { email?: unknown };
-    if (typeof body.email !== 'string') {
-      return reply.code(400).send({ error: 'invalid_email' });
-    }
-    try {
-      const outcome = await authService.requestMagicLink({ email: body.email });
-      return reply.code(202).send(outcome);
-    } catch (err) {
-      if (err instanceof Error && err.name === 'RequestMagicLinkValidationError') {
+  fastify.post(
+    '/auth/magic-link/request',
+    PUBLIC_ROUTE_CONFIG,
+    async (req, reply) => {
+      const body = (req.body ?? {}) as { email?: unknown };
+      const parsed = typeof body.email === 'string' ? emailSchema.safeParse(body.email) : null;
+      if (!parsed?.success) {
         return reply.code(400).send({ error: 'invalid_email' });
       }
-      throw err;
-    }
-  });
+      // Counted against the address and the caller, so neither one address nor
+      // one caller can use this endpoint to send mail in bulk. The address is
+      // checked first, and the caller's quota is only spent when the address
+      // still has room: a flood at one address should not lock out everyone else
+      // behind the same caller.
+      const byAddress = opts.magicLinkRateLimiter.consume(
+        MAGIC_LINK_RATE_LIMIT_SCOPES.perAddress,
+        parsed.data,
+      );
+      const limited = byAddress.allowed
+        ? opts.magicLinkRateLimiter.consume(
+            MAGIC_LINK_RATE_LIMIT_SCOPES.perSource,
+            req.ip,
+          )
+        : byAddress;
+      if (!limited.allowed) {
+        return reply
+          .code(429)
+          .header('retry-after', String(limited.retryAfterSeconds))
+          .send({ error: 'rate_limited' });
+      }
+      try {
+        const outcome = await authService.requestMagicLink({ email: parsed.data });
+        // The same body whatever the address turns out to be: a response that
+        // varied would tell a stranger who has an account here.
+        return reply.code(202).send({ email: outcome.email });
+      } catch (err) {
+        if (err instanceof Error && err.name === 'RequestMagicLinkValidationError') {
+          return reply.code(400).send({ error: 'invalid_email' });
+        }
+        throw err;
+      }
+    },
+  );
 
   fastify.get<{ Querystring: { token?: string } }>(
     '/auth/magic-link/verify',
+    PUBLIC_ROUTE_CONFIG,
     async (req, reply) => {
       const token = req.query.token;
       if (typeof token !== 'string' || token.length === 0) {
@@ -142,13 +176,13 @@ export async function registerAuthRoutes(
       });
       reply
         .code(302)
-        .header('location', '/onboarding/pick-topics')
+        .header('location', postSigninPath(outcome.user.onboardingState))
         .send();
       return reply;
     },
   );
 
-  fastify.post('/auth/logout', async (req, reply) => {
+  fastify.post('/auth/logout', PUBLIC_ROUTE_CONFIG, async (req, reply) => {
     const sessionId = readSessionCookie(req);
     if (sessionId) {
       await authService.destroySession(sessionId);
@@ -157,7 +191,7 @@ export async function registerAuthRoutes(
     return reply.code(302).header('location', '/').send();
   });
 
-  fastify.get('/auth/google/start', async (_req, reply) => {
+  fastify.get('/auth/google/start', PUBLIC_ROUTE_CONFIG, async (_req, reply) => {
     const start = await authService.startGoogleOAuth();
     const stateHash = hashOauthState(start.state);
     writeOauthCookie(reply, OAUTH_STATE_COOKIE_NAME, stateHash, {
@@ -171,6 +205,7 @@ export async function registerAuthRoutes(
 
   fastify.get<{ Querystring: { code?: string; state?: string; error?: string } }>(
     '/auth/google/callback',
+    PUBLIC_ROUTE_CONFIG,
     async (req, reply) => {
       clearOauthCookies(reply);
       if (typeof req.query.error === 'string') {
@@ -213,7 +248,7 @@ export async function registerAuthRoutes(
       });
       return reply
         .code(302)
-        .header('location', '/onboarding/pick-topics')
+        .header('location', postSigninPath(outcome.user.onboardingState))
         .send();
     },
   );

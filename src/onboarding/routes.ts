@@ -2,6 +2,11 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
 import { escapeHtml } from '../pages/html.js';
+import {
+  AUTHENTICATED_ROUTE_CONFIG,
+  PUBLIC_ROUTE_CONFIG,
+  requireAuthPage,
+} from '../http/access.js';
 import type { OnboardingService } from './onboarding-service.js';
 import type { SelectTopicsOutcome } from './onboarding-service.js';
 
@@ -39,7 +44,7 @@ export async function registerOnboardingRoutes(
 ): Promise<void> {
   const { onboardingService } = opts;
 
-  fastify.get('/api/onboarding/templates', async (_req, reply) => {
+  fastify.get('/api/onboarding/templates', PUBLIC_ROUTE_CONFIG, async (_req, reply) => {
     const templates = await onboardingService.listTemplates();
     return reply.send({
       templates: templates.map((t) => ({
@@ -53,10 +58,8 @@ export async function registerOnboardingRoutes(
     });
   });
 
-  fastify.post('/onboarding/pick-topics', async (req, reply) => {
-    if (!req.auth) {
-      return reply.code(302).header('location', '/signup').send();
-    }
+  fastify.post('/onboarding/pick-topics', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
+    if (!requireAuthPage(req, reply)) return reply;
     const body = req.body;
     const templateIds = readTemplateIds(body);
     const freeformTitle = readField(body, 'freeformTitle');
@@ -86,10 +89,8 @@ export async function registerOnboardingRoutes(
       .send(pickTopicsErrorPage(humanReason(outcome.reason)));
   });
 
-  fastify.post('/onboarding/delivery-time', async (req, reply) => {
-    if (!req.auth) {
-      return reply.code(302).header('location', '/signup').send();
-    }
+  fastify.post('/onboarding/delivery-time', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
+    if (!requireAuthPage(req, reply)) return reply;
     const body = (req.body ?? {}) as Record<string, unknown>;
     const hour = parseHour(body.hour);
     const minute = parseMinute(body.minute);
@@ -120,10 +121,8 @@ export async function registerOnboardingRoutes(
       );
   });
 
-  fastify.post('/settings/delivery', async (req, reply) => {
-    if (!req.auth) {
-      return reply.code(302).header('location', '/signup').send();
-    }
+  fastify.post('/settings/delivery', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
+    if (!requireAuthPage(req, reply)) return reply;
     const body = (req.body ?? {}) as Record<string, unknown>;
     const hour = parseHour(body.hour);
     const minute = parseMinute(body.minute);

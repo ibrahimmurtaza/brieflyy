@@ -67,9 +67,10 @@ export const magicLinks = sqliteTable(
   'magic_links',
   {
     id: text('id').primaryKey(),
-    accountId: text('account_id')
-      .notNull()
-      .references(() => accounts.id, { onDelete: 'cascade' }),
+    // Null until the link is verified: the account it belongs to does not exist
+    // until someone proves they can read the address' mail.
+    accountId: text('account_id').references(() => accounts.id, { onDelete: 'cascade' }),
+    email: text('email').notNull(),
     tokenHash: text('token_hash').notNull(),
     createdAt: integer('created_at', { mode: 'timestamp_ms' })
       .notNull()
@@ -80,6 +81,7 @@ export const magicLinks = sqliteTable(
   (t) => ({
     tokenHashUnique: uniqueIndex('magic_links_token_hash_unique').on(t.tokenHash),
     accountIdx: index('magic_links_account_idx').on(t.accountId),
+    emailIdx: index('magic_links_email_idx').on(t.email),
   }),
 );
 
@@ -357,7 +359,9 @@ export const stories = sqliteTable(
     lastSeenAt: integer('last_seen_at', { mode: 'timestamp_ms' }).notNull(),
   },
   (t) => ({
-    sourceFingerprintIdx: uniqueIndex('stories_source_fingerprint_idx').on(
+    // A Story's identity is (source, fingerprint) *within its dedup window*, so
+    // the same fingerprint legitimately recurs in a later Story. Not unique.
+    sourceFingerprintIdx: index('stories_source_fingerprint_idx').on(
       t.sourceId,
       t.fingerprint,
     ),
@@ -369,7 +373,9 @@ export const clusters = sqliteTable(
   'clusters',
   {
     id: text('id').primaryKey(),
-    topicId: text('topic_id').notNull(),
+    topicId: text('topic_id')
+      .notNull()
+      .references(() => topics.id, { onDelete: 'cascade' }),
     title: text('title').notNull(),
     summary: text('summary').notNull(),
     bulletPoints: text('bullet_points').notNull(),
@@ -481,8 +487,12 @@ export const briefSnapshots = sqliteTable(
     briefPlanId: text('brief_plan_id')
       .notNull()
       .references(() => briefPlans.id, { onDelete: 'cascade' }),
-    userId: text('user_id').notNull(),
-    topicId: text('topic_id').notNull(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    topicId: text('topic_id')
+      .notNull()
+      .references(() => topics.id, { onDelete: 'cascade' }),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     html: text('html').notNull(),
     unsubscribeToken: text('unsubscribe_token').notNull(),
@@ -500,11 +510,15 @@ export const emailDeliveries = sqliteTable(
   'email_deliveries',
   {
     id: text('id').primaryKey(),
-    userId: text('user_id').notNull(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
     briefSnapshotId: text('brief_snapshot_id')
       .notNull()
       .references(() => briefSnapshots.id, { onDelete: 'cascade' }),
-    topicId: text('topic_id').notNull(),
+    topicId: text('topic_id')
+      .notNull()
+      .references(() => topics.id, { onDelete: 'cascade' }),
     sentAt: integer('sent_at', { mode: 'timestamp_ms' }).notNull(),
     unsubscribeToken: text('unsubscribe_token').notNull(),
     globalUnsubscribeToken: text('global_unsubscribe_token').notNull(),

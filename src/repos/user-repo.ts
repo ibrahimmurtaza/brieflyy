@@ -16,6 +16,8 @@ export interface UserRepo {
   insert(user: User): Promise<void>;
   getById(id: UserId): Promise<User | null>;
   setOnboardingState(id: UserId, state: OnboardingState): Promise<void>;
+  /** Remove a User whose Account could not be created, so none is left stranded. */
+  delete(id: UserId): Promise<void>;
 }
 
 export class DrizzleUserRepo implements UserRepo {
@@ -43,5 +45,9 @@ export class DrizzleUserRepo implements UserRepo {
       .update(users)
       .set({ onboardingState: state })
       .where(eq(users.id, id));
+  }
+
+  async delete(id: UserId): Promise<void> {
+    await this.db.delete(users).where(eq(users.id, id));
   }
 }
