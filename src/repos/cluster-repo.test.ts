@@ -61,6 +61,12 @@ describe('DrizzleClusterRepo', () => {
     sourceRepo = new DrizzleSourceRepo(db);
     topicRepo = new DrizzleTopicRepo(db);
     userRepo = new DrizzleUserRepo(db);
+    await userRepo.insert({
+      id: 'user-1' as UserId,
+      createdAt: new Date('2026-09-01T00:00:00Z'),
+      onboardingState: 'completed',
+    });
+    await topicRepo.insert(makeTopic({ id: 'topic-1', userId: 'user-1' }));
   });
 
   it('creates a Cluster with extractive summary and bullet points from Stories', async () => {

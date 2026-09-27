@@ -1,4 +1,7 @@
+import Database from 'better-sqlite3';
+
 import type { SqliteDriver } from './client.js';
+import { pathToFileURL } from 'node:url';
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS users (
@@ -165,7 +168,7 @@ CREATE INDEX IF NOT EXISTS stories_source_idx ON stories (source_id);
 
 CREATE TABLE IF NOT EXISTS clusters (
   id TEXT PRIMARY KEY NOT NULL,
-  topic_id TEXT NOT NULL,
+  topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
   title TEXT NOT NULL,
   summary TEXT NOT NULL,
   bullet_points TEXT NOT NULL,
@@ -202,14 +205,14 @@ CREATE TABLE IF NOT EXISTS brief_plans (
   created_at INTEGER NOT NULL,
   cluster_ids TEXT NOT NULL DEFAULT ''
 );
-CREATE INDEX IF NOT EXISTS brief_plans_topic_user_idx ON brief_plans (topic_id, user_id, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS brief_plans_topic_user_idx ON brief_plans (topic_id, user_id, created_at);
 CREATE INDEX IF NOT EXISTS brief_plans_user_idx ON brief_plans (user_id);
 
 CREATE TABLE IF NOT EXISTS brief_snapshots (
   id TEXT PRIMARY KEY NOT NULL,
   brief_plan_id TEXT NOT NULL REFERENCES brief_plans(id) ON DELETE CASCADE,
-  user_id TEXT NOT NULL,
-  topic_id TEXT NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
   created_at INTEGER NOT NULL,
   html TEXT NOT NULL,
   unsubscribe_token TEXT NOT NULL,
@@ -219,9 +222,9 @@ CREATE INDEX IF NOT EXISTS brief_snapshots_user_topic_idx ON brief_snapshots (us
 
 CREATE TABLE IF NOT EXISTS email_deliveries (
   id TEXT PRIMARY KEY NOT NULL,
-  user_id TEXT NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   brief_snapshot_id TEXT NOT NULL REFERENCES brief_snapshots(id) ON DELETE CASCADE,
-  topic_id TEXT NOT NULL,
+  topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
   sent_at INTEGER NOT NULL,
   unsubscribe_token TEXT NOT NULL,
   global_unsubscribe_token TEXT NOT NULL
@@ -229,6 +232,293 @@ CREATE TABLE IF NOT EXISTS email_deliveries (
 CREATE INDEX IF NOT EXISTS email_deliveries_user_snapshot_idx ON email_deliveries (user_id, brief_snapshot_id);
 `;
 
+/**
+ * Tables whose shape changed after they were first shipped. SQLite cannot add
+ * a foreign key to an existing table, so a database created by an older build
+ * is rebuilt: create the current shape under a temp name, copy the columns both
+ * shapes share, drop the old table, rename. A no-op once the table already has
+ * every foreign key named in `foreignKeys`, so a migrated database stays put.
+ */
+interface TableRebuild {
+  readonly table: string;
+  readonly createSql: string;
+  readonly columns: readonly string[];
+  readonly foreignKeys: readonly { readonly column: string; readonly table: string }[];
+}
+
+/** Whether a table exists in this database. */
+function tableExists(driver: SqliteDriver, table: string): boolean {
+  return (
+    driver
+      .prepare(
+        `SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = ?`,
+      )
+      .get(table) !== undefined
+  );
+}
+
+function columnNames(driver: SqliteDriver, table: string): Set<string> {
+  const rows = driver
+    .prepare(`SELECT name FROM pragma_table_info(?)`)
+    .all(table) as { name: string }[];
+  return new Set(rows.map((r) => r.name));
+}
+
+function foreignKeyPairs(
+  driver: SqliteDriver,
+  table: string,
+): Set<string> {
+  const rows = driver
+    .prepare(`SELECT "from", "table" AS target FROM pragma_foreign_key_list(?)`)
+    .all(table) as { from: string; target: string }[];
+  return new Set(rows.map((r) => `${r.from}->${r.target}`));
+}
+
+function rebuildTable(driver: SqliteDriver, rebuild: TableRebuild): void {
+  if (!tableExists(driver, rebuild.table)) return;
+  const present = foreignKeyPairs(driver, rebuild.table);
+  const needsRebuild = rebuild.foreignKeys.some(
+    (fk) => !present.has(`${fk.column}->${fk.table}`),
+  );
+  if (!needsRebuild) return;
+
+  const temp = `${rebuild.table}__rebuild`;
+  const existing = columnNames(driver, rebuild.table);
+  // `legacy_alter_table` keeps the rename from rewriting the REFERENCES clauses
+  // of other tables that point at this one; they should keep naming it.
+  const fkWere = driver.pragma('foreign_keys', { simple: true });
+  const legacyWere = driver.pragma('legacy_alter_table', { simple: true });
+  driver.pragma('foreign_keys = OFF');
+  driver.pragma('legacy_alter_table = ON');
+  try {
+    driver.transaction(() => {
+      driver.exec(
+        rebuild.createSql.replace(
+          /\bCREATE TABLE (?:IF NOT EXISTS )?(\w+)/,
+          `CREATE TABLE ${temp}`,
+        ),
+      );
+      const shared = rebuild.columns.filter((c) => existing.has(c));
+      const columnList = shared.join(', ');
+      driver.exec(
+        `INSERT INTO ${temp} (${columnList}) SELECT ${columnList} FROM ${rebuild.table}`,
+      );
+      driver.exec(`DROP TABLE ${rebuild.table}`);
+      driver.exec(`ALTER TABLE ${temp} RENAME TO ${rebuild.table}`);
+    })();
+  } finally {
+    driver.pragma(`legacy_alter_table = ${legacyWere ? 'ON' : 'OFF'}`);
+    driver.pragma(`foreign_keys = ${fkWere ? 'ON' : 'OFF'}`);
+  }
+}
+
+/** Drop a same-named index that is not unique, so the unique form can be made. */
+function rebuildNonUniqueIndexes(driver: SqliteDriver): void {
+  for (const statement of schemaStatements()) {
+    const m = /^CREATE UNIQUE INDEX IF NOT EXISTS (\w+)/.exec(statement);
+    if (!m) continue;
+    const name = m[1] as string;
+    const existing = driver
+      .prepare(`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?`)
+      .get(name) as { sql: string | null } | undefined;
+    if (existing?.sql && !/^\s*CREATE UNIQUE INDEX/i.test(existing.sql)) {
+      driver.exec(`DROP INDEX ${name}`);
+    }
+  }
+}
+
+const TABLE_REBUILDS: readonly TableRebuild[] = [
+  {
+    table: 'clusters',
+    foreignKeys: [{ column: 'topic_id', table: 'topics' }],
+    columns: [
+      'id',
+      'topic_id',
+      'title',
+      'summary',
+      'bullet_points',
+      'created_at',
+      'last_seen_at',
+      'article_count',
+      'velocity',
+      'source_ids',
+      'state',
+    ],
+    createSql: `CREATE TABLE IF NOT EXISTS clusters (
+  id TEXT PRIMARY KEY NOT NULL,
+  topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  bullet_points TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL,
+  article_count INTEGER NOT NULL,
+  velocity INTEGER NOT NULL,
+  source_ids TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'active'
+)`,
+  },
+  {
+    table: 'brief_snapshots',
+    foreignKeys: [
+      { column: 'user_id', table: 'users' },
+      { column: 'topic_id', table: 'topics' },
+    ],
+    columns: [
+      'id',
+      'brief_plan_id',
+      'user_id',
+      'topic_id',
+      'created_at',
+      'html',
+      'unsubscribe_token',
+      'global_unsubscribe_token',
+    ],
+    createSql: `CREATE TABLE IF NOT EXISTS brief_snapshots (
+  id TEXT PRIMARY KEY NOT NULL,
+  brief_plan_id TEXT NOT NULL REFERENCES brief_plans(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  html TEXT NOT NULL,
+  unsubscribe_token TEXT NOT NULL,
+  global_unsubscribe_token TEXT NOT NULL
+)`,
+  },
+  {
+    table: 'email_deliveries',
+    foreignKeys: [
+      { column: 'user_id', table: 'users' },
+      { column: 'topic_id', table: 'topics' },
+    ],
+    columns: [
+      'id',
+      'user_id',
+      'brief_snapshot_id',
+      'topic_id',
+      'sent_at',
+      'unsubscribe_token',
+      'global_unsubscribe_token',
+    ],
+    createSql: `CREATE TABLE IF NOT EXISTS email_deliveries (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  brief_snapshot_id TEXT NOT NULL REFERENCES brief_snapshots(id) ON DELETE CASCADE,
+  topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+  sent_at INTEGER NOT NULL,
+  unsubscribe_token TEXT NOT NULL,
+  global_unsubscribe_token TEXT NOT NULL
+)`,
+  },
+];
+
+interface ColumnMigration {
+  readonly table: string;
+  readonly column: string;
+  readonly ddl: string;
+}
+
+/**
+ * Columns added to an existing table after it shipped. `CREATE TABLE IF NOT
+ * EXISTS` cannot change a table that already exists, so a new column needs an
+ * entry here as well as a line in SCHEMA_SQL. A no-op once the column is there,
+ * which is what makes re-running the migration safe.
+ */
+const COLUMN_MIGRATIONS: readonly ColumnMigration[] = [
+  {
+    table: 'topics',
+    column: 'cadence',
+    ddl: `ALTER TABLE topics ADD COLUMN cadence TEXT NOT NULL DEFAULT 'daily'`,
+  },
+];
+
+function hasColumn(
+  driver: SqliteDriver,
+  table: string,
+  column: string,
+): boolean {
+  const row = driver
+    .prepare(
+      `SELECT 1 AS found FROM pragma_table_info(?) WHERE name = ?`,
+    )
+    .get(table, column) as { found: number } | undefined;
+  return row !== undefined;
+}
+
+function applyColumnMigrations(driver: SqliteDriver): void {
+  for (const migration of COLUMN_MIGRATIONS) {
+    if (!hasColumn(driver, migration.table, migration.column)) {
+      driver.exec(migration.ddl);
+    }
+  }
+}
+
+function applyTableRebuilds(driver: SqliteDriver): void {
+  for (const rebuild of TABLE_REBUILDS) {
+    rebuildTable(driver, rebuild);
+  }
+}
+
 export function applySchema(driver: SqliteDriver): void {
   driver.exec(SCHEMA_SQL);
+  applyTableRebuilds(driver);
+  applyColumnMigrations(driver);
+  rebuildNonUniqueIndexes(driver);
+  // Recreate any index the rebuilds dropped with their tables.
+  driver.exec(SCHEMA_SQL);
+}
+
+function schemaStatements(): string[] {
+  return SCHEMA_SQL.split(';')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+/**
+ * Apply the schema to the database named by `DATABASE_URL`. Exported so the
+ * migration command and the boot path are the same code, and so a test can run
+ * it against a temporary file.
+ */
+export function migrateToDatabaseFile(filename: string): void {
+  const driver = new Database(filename);
+  try {
+    applySchema(driver);
+  } finally {
+    driver.close();
+  }
+}
+
+function databaseFileFromEnv(): string {
+  const raw = process.env['DATABASE_URL'];
+  if (!raw || raw.length === 0) {
+    throw new Error('Missing required env var: DATABASE_URL');
+  }
+  return raw.replace(/^file:/, '');
+}
+
+function runCli(): void {
+  const file = databaseFileFromEnv();
+  migrateToDatabaseFile(file);
+  const driver = new Database(file, { readonly: true });
+  const tables = (
+    driver
+      .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`)
+      .all() as { name: string }[]
+  ).map((r) => r.name);
+  driver.close();
+  console.log(`Migrated ${file}`);
+  console.log(`Tables: ${tables.join(', ')}`);
+}
+
+const invokedDirectly =
+  process.argv[1] !== undefined &&
+  import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (invokedDirectly) {
+  try {
+    runCli();
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : err);
+    process.exit(1);
+  }
 }

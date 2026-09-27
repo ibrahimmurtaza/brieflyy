@@ -1,25 +1,39 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import { createTestDb } from '../testing/test-db.js';
-import { DrizzleFeedbackRepo } from '../repos/feedback-repo.js';
+import { makeCluster, makeTopic } from '../testing/fixtures.js';
 import { DrizzleClusterRepo } from '../repos/cluster-repo.js';
-import { FeedbackService } from './feedback-service.js';
+import { DrizzleFeedbackRepo } from '../repos/feedback-repo.js';
+import { DrizzleTopicRepo } from '../repos/topic-repo.js';
+import { DrizzleUserRepo } from '../repos/user-repo.js';
 import { makeTestClock } from '../testing/test-clocks.js';
+import { FeedbackService } from './feedback-service.js';
 
 describe('FeedbackService', () => {
-  it('records feedback and retrieves it', async () => {
-    const { db, driver } = createTestDb();
-    driver.prepare('INSERT INTO users (id, created_at, onboarding_state) VALUES (?, ?, ?)').run('user-1', Date.now(), 'completed');
-    driver.prepare('INSERT INTO clusters (id, topic_id, title, summary, bullet_points, created_at, last_seen_at, article_count, velocity, source_ids, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run('cluster-1', 'topic-1', 'Test', 'Test summary', '[]', Date.now(), Date.now(), 1, 1, '[]', 'active');
+  let service: FeedbackService;
 
-    const repo = new DrizzleFeedbackRepo(db);
+  beforeEach(async () => {
+    const { db } = createTestDb();
+    const userRepo = new DrizzleUserRepo(db);
+    const topicRepo = new DrizzleTopicRepo(db);
     const clusterRepo = new DrizzleClusterRepo(db);
-    const service = new FeedbackService({
-      feedbackRepo: repo,
+
+    await userRepo.insert({
+      id: 'user-1',
+      createdAt: new Date('2026-01-01T00:00:00Z'),
+      onboardingState: 'completed',
+    });
+    await topicRepo.insert(makeTopic({ id: 'topic-1', userId: 'user-1' }));
+    await clusterRepo.insert(makeCluster({ id: 'cluster-1', topicId: 'topic-1' }));
+
+    service = new FeedbackService({
+      feedbackRepo: new DrizzleFeedbackRepo(db),
       clusterRepo,
       clock: makeTestClock(new Date('2026-01-01T10:00:00Z')).clock,
     });
+  });
 
+  it('records feedback and retrieves it', async () => {
     await service.recordFeedback({
       userId: 'user-1',
       clusterId: 'cluster-1',

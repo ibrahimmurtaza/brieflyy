@@ -1,17 +1,35 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import { createTestDb } from '../testing/test-db.js';
+import { makeCluster, makeTopic } from '../testing/fixtures.js';
+import { DrizzleClusterRepo } from './cluster-repo.js';
 import { DrizzleFeedbackRepo } from './feedback-repo.js';
+import { DrizzleTopicRepo } from './topic-repo.js';
+import { DrizzleUserRepo } from './user-repo.js';
 
 describe('DrizzleFeedbackRepo', () => {
-  it('inserts and lists feedback events', async () => {
-    const { db, driver } = createTestDb();
-    // Insert reference rows directly via raw SQL to bypass foreign key issues
-    driver.prepare('INSERT INTO users (id, created_at, onboarding_state) VALUES (?, ?, ?)').run('user-1', Date.now(), 'completed');
-    driver.prepare('INSERT INTO clusters (id, topic_id, title, summary, bullet_points, created_at, last_seen_at, article_count, velocity, source_ids, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run('cluster-1', 'topic-1', 'Test', 'Test summary', '[]', Date.now(), Date.now(), 1, 1, '[]', 'active');
+  let feedbackRepo: DrizzleFeedbackRepo;
 
-    const repo = new DrizzleFeedbackRepo(db);
-    await repo.insert({
+  beforeEach(async () => {
+    const { db } = createTestDb();
+    const userRepo = new DrizzleUserRepo(db);
+    const topicRepo = new DrizzleTopicRepo(db);
+    const clusterRepo = new DrizzleClusterRepo(db);
+    feedbackRepo = new DrizzleFeedbackRepo(db);
+
+    await userRepo.insert({
+      id: 'user-1',
+      createdAt: new Date('2026-01-01T00:00:00Z'),
+      onboardingState: 'completed',
+    });
+    await topicRepo.insert(makeTopic({ id: 'topic-1', userId: 'user-1' }));
+    await clusterRepo.insert(
+      makeCluster({ id: 'cluster-1', topicId: 'topic-1', summary: 'Test summary' }),
+    );
+  });
+
+  it('inserts and lists feedback events', async () => {
+    await feedbackRepo.insert({
       id: 'fe-1',
       userId: 'user-1',
       clusterId: 'cluster-1',
@@ -19,17 +37,13 @@ describe('DrizzleFeedbackRepo', () => {
       scope: null,
       timestamp: new Date('2026-01-01T10:00:00Z'),
     });
-    const all = await repo.listByUser('user-1');
+    const all = await feedbackRepo.listByUser('user-1');
     expect(all.length).toBe(1);
     expect(all[0]?.feedbackType).toBe('thumbs_up');
   });
 
   it('lists events by user and cluster', async () => {
-    const { db, driver } = createTestDb();
-    driver.prepare('INSERT INTO users (id, created_at, onboarding_state) VALUES (?, ?, ?)').run('user-1', Date.now(), 'completed');
-    driver.prepare('INSERT INTO clusters (id, topic_id, title, summary, bullet_points, created_at, last_seen_at, article_count, velocity, source_ids, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run('cluster-1', 'topic-1', 'Test', 'Test summary', '[]', Date.now(), Date.now(), 1, 1, '[]', 'active');
-    const repo = new DrizzleFeedbackRepo(db);
-    await repo.insert({
+    await feedbackRepo.insert({
       id: 'fe-1',
       userId: 'user-1',
       clusterId: 'cluster-1',
@@ -37,7 +51,7 @@ describe('DrizzleFeedbackRepo', () => {
       scope: 'this_topic',
       timestamp: new Date('2026-01-01T10:00:00Z'),
     });
-    const events = await repo.listByUserAndCluster('user-1', 'cluster-1');
+    const events = await feedbackRepo.listByUserAndCluster('user-1', 'cluster-1');
     expect(events.length).toBe(1);
     expect(events[0]?.scope).toBe('this_topic');
   });

@@ -50,11 +50,40 @@ pnpm build            # compile to ./dist
 ```bash
 cp .env.example .env
 # Edit .env: APP_BASE_URL, DATABASE_URL, EMAIL_FROM, ...
+pnpm db:migrate         # apply pending DDL to DATABASE_URL
 pnpm dev
 ```
 
 Open <http://127.0.0.1:3000/signup>, enter an email, and watch the server log
 for the magic link (because `EMAIL_TRANSPORT=console` in the example env).
+
+## Changing the database schema
+
+`src/db/schema.ts` is the declared schema (what Drizzle and `pnpm db:push` see).
+`src/db/migrate.ts` is the DDL the application actually applies, and it is the
+one that has to be right. `src/db/schema-agreement.test.ts` compares the two —
+every index's uniqueness, every foreign key — against a real database built from
+the DDL, so the two cannot drift apart without failing the build.
+
+`CREATE TABLE IF NOT EXISTS` cannot change a table that already exists, so a
+shape change needs one of:
+
+- **A new column on an existing table.** Add the column to `SCHEMA_SQL` *and* add
+  an entry to `COLUMN_MIGRATIONS` in `src/db/migrate.ts`:
+  ```ts
+  { table: 'topics', column: 'cadence',
+    ddl: `ALTER TABLE topics ADD COLUMN cadence TEXT NOT NULL DEFAULT 'daily'` }
+  ```
+  Each entry is skipped when the column is already there, which is what makes
+  re-running the migration safe. Cover it in `src/db/migrate.test.ts`.
+- **A new column that other tables must reference, or any other constraint.**
+  SQLite cannot add a foreign key to a live table, so add a `TABLE_REBUILDS`
+  entry: the current `CREATE TABLE` for the table plus the foreign keys it must
+  end up with. The rebuild is skipped once those foreign keys are present, and
+  the table's rows are copied across. Order matters — rebuild a table before
+  anything that references it.
+- **An index that must change uniqueness.** `rebuildNonUniqueIndexes` drops a
+  same-named index that is not unique so the unique form can be created.
 
 ## Architecture
 
