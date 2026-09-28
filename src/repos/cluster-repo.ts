@@ -1,4 +1,4 @@
-import { eq, inArray, asc, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, notInArray, sql } from 'drizzle-orm';
 
 import type { Db } from '../db/client.js';
 import {
@@ -26,7 +26,27 @@ export interface ClusterRepo {
   listByTopicId(topicId: string): Promise<readonly Cluster[]>;
   listArticlesByTopicId(topicId: string): Promise<readonly Article[]>;
   listArticlesByClusterId(clusterId: string): Promise<readonly Article[]>;
-  insert(cluster: Cluster, storyIds: readonly StoryId[]): Promise<void>;
+  /**
+   * Write a Cluster and the Stories it groups, replacing any Cluster already
+   * under the same id.
+   *
+   * Formation runs again on every ingest cycle, and a Cluster's id is derived
+   * from the Stories in it, so re-forming one has to land on the row that is
+   * already there. Inserting instead would fail on the primary key and take the
+   * whole cycle with it.
+   */
+  insert(cluster: Cluster, storyIds?: readonly StoryId[]): Promise<void>;
+  /**
+   * Archive every Cluster of a Topic that is not in `keepIds`, and report how
+   * many changed. A Cluster whose Stories have all aged out of the window stops
+   * being formed, and without this it would stay Active in the LivingBrief
+   * forever as a copy of a story that has moved on.
+   */
+  archiveExcluding(
+    topicId: string,
+    keepIds: readonly ClusterId[],
+    at: Date,
+  ): Promise<number>;
 }
 
 function rowToCluster(row: ClusterRow): Cluster {
@@ -87,20 +107,6 @@ export class DrizzleClusterRepo implements ClusterRepo {
       .from(clusters)
       .where(eq(clusters.topicId, topicId))
       .orderBy(asc(clusters.createdAt))) as readonly ClusterRow[];
-    if (rows.length === 0) return [];
-
-    const clusterIds = rows.map((r) => r.id);
-    const storyRows = (await this.db
-      .select()
-      .from(clusterStories)
-      .where(inArray(clusterStories.clusterId, clusterIds))) as { clusterId: string; storyId: string }[];
-    const storyIdsByCluster = new Map<string, string[]>();
-    for (const sr of storyRows) {
-      const list = storyIdsByCluster.get(sr.clusterId) ?? [];
-      list.push(sr.storyId);
-      storyIdsByCluster.set(sr.clusterId, list);
-    }
-
     return rows.map((row) => rowToCluster(row));
   }
 
@@ -186,7 +192,7 @@ export class DrizzleClusterRepo implements ClusterRepo {
   }
 
   async insert(cluster: Cluster, storyIds: readonly StoryId[] = []): Promise<void> {
-    await this.db.insert(clusters).values({
+    const values = {
       id: cluster.id,
       topicId: cluster.topicId,
       title: cluster.title,
@@ -198,16 +204,55 @@ export class DrizzleClusterRepo implements ClusterRepo {
       velocity: cluster.velocity,
       sourceIds: cluster.sourceIds.join(','),
       state: cluster.state ?? 'active',
-    });
+    };
+    await this.db
+      .insert(clusters)
+      .values(values)
+      .onConflictDoUpdate({
+        target: clusters.id,
+        set: {
+          title: values.title,
+          summary: values.summary,
+          bulletPoints: values.bulletPoints,
+          lastSeenAt: values.lastSeenAt,
+          articleCount: values.articleCount,
+          velocity: values.velocity,
+          sourceIds: values.sourceIds,
+          state: values.state,
+        },
+      });
     for (const sid of storyIds) {
       await this.db.insert(clusterStories).values({ clusterId: cluster.id, storyId: sid }).onConflictDoNothing();
     }
   }
 
-  async updateLastSeenAt(id: ClusterId, at: Date): Promise<void> {
+  async archiveExcluding(
+    topicId: string,
+    keepIds: readonly ClusterId[],
+    at: Date,
+  ): Promise<number> {
+    const stale = (await this.db
+      .select({ id: clusters.id })
+      .from(clusters)
+      .where(
+        and(
+          eq(clusters.topicId, topicId),
+          eq(clusters.state, 'active'),
+          // An empty keep-list means every Cluster is stale, and
+          // `notInArray` with no values is a query with no parameters.
+          ...(keepIds.length > 0 ? [notInArray(clusters.id, [...keepIds])] : []),
+        ),
+      )) as { id: string }[];
+    if (stale.length === 0) return 0;
     await this.db
       .update(clusters)
-      .set({ lastSeenAt: at })
-      .where(eq(clusters.id, id));
+      .set({ state: 'archive', lastSeenAt: at })
+      .where(
+        and(
+          eq(clusters.topicId, topicId),
+          inArray(clusters.id, stale.map((r) => r.id)),
+        ),
+      );
+    return stale.length;
   }
 }

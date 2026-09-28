@@ -15,6 +15,7 @@ async function makeHarness() {
     id: userId,
     createdAt: new Date('2026-01-01T00:00:00Z'),
     onboardingState: 'topics_picked',
+    tier: 'free',
   });
   return { db, repo, userId, userRepo };
 }

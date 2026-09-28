@@ -3,6 +3,7 @@ import {
   sqliteTable,
   text,
   integer,
+  real,
   uniqueIndex,
   index,
 } from 'drizzle-orm/sqlite-core';
@@ -19,9 +20,14 @@ export const users = sqliteTable(
     })
       .notNull()
       .default('not_started'),
+    // What the User pays for, and therefore what they get. Not a billing
+    // integration: it is the fact every paywall reads, so it has to be persisted
+    // rather than passed around as a literal.
+    tier: text('tier', { enum: ['free', 'paid'] }).notNull().default('free'),
   },
   (t) => ({
     onboardingIdx: index('users_onboarding_idx').on(t.onboardingState),
+    tierIdx: index('users_tier_idx').on(t.tier),
   }),
 );
 
@@ -216,6 +222,13 @@ export const topics = sqliteTable(
     cadence: text('cadence', { enum: ['daily', 'weekly', 'never'] })
       .notNull()
       .default('daily'),
+    /**
+     * How far back this Topic looks when it forms Clusters, in days. A column
+     * rather than a constant because the glossary makes the 7d window a
+     * per-Topic tunable, and a constant would be the one number a User could not
+     * change.
+     */
+    clusterWindowDays: integer('cluster_window_days').notNull().default(7),
     createdAt: integer('created_at', { mode: 'timestamp_ms' })
       .notNull()
       .default(sql`(unixepoch() * 1000)`),
@@ -385,7 +398,10 @@ export const clusters = sqliteTable(
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     lastSeenAt: integer('last_seen_at', { mode: 'timestamp_ms' }).notNull(),
     articleCount: integer('article_count').notNull(),
-    velocity: integer('velocity').notNull(),
+    // Stories per unit time, so a real number rather than a count. An INTEGER
+    // column here would truncate every rate below one Story per unit, which is
+    // most of them.
+    velocity: real('velocity').notNull(),
     sourceIds: text('source_ids').notNull(),
     state: text('state', { enum: ['active', 'archive'] }).notNull().default('active'),
   },

@@ -30,7 +30,7 @@ const BODY_A =
 const ENTRIES: readonly RawFeedEntry[] = [
   {
     externalId: 'r-1',
-    url: 'https://www.reuters.com/article/r-1',
+    url: 'https://www.theguardian.com/world/r-1',
     title: 'Acme Corp launches new AI product',
     body: BODY_A,
     publishedAt: new Date('2026-09-02T10:00:00Z'),
@@ -95,13 +95,13 @@ async function buildApp(): Promise<TestApp> {
   return { app, transport, db, driver, clock, signIn, userId, articleCount };
 }
 
-/** Give the signed-in user a topic fed by Reuters, so a tick has work to do. */
-async function attachReutersTopic(ctx: TestApp): Promise<void> {
+/** Give the signed-in user a topic fed by a registry Source, so a tick has work to do. */
+async function attachTopicWithSource(ctx: TestApp): Promise<void> {
   const userId = ctx.userId();
   if (!userId) throw new Error('sign in before attaching a topic');
   const topicRepo = new DrizzleTopicRepo(createDatabase({ driver: ctx.driver }));
   await topicRepo.insert(makeTopic({ id: 't', userId }));
-  await topicRepo.insertTopicSource('t' as TopicId, 'reuters', 0);
+  await topicRepo.insertTopicSource('t' as TopicId, 'the-guardian', 0);
 }
 
 describe('ingest admin routes', () => {
@@ -156,13 +156,13 @@ describe('ingest admin routes', () => {
       sources: { sourceId: string; lastPolledAt: string | null }[];
     };
     expect(body.running).toBe(false);
-    expect(body.sources.map((s) => s.sourceId)).toContain('reuters');
+    expect(body.sources.map((s) => s.sourceId)).toContain('the-guardian');
     expect(body.sources.every((s) => s.lastPolledAt === null)).toBe(true);
   });
 
   it('runs a cycle for a signed-in user and reports the report', async () => {
     const cookie = await ctx.signIn();
-    await attachReutersTopic(ctx);
+    await attachTopicWithSource(ctx);
 
     const res = await ctx.app.inject({
       method: 'POST',
@@ -177,7 +177,7 @@ describe('ingest admin routes', () => {
     };
     expect(body.cycleId).toMatch(/^[0-9a-f-]{36}$/);
     expect(body.totals.inserted + body.totals.merged).toBe(1);
-    expect(body.sources[0]?.sourceId).toBe('reuters');
+    expect(body.sources[0]?.sourceId).toBe('the-guardian');
     expect(body.sources[0]?.success).toBe(true);
   });
 

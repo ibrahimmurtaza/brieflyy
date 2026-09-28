@@ -37,6 +37,9 @@ interface BuildResult {
   readonly guardian: Source;
   readonly setFetcher: (f: FeedFetcher) => void;
   readonly clock: ReturnType<typeof makeTestClock>;
+  /** Every feed URL the ingest actually reached out to, in order. */
+  readonly fetches: () => readonly string[];
+  readonly pollAt: Date;
 }
 
 async function buildService(opts: BuildInput = {}): Promise<BuildResult> {
@@ -94,6 +97,7 @@ async function buildService(opts: BuildInput = {}): Promise<BuildResult> {
   let activeFetcher: FeedFetcher = new StaticFeedFetcher({
     entries: reutersEntries,
   });
+  const fetchedUrls: string[] = [];
 
   const ingest = new IngestService({
     sourceRepo,
@@ -102,6 +106,7 @@ async function buildService(opts: BuildInput = {}): Promise<BuildResult> {
     entityRepo,
     feedFetcher: {
       fetch(url: string): Promise<RawFeed> {
+        fetchedUrls.push(url);
         if (opts.failingUrl === url) {
           return Promise.reject(new Error('upstream 503'));
         }
@@ -140,6 +145,10 @@ async function buildService(opts: BuildInput = {}): Promise<BuildResult> {
     reuters,
     guardian,
     clock,
+    pollAt,
+    fetches(): readonly string[] {
+      return [...fetchedUrls];
+    },
     setFetcher(f: FeedFetcher): void {
       activeFetcher = f;
     },
@@ -159,6 +168,7 @@ async function insertTopicWithSources(
     id: input.userId as UserId,
     createdAt: new Date('2026-09-01T00:00:00Z'),
     onboardingState: 'topics_picked',
+    tier: 'free',
   });
   await topicRepo.insert(
     makeTopic({ id: input.id, userId: input.userId }),
@@ -231,7 +241,47 @@ describe('RegistryIngestService', () => {
       merged: 0,
       storiesAffected: 0,
       failures: 0,
+      skipped: 0,
     });
+  });
+
+  it('leaves a Source the caller says is not due alone', async () => {
+    const { registry, topicRepo, userRepo, fetches, reuters } = await buildService({});
+    await insertTopicWithSources(topicRepo, userRepo, {
+      id: 't',
+      userId: 'u',
+      sourceIds: ['reuters'],
+    });
+
+    const report = await registry.ingestOnce({ isDue: () => false });
+
+    expect(fetches()).toEqual([]);
+    expect(report.sources).toHaveLength(1);
+    expect(report.sources[0]?.sourceId).toBe(reuters.id);
+    expect(report.sources[0]?.skipped).toBe(true);
+    // A skipped Source is not a failure, or a healthy one eventually looks
+    // broken on the dashboard.
+    expect(report.totals.failures).toBe(0);
+    expect(report.totals.skipped).toBe(1);
+  });
+
+  it('asks the caller whether each Source is due, and with what time', async () => {
+    const { registry, topicRepo, userRepo, pollAt, reuters } = await buildService({});
+    await insertTopicWithSources(topicRepo, userRepo, {
+      id: 't',
+      userId: 'u',
+      sourceIds: ['reuters'],
+    });
+    const asked: { sourceId: string; at: Date }[] = [];
+
+    await registry.ingestOnce({
+      isDue: (sourceId, now) => {
+        asked.push({ sourceId, at: now });
+        return true;
+      },
+    });
+
+    expect(asked).toEqual([{ sourceId: reuters.id, at: pollAt }]);
   });
 
   it('picks up edits to a topic\'s source list on the next ingest cycle', async () => {

@@ -88,6 +88,7 @@ describe('DrizzleOAuthAccountRepo', () => {
       id: userId,
       createdAt: now,
       onboardingState: 'not_started',
+      tier: 'free',
     });
     const accountId = deterministicRandom.uuid();
     await accountRepo.insert({

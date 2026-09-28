@@ -1,7 +1,9 @@
 import type { Clock } from '../domain/clock.js';
+import { entitlementsFor } from '../domain/tier.js';
 import type {
   TopicId,
   EntityId,
+  Tier,
   TrendWindow,
   EmergingEntity,
   TopicTrend,
@@ -47,12 +49,14 @@ export class TrendsService {
 
   filterForTier(
     trend: TopicTrend,
-    tier: 'free' | 'paid',
+    tier: Tier,
     now: Date = this.deps.clock.now(),
   ): TopicTrend {
-    if (tier === 'paid') return trend;
+    const historyDays = entitlementsFor(tier).trendHistoryDays;
+    // A null history is the paid tier's full history, which needs no cutoff.
+    if (historyDays === null) return trend;
     const cutoff = new Date(now);
-    cutoff.setUTCDate(cutoff.getUTCDate() - 3);
+    cutoff.setUTCDate(cutoff.getUTCDate() - historyDays);
     const filteredVolume = trend.volumeOverTime.filter(
       (v) => new Date(v.date) >= cutoff,
     );

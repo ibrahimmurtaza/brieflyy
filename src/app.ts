@@ -40,9 +40,14 @@ import { systemClock } from './domain/clock.js';
 import type { RandomSource } from './domain/crypto.js';
 import { nodeRandom } from './domain/crypto.js';
 import { IngestService } from './ingest/ingest-service.js';
-import { IngestScheduler } from './ingest/ingest-scheduler.js';
-import { RegistryIngestService } from './ingest/registry-ingest-service.js';
+import { IngestScheduler, type IngestSchedulerConfig } from './ingest/ingest-scheduler.js';
+import {
+  RegistryIngestService,
+  type RegistryIngestCycleReport,
+} from './ingest/registry-ingest-service.js';
 import { registerIngestRoutes } from './ingest/routes.js';
+import { ClusterFormationService } from './services/cluster-formation-service.js';
+import { registerTierRoutes } from './billing/tier-routes.js';
 import type { FeedFetcher } from './ingest/feed-fetcher.js';
 
 export interface CreateAppOptions {
@@ -56,8 +61,33 @@ export interface CreateAppOptions {
   readonly oauthClient?: OAuthClient | undefined;
   readonly logger?: boolean | undefined;
   readonly feedFetcher?: FeedFetcher | undefined;
+  /**
+   * A scheduler the caller has already built, instead of one built from a
+   * `feedFetcher`. Taking over the loop means taking over what runs at the end
+   * of it too: Cluster formation is wired into the scheduler this function
+   * builds, so a caller supplying their own also has to run
+   * `ClusterFormationService` themselves.
+   */
   readonly ingestScheduler?: IngestScheduler | undefined;
+  /**
+   * How often the ingest loop runs and how its per-Source failure backoff grows.
+   * Absent means the scheduler's own defaults.
+   */
+  readonly ingestConfig?: IngestSchedulerConfig | undefined;
   readonly magicLinkRateLimits?: MagicLinkRateLimits | undefined;
+  /**
+   * Register the development-only routes, including the switch that moves the
+   * signed-in User onto the paid tier. Off unless the server configuration turns
+   * it on, so a production instance has no route that can change a tier.
+   */
+  readonly devToolsEnabled?: boolean | undefined;
+  /**
+   * Run the ingest loop for as long as the application is up. Off by default so
+   * a test can build the application without a background timer racing its
+   * fixtures; the server entrypoint turns it on, which is what makes starting
+   * the process the only trigger ingest needs.
+   */
+  readonly ingestAutoStart?: boolean | undefined;
   /** Believe `X-Forwarded-For`, so per-caller limits work behind a proxy. */
   readonly trustProxy?: boolean | undefined;
 }
@@ -122,6 +152,8 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
   const topicRepo = new DrizzleTopicRepo(opts.db);
   const clusterRepo = new DrizzleClusterRepo(opts.db);
   const sourceRepo = new DrizzleSourceRepo(opts.db);
+  const articleRepo = new DrizzleArticleRepo(opts.db);
+  const storyRepo = new DrizzleStoryRepo(opts.db);
   const feedbackRepo = new DrizzleFeedbackRepo(opts.db);
   const deliverySettingsRepo = new DrizzleDeliverySettingsRepo(opts.db);
 
@@ -157,11 +189,26 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     random: opts.random ?? nodeRandom,
   });
 
+  const clusterFormationService = new ClusterFormationService({
+    storyRepo,
+    articleRepo,
+    clusterRepo,
+    topicRepo,
+    clock,
+  });
+
   const ingestScheduler = await resolveIngestScheduler({
     provided: opts.ingestScheduler,
     db: opts.db,
+    repos: { sourceRepo, articleRepo, storyRepo, topicRepo },
     clock,
     feedFetcher: opts.feedFetcher,
+    config: opts.ingestConfig,
+    // Clusters are a grouping of the Stories a cycle wrote, so they are formed
+    // once the cycle is done rather than alongside it.
+    afterCycle: async () => {
+      await clusterFormationService.formForAllTopics();
+    },
   });
 
   const rateLimits = opts.magicLinkRateLimits ?? MAGIC_LINK_RATE_LIMITS;
@@ -198,22 +245,43 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     await registerIngestRoutes(app, { scheduler: ingestScheduler });
   }
 
+  if (ingestScheduler && opts.ingestAutoStart === true) {
+    // The loop is deliberately not awaited: it runs for the life of the process.
+    void ingestScheduler.runForever();
+    // Closing the app is a shutdown request, so the loop is stopped and its
+    // in-flight cycle waited for before the caller tears anything else down.
+    // Awaiting a half-finished cycle is what keeps a Story from being written
+    // against a database that is already closing.
+    app.addHook('onClose', async () => {
+      await ingestScheduler.stop();
+    });
+  }
+
+  if (opts.devToolsEnabled === true) {
+    await registerTierRoutes(app, { userRepo });
+  }
+
   return app;
 }
 
 async function resolveIngestScheduler(input: {
   readonly provided: IngestScheduler | undefined;
   readonly db: Db;
+  readonly repos: {
+    readonly sourceRepo: DrizzleSourceRepo;
+    readonly articleRepo: DrizzleArticleRepo;
+    readonly storyRepo: DrizzleStoryRepo;
+    readonly topicRepo: DrizzleTopicRepo;
+  };
   readonly clock: Clock;
   readonly feedFetcher: FeedFetcher | undefined;
+  readonly config: IngestSchedulerConfig | undefined;
+  readonly afterCycle?: ((report: RegistryIngestCycleReport) => Promise<void>) | undefined;
 }): Promise<IngestScheduler | null> {
   if (input.provided) return input.provided;
   if (!input.feedFetcher) return null;
-  const sourceRepo = new DrizzleSourceRepo(input.db);
-  const articleRepo = new DrizzleArticleRepo(input.db);
-  const storyRepo = new DrizzleStoryRepo(input.db);
+  const { sourceRepo, articleRepo, storyRepo, topicRepo } = input.repos;
   const entityRepo = new DrizzleEntityRepo(input.db);
-  const topicRepo = new DrizzleTopicRepo(input.db);
   const ingestService = new IngestService({
     sourceRepo,
     articleRepo,
@@ -235,6 +303,8 @@ async function resolveIngestScheduler(input: {
     registry,
     sourceRepo,
     clock: input.clock,
+    ...(input.config ? { config: input.config } : {}),
+    ...(input.afterCycle ? { afterCycle: input.afterCycle } : {}),
   });
 }
 

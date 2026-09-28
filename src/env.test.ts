@@ -85,6 +85,10 @@ describe('loadServerConfig', () => {
     expect(config.resendApiKey).toBeUndefined();
     expect(config.oauthProvider).toBeUndefined();
     expect(config.ingestEnabled).toBe(true);
+    expect(config.ingestIntervalMs).toBe(30 * 60 * 1000);
+    expect(config.ingestBackoffBaseMs).toBe(60 * 1000);
+    expect(config.ingestBackoffMaxMs).toBe(30 * 60 * 1000);
+    expect(config.devToolsEnabled).toBe(true);
     expect(config.cookieSecure).toBe(false);
     expect(config.trustProxy).toBe(false);
     expect(config.port).toBe(3000);
@@ -108,6 +112,41 @@ describe('loadServerConfig', () => {
     expect(
       loadServerConfig({ ...MINIMAL, NODE_ENV: 'production', COOKIE_SECURE: 'false' }).cookieSecure,
     ).toBe(false);
+  });
+
+  it('reads the ingest timings, so a deployment can tune the poll rate', () => {
+    const config = loadServerConfig({
+      ...MINIMAL,
+      INGEST_INTERVAL_MS: '5000',
+      INGEST_BACKOFF_BASE_MS: '1000',
+      INGEST_BACKOFF_MAX_MS: '2000',
+    });
+    expect(config.ingestIntervalMs).toBe(5000);
+    expect(config.ingestBackoffBaseMs).toBe(1000);
+    expect(config.ingestBackoffMaxMs).toBe(2000);
+    expect(() =>
+      loadServerConfig({ ...MINIMAL, INGEST_INTERVAL_MS: 'soon' }),
+    ).toThrow(/INGEST_INTERVAL_MS/);
+  });
+
+  it('registers the dev tools outside production, and not in it', () => {
+    expect(
+      loadServerConfig({ ...MINIMAL, NODE_ENV: 'production' }).devToolsEnabled,
+    ).toBe(false);
+    expect(loadServerConfig({ ...MINIMAL, NODE_ENV: 'development' }).devToolsEnabled).toBe(
+      true,
+    );
+  });
+
+  it('lets DEV_TOOLS_ENABLED override the NODE_ENV default', () => {
+    expect(
+      loadServerConfig({ ...MINIMAL, NODE_ENV: 'development', DEV_TOOLS_ENABLED: '0' })
+        .devToolsEnabled,
+    ).toBe(false);
+    expect(
+      loadServerConfig({ ...MINIMAL, NODE_ENV: 'production', DEV_TOOLS_ENABLED: 'true' })
+        .devToolsEnabled,
+    ).toBe(true);
   });
 
   it('enables Google sign-in whatever the casing of OAUTH_PROVIDER', () => {
@@ -153,6 +192,7 @@ describe('loadServerConfig', () => {
       OAUTH_PROVIDER: 'googly',
       INGEST_ENABLED: 'perhaps',
       COOKIE_SECURE: 'sometimes',
+      DEV_TOOLS_ENABLED: 'perhaps',
       TRUST_PROXY: 'maybe',
       PORT: 'eighty',
     };

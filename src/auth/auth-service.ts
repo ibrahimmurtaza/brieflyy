@@ -16,6 +16,7 @@ import {
   type RandomSource,
 } from '../domain/crypto.js';
 import type { EmailTransport } from '../email/transport.js';
+import { DEFAULT_TIER } from '../domain/tier.js';
 import type { OAuthClient } from '../oauth/client.js';
 import type {
   Account,
@@ -304,6 +305,9 @@ export class AuthService {
       id: this.random.uuid(),
       createdAt: now,
       onboardingState: 'not_started',
+      // Everyone starts on the free tier. Billing decides otherwise later, and
+      // a new User has bought nothing.
+      tier: DEFAULT_TIER,
     };
     const account: Account = {
       id: this.random.uuid(),
@@ -442,6 +446,7 @@ export class AuthService {
           id: this.random.uuid(),
           createdAt: now,
           onboardingState: 'not_started',
+          tier: DEFAULT_TIER,
         };
         account = {
           id: this.random.uuid(),

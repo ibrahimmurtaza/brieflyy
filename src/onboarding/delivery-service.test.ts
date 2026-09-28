@@ -54,6 +54,7 @@ async function makeHarness(): Promise<Harness> {
       id: userId,
       createdAt: clock.clock.now(),
       onboardingState: state,
+      tier: 'free',
     });
     await accountRepo.insert({
       id: deterministicRandom.uuid(),

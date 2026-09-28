@@ -1,8 +1,13 @@
 import type { FastifyInstance } from 'fastify';
 
-import { type Topic, type TopicTemplate, type Cluster } from '../domain/types.js';
+import { type Topic, type TopicTemplate, type Cluster, type Tier } from '../domain/types.js';
+import {
+  MAX_CLUSTER_WINDOW_DAYS,
+  MIN_CLUSTER_WINDOW_DAYS,
+} from '../domain/cluster-window.js';
+import { resolveTier, topicCapFor } from '../domain/tier.js';
 import { isValidIanaTimezone, partsInTz } from '../domain/timezone.js';
-import { FREE_TIER_TOPIC_CAP } from '../onboarding/onboarding-service.js';
+import { INITIAL_TOPIC_COUNT } from '../onboarding/onboarding-service.js';
 import type { OnboardingService } from '../onboarding/onboarding-service.js';
 import type { ClusterRepo } from '../repos/cluster-repo.js';
 import type { SourceRepo } from '../repos/source-repo.js';
@@ -77,7 +82,8 @@ export async function registerPageRoutes(
     }
     const templates = await onboardingService.listTemplates();
     const existing = await onboardingService.listTopics(req.auth.user.id);
-    const atCap = existing.length >= FREE_TIER_TOPIC_CAP;
+    const cap = await onboardingService.topicCapForUser(req.auth.user.id);
+    const atCap = existing.length >= cap;
     return reply
       .type('text/html')
       .send(
@@ -86,6 +92,7 @@ export async function registerPageRoutes(
           templates,
           existing,
           atCap,
+          cap,
           mode: 'onboarding',
         }),
       );
@@ -95,7 +102,8 @@ export async function registerPageRoutes(
     if (!requireAuthPage(req, reply)) return reply;
     const templates = await onboardingService.listTemplates();
     const existing = await onboardingService.listTopics(req.auth.user.id);
-    const atCap = existing.length >= FREE_TIER_TOPIC_CAP;
+    const cap = await onboardingService.topicCapForUser(req.auth.user.id);
+    const atCap = existing.length >= cap;
     return reply
       .type('text/html')
       .send(
@@ -104,6 +112,7 @@ export async function registerPageRoutes(
           templates,
           existing,
           atCap,
+          cap,
           mode: 'manage',
         }),
       );
@@ -188,7 +197,13 @@ export async function registerPageRoutes(
     const topics = await onboardingService.listTopics(req.auth.user.id);
     return reply
       .type('text/html')
-      .send(upgradePage({ email: req.auth.account.email, topicCount: topics.length }));
+      .send(
+        upgradePage({
+          email: req.auth.account.email,
+          topicCount: topics.length,
+          tier: resolveTier(req.auth.user),
+        }),
+      );
   });
 
   fastify.get('/archive/search', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
@@ -206,7 +221,17 @@ export async function registerPageRoutes(
   fastify.get('/topics', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
     if (!requireAuthPage(req, reply)) return reply;
     const topics = await opts.onboardingService.listTopics(req.auth.user.id);
-    return reply.type('text/html').send(homePage({ email: req.auth.account.email, topics }));
+    const cap = await opts.onboardingService.topicCapForUser(req.auth.user.id);
+    return reply
+      .type('text/html')
+      .send(
+        homePage({
+          email: req.auth.account.email,
+          topics,
+          tier: resolveTier(req.auth.user),
+          atCap: topics.length >= cap,
+        }),
+      );
   });
 
   fastify.post<{ Params: { slug: string }; Body: { clusterId?: string; type?: string; scope?: string } }>(
@@ -231,13 +256,41 @@ export async function registerPageRoutes(
     },
   );
 
+  fastify.post<{ Params: { slug: string }; Body: { windowDays?: string } }>(
+    '/topics/:slug/cluster-window',
+    AUTHENTICATED_ROUTE_CONFIG,
+    async (req, reply) => {
+      if (!requireAuthPage(req, reply)) return reply;
+      const topic = await opts.topicRepo.findBySlug(
+        req.auth.user.id,
+        req.params.slug,
+      );
+      if (!topic) {
+        return reply
+          .code(404)
+          .type('text/html')
+          .send(notFoundPage(req.auth.account.email, `Topic "${req.params.slug}" not found`));
+      }
+      // Parsed rather than trusted: a value the User typed that is not a number
+      // becomes NaN and falls back to the default, and one outside the range
+      // narrows to the nearest window that still means something. Neither is
+      // worth refusing a form submission over.
+      await opts.topicRepo.setClusterWindowDays(
+        topic.id,
+        Number(req.body.windowDays),
+      );
+      return reply.code(302).header('location', `/topics/${req.params.slug}`).send();
+    },
+  );
+
   fastify.get<{ Params: { slug: string }; Querystring: { source?: string; hide?: string } }>(
     '/topics/:slug',
     AUTHENTICATED_ROUTE_CONFIG,
     async (req, reply) => {
       if (!requireAuthPage(req, reply)) return reply;
-      const topic = await opts.topicRepo.listByUser(req.auth.user.id).then((rows) =>
-        rows.find((t) => t.slug === req.params.slug),
+      const topic = await opts.topicRepo.findBySlug(
+        req.auth.user.id,
+        req.params.slug,
       );
       if (!topic) {
         return reply
@@ -246,10 +299,14 @@ export async function registerPageRoutes(
           .send(notFoundPage(req.auth.account.email, `Topic "${req.params.slug}" not found`));
       }
       const clusters = await opts.clusterRepo.listByTopicId(topic.id);
-      let activeClusters = clusters
+      // The Active set before any filter is applied. A filter that happens to
+      // match nothing is a different situation from a Topic with no Clusters at
+      // all, and the page has to be able to tell them apart.
+      const active = clusters
         .filter((c) => c.state === 'active')
         .sort((a, b) => b.lastSeenAt.getTime() - a.lastSeenAt.getTime());
       const sourceFilter = req.query.source ? String(req.query.source) : null;
+      let activeClusters = active;
       if (sourceFilter) {
         activeClusters = activeClusters.filter((c) => c.sourceIds.includes(sourceFilter));
       }
@@ -276,8 +333,10 @@ export async function registerPageRoutes(
       const sourcesById = new Map(
         (await opts.sourceRepo.list()).map((s) => [s.id, s] as const),
       );
+      // The Source filter is offered from the Sources the unfiltered Clusters
+      // carry, so the link a User clicks is one that can still show something.
       const visibleSources = new Set<string>();
-      for (const c of activeClusters) {
+      for (const c of active) {
         for (const sid of c.sourceIds) visibleSources.add(sid);
       }
       return reply.type('text/html').send(
@@ -286,6 +345,9 @@ export async function registerPageRoutes(
           topic,
           topicSlug: req.params.slug,
           clusters: activeClusters,
+          clusterCount: clusters.length,
+          activeClusterCount: active.length,
+          sourceFilter,
           sourcesById,
           visibleSourceIds: visibleSources,
           clusterArticles,
@@ -387,11 +449,15 @@ function pickTopicsPage(input: {
   templates: readonly TopicTemplate[];
   existing: readonly Topic[];
   atCap: boolean;
+  cap: number;
   mode: 'onboarding' | 'manage';
 }): string {
   const safeEmail = escapeHtml(input.email);
   const onboarding = input.mode === 'onboarding';
-  const remaining = Math.max(0, FREE_TIER_TOPIC_CAP - input.existing.length);
+  const cap = input.cap;
+  // An uncapped tier has no slots to count down, so the wording that talks
+  // about slots left only applies where a cap exists at all.
+  const remaining = Number.isFinite(cap) ? Math.max(0, cap - input.existing.length) : null;
   // A free user at the cap may not tick anything: no add, no swap. The only way
   // to change a topic is to delete one first, or upgrade.
   const locked = input.atCap;
@@ -454,13 +520,15 @@ function pickTopicsPage(input: {
     : '';
 
   const lede = onboarding
-    ? 'Choose exactly 3 â€” from the Directory below, your own free-form idea, or a mix.'
+    ? `Choose exactly ${INITIAL_TOPIC_COUNT} — from the Directory below, your own free-form idea, or a mix.`
     : remaining === 0
-      ? `You are using all ${FREE_TIER_TOPIC_CAP} free topics. Remove one to pick a replacement, or upgrade.`
-      : `Pick up to ${remaining} more topic${remaining === 1 ? '' : 's'} â€” from the Directory below, your own free-form idea, or a mix.`;
+      ? `You are using all ${cap} free topics. Remove one to pick a replacement, or upgrade.`
+      : remaining === null
+        ? 'Add as many topics as you like — from the Directory below, your own free-form idea, or a mix.'
+        : `Pick up to ${remaining} more topic${remaining === 1 ? '' : 's'} — from the Directory below, your own free-form idea, or a mix.`;
 
   const paywallHtml = locked
-    ? `<div class="paywall">You have reached the free-topic limit (${FREE_TIER_TOPIC_CAP}). <a href="/upgrade">Upgrade</a> to add more, or remove a topic to swap it.</div>`
+    ? `<div class="paywall">You have reached the free-topic limit (${cap}). <a href="/upgrade">Upgrade</a> to add more, or remove a topic to swap it.</div>`
     : '';
 
   const actionHref = onboarding ? '/onboarding/pick-topics' : '/pick-topics';
@@ -507,7 +575,11 @@ function pickTopicsPage(input: {
     <form id="pick" method="POST" action="${actionHref}">
       ${sectionsHtml}
       <div class="freeform">
-        <label for="freeformTitle"><strong>Or add your own</strong> (optional â€” uses up one of your ${FREE_TIER_TOPIC_CAP} slots)</label>
+        <label for="freeformTitle"><strong>Or add your own</strong> (optional${
+          remaining === null
+            ? ' &mdash; a paid plan has no limit on how many topics you hold'
+            : ` &mdash; uses up one of your ${cap} slots`
+        })</label>
         <input id="freeformTitle" name="freeformTitle" type="text" maxlength="80" placeholder="e.g. fusion energy, tabletop RPGs, indie hacking" ${locked ? 'disabled' : ''}>
       </div>
       <div class="actions">
@@ -525,8 +597,10 @@ function pickTopicsPage(input: {
       if (!form) return;
       var status = document.getElementById('status');
       var exact = ${onboarding ? 'true' : 'false'};
-      var min = ${onboarding ? String(FREE_TIER_TOPIC_CAP) : '1'};
-      var max = ${onboarding ? String(FREE_TIER_TOPIC_CAP) : String(remaining)};
+      // An uncapped tier has no ceiling, so the client check is skipped rather
+      // than being handed a number it could never satisfy.
+      var min = ${onboarding ? String(INITIAL_TOPIC_COUNT) : '1'};
+      var max = ${remaining === null ? 'null' : String(remaining)};
       var button = form.querySelector('button[type=submit]');
       var checkboxes = Array.prototype.slice.call(form.querySelectorAll('input[type=checkbox][name=templateIds]'));
       var freeform = form.querySelector('input[name=freeformTitle]');
@@ -537,17 +611,22 @@ function pickTopicsPage(input: {
       }
       function validate() {
         var n = selectedCount();
-        if (n >= min && n <= max) { status.textContent = ''; button.disabled = false; return; }
-        if (n > max) {
+        if (n < min) {
           status.textContent = exact
-            ? 'Please pick exactly 3 topics.'
+            ? 'Pick ' + (min - n) + ' more to continue.'
+            : 'Pick at least one topic.';
+          button.disabled = true;
+          return;
+        }
+        if (max !== null && n > max) {
+          status.textContent = exact
+            ? 'Please pick exactly ' + min + ' topics.'
             : 'You can add ' + max + ' more topic' + (max === 1 ? '' : 's') + ' right now.';
           button.disabled = true;
           return;
         }
-        if (exact) status.textContent = 'Pick ' + (max - n) + ' more to continue.';
-        else status.textContent = 'Pick at least one topic.';
-        button.disabled = true;
+        status.textContent = '';
+        button.disabled = false;
       }
       checkboxes.forEach(function (cb) { cb.addEventListener('change', validate); });
       if (freeform) freeform.addEventListener('input', validate);
@@ -742,14 +821,23 @@ function welcomePage(input: {
 </html>`;
 }
 
-function upgradePage(input: { email: string; topicCount: number }): string {
+function upgradePage(input: { email: string; topicCount: number; tier: Tier }): string {
   const safeEmail = escapeHtml(input.email);
   const used = input.topicCount === 1 ? '1 topic' : `${input.topicCount} topics`;
+  // A paid user reaching this page already has what it is selling, so say that
+  // rather than pitching them a plan they are on.
+  const alreadyPaid = input.tier === 'paid';
+  const headline = alreadyPaid
+    ? 'You are on the paid plan'
+    : 'Upgrade to paid';
+  const priceHtml = alreadyPaid
+    ? '<p class="price"><strong>Paid &middot; $15 / month</strong></p>'
+    : '<p class="price"><strong>$15 / month</strong></p>';
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Upgrade to paid Â· Brieflyy</title>
+  <title>Upgrade to paid &middot; Brieflyy</title>
   <style>
     :root { color-scheme: light dark; }
     body { font-family: system-ui, sans-serif; max-width: 520px; margin: 3rem auto; padding: 0 1rem; }
@@ -765,9 +853,9 @@ function upgradePage(input: { email: string; topicCount: number }): string {
 </head>
 <body>
   <main>
-    <h1>Upgrade to paid</h1>
+    <h1>${headline}</h1>
     <p class="lede">Signed in as ${safeEmail}.</p>
-    <p class="price"><strong>$15 / month</strong></p>
+    ${priceHtml}
     <p class="perks">Paid Brieflyy includes unlimited topics, indefinite archive retention, and the full trends view.</p>
     <div class="not-yet">
       <strong>Billing isn't connected yet.</strong>
@@ -811,8 +899,19 @@ function formatHumanTime(date: Date, timezone: string): string {
 function homePage(input: {
   email: string;
   topics: readonly Topic[];
+  tier: Tier;
+  atCap: boolean;
 }): string {
   const safeEmail = escapeHtml(input.email);
+  const cap = topicCapFor(input.tier);
+  const plan = Number.isFinite(cap)
+    ? `Free plan &middot; ${input.topics.length} of ${cap} topics`
+    : `Paid plan &middot; ${input.topics.length} topics`;
+  // A user who cannot add another topic is told so on the page they land on,
+  // not only on the picker they have to go and find.
+  const atCapHtml = input.atCap
+    ? `<div class="paywall">You are using all ${cap} free topics. <a href="/upgrade">Upgrade</a> to add more, or remove one to pick a replacement.</div>`
+    : '';
   const rows = input.topics
     .map(
       (t) => `<li>
@@ -835,6 +934,7 @@ function homePage(input: {
     body { font-family: system-ui, sans-serif; max-width: 720px; margin: 3rem auto; padding: 0 1rem; }
     h1 { font-size: 1.6rem; margin: 0 0 0.25rem; }
     p.lede { color: #555; margin-top: 0; }
+    p.plan { color: #888; font-size: 0.85rem; margin-top: -0.5rem; }
     ul.topics { list-style: none; padding: 0; margin: 1rem 0; }
     ul.topics li { padding: 0.75rem 0; border-bottom: 1px solid #eee; }
     a { color: #1f6feb; text-decoration: none; }
@@ -842,6 +942,7 @@ function homePage(input: {
     .muted { color: #888; }
     .nav { margin-top: 2rem; }
     .nav a { margin-right: 1rem; }
+    .paywall { background: #fff5d6; border: 1px solid #e0c66b; padding: 0.75rem 1rem; border-radius: 6px; margin: 1rem 0; }
     form.logout { display: inline; }
     form.logout button { background: none; color: inherit; border: 0; padding: 0; cursor: pointer; text-decoration: underline; }
   </style>
@@ -850,6 +951,8 @@ function homePage(input: {
   <main>
     <h1>Your topics</h1>
     <p class="lede">Signed in as ${safeEmail}. Pick a topic to open its living brief.</p>
+    <p class="plan">${plan}</p>
+    ${atCapHtml}
     ${emptyState}
     <ul class="topics">${rows}</ul>
     <div class="nav">
@@ -867,6 +970,19 @@ function topicPage(input: {
   topic: Topic;
   topicSlug: string;
   clusters: readonly Cluster[];
+  /**
+   * How many Clusters the Topic has in total, Active or not. This is what tells
+   * "nothing has been ingested yet" apart from "everything has been archived",
+   * which the visible list cannot say on its own.
+   */
+  clusterCount: number;
+  /**
+   * How many of those are Active, before any filter narrowed them. What the
+   * filter happened to match is a third thing again, and the page keeps all
+   * three apart.
+   */
+  activeClusterCount: number;
+  sourceFilter: string | null;
   sourcesById: Map<string, { id: string; name: string }>;
   visibleSourceIds: Set<string>;
   clusterArticles?: Map<string, readonly import('../domain/types.js').Article[]>;
@@ -879,14 +995,18 @@ function topicPage(input: {
         .map((b) => `<li>${escapeHtml(b)}</li>`)
         .join('\n');
       const articles = input.clusterArticles?.get(c.id) ?? [];
+      // An Article whose link the feed gave us in an unusable scheme is stored
+      // with no URL at all. Rendering that as `href=""` would be a link to the
+      // page the User is already on, so the title is shown without one.
       const articleLinks = articles
-        .map((a) => `<a href="${escapeHtml(a.url)}" target="_blank" rel="noopener">${escapeHtml(a.title || 'Source article')}</a>`)
+        .filter((a) => a.url.length > 0)
+        .map((a) => `<a href="${escapeHtml(a.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(a.title || 'Source article')}</a>`)
         .join(', ');
       const hideLink = `<a href="?hide=${encodeURIComponent(String(c.id))}" class="hide-btn">Hide</a>`;
       const feedbackButtons = `<form method="POST" action="/topics/${escapeHtml(input.topicSlug)}/feedback" style="display:inline;margin-right:0.5rem;">
         <input type="hidden" name="clusterId" value="${escapeHtml(c.id)}">
-        <button type="submit" name="type" value="thumbs_up" style="font-size:0.75rem;padding:0.1rem 0.4rem;border-radius:4px;background:#e6f4ea;border:1px solid #a3d4a8;cursor:pointer;">ðŸ‘</button>
-        <button type="submit" name="type" value="thumbs_down" style="font-size:0.75rem;padding:0.1rem 0.4rem;border-radius:4px;background:#fff5f5;border:1px solid #f0baba;cursor:pointer;">ðŸ‘Ž</button>
+        <button type="submit" name="type" value="thumbs_up" style="font-size:0.75rem;padding:0.1rem 0.4rem;border-radius:4px;background:#e6f4ea;border:1px solid #a3d4a8;cursor:pointer;">👍</button>
+        <button type="submit" name="type" value="thumbs_down" style="font-size:0.75rem;padding:0.1rem 0.4rem;border-radius:4px;background:#fff5f5;border:1px solid #f0baba;cursor:pointer;">👎</button>
         <button type="submit" name="type" value="more_like_this" style="font-size:0.75rem;padding:0.1rem 0.4rem;border-radius:4px;background:#eef5ff;border:1px solid #c2d6f2;cursor:pointer;">More</button>
         <button type="submit" name="type" value="less_like_this" style="font-size:0.75rem;padding:0.1rem 0.4rem;border-radius:4px;background:#fff8e6;border:1px solid #e0c66b;cursor:pointer;">Less</button>
         <button type="submit" name="type" value="hide_source" style="font-size:0.75rem;padding:0.1rem 0.4rem;border-radius:4px;background:#f5f0ee;border:1px solid #ccc;cursor:pointer;">Hide source</button>
@@ -908,15 +1028,15 @@ function topicPage(input: {
       </article>`;
     })
     .join('\n');
-  const emptyState = input.clusters.length === 0
-    ? `<p class="muted">No stories yet for this topic. Check back after the next ingest.</p>`
-    : '';
+  const emptyState = emptyStateBlock(input);
+  const sourceFilterBar = sourceFilterBarHtml(input);
+  const windowForm = clusterWindowForm(input);
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${safeTitle} Â· Brieflyy</title>
+  <title>${safeTitle} · Brieflyy</title>
   <style>
     :root { color-scheme: light dark; }
     body { font-family: system-ui, sans-serif; max-width: 760px; margin: 3rem auto; padding: 0 1rem; }
@@ -934,6 +1054,11 @@ function topicPage(input: {
     .article-links { margin-top: 0.5rem; font-size: 0.85rem; color: #555; }
     .article-links a { color: #1f6feb; text-decoration: none; }
     .article-links a:hover { text-decoration: underline; }
+    .filter-bar, .window-form { margin: 1rem 0; font-size: 0.85rem; color: #555; }
+    .filter-bar a { color: #1f6feb; margin-right: 0.75rem; }
+    .window-form label { margin-right: 0.4rem; }
+    .window-form input { width: 4rem; padding: 0.2rem; }
+    .window-form button { padding: 0.2rem 0.6rem; }
     .nav { margin-top: 2rem; }
     .nav a { margin-right: 1rem; }
     form.logout { display: inline; }
@@ -943,9 +1068,11 @@ function topicPage(input: {
 <body>
   <main>
     <h1>${safeTitle}</h1>
-    <p class="lede">Signed in as ${safeEmail} Â· ${escapeHtml(input.topic.category)} Â· ${input.clusters.length} active cluster${input.clusters.length === 1 ? '' : 's'}</p>
+    <p class="lede">Signed in as ${safeEmail} · ${escapeHtml(input.topic.category)} · ${input.clusters.length} active cluster${input.clusters.length === 1 ? '' : 's'}</p>
+    ${sourceFilterBar}
     ${emptyState}
     ${rows}
+    ${windowForm}
     <div class="nav">
       <a href="/topics">All topics</a>
       <a href="/pick-topics">Manage topics</a>
@@ -954,6 +1081,77 @@ function topicPage(input: {
   </main>
 </body>
 </html>`;
+}
+
+/**
+ * What the page says when it has no Clusters to render.
+ *
+ * Three different situations, and conflating any two of them misleads the User
+ * about their own Topic. An empty Topic has nothing yet. A Topic whose Clusters
+ * have all gone Archived has something, just nothing current. And a Topic whose
+ * Clusters a Source filter or a Hide has removed still has Clusters — saying
+ * "no stories yet" there would tell them their ingest is broken when it is
+ * working exactly as asked.
+ *
+ * Nothing is said when there are Clusters on the page. A brief that is showing
+ * Clusters is not filtered to nothing, whatever the query string says.
+ */
+function emptyStateBlock(input: {
+  readonly clusters: readonly Cluster[];
+  readonly clusterCount: number;
+  readonly activeClusterCount: number;
+  readonly topicSlug: string;
+}): string {
+  if (input.clusters.length > 0) return '';
+  if (input.activeClusterCount > 0) {
+    return `<p class="muted">No clusters match the current filter. <a href="/topics/${escapeHtml(input.topicSlug)}">Show all ${input.activeClusterCount} active cluster${input.activeClusterCount === 1 ? '' : 's'}</a></p>`;
+  }
+  if (input.clusterCount > 0) {
+    return `<p class="muted">Nothing is active on this topic right now. Its ${input.clusterCount} cluster${input.clusterCount === 1 ? ' has' : 's have'} been archived, and a Cluster becomes active again as its stories are covered.</p>`;
+  }
+  return `<p class="muted">No stories yet for this topic. Check back after the next ingest.</p>`;
+}
+
+/**
+ * The Sources a User can narrow the brief by, and the way back out of a filter
+ * already applied.
+ *
+ * Offered from the Sources the unfiltered Clusters carry, so every link is one
+ * that can still show something, and the Source currently being filtered to
+ * links back to everything rather than to itself.
+ */
+function sourceFilterBarHtml(input: {
+  readonly sourceFilter: string | null;
+  readonly sourcesById: Map<string, { id: string; name: string }>;
+  readonly visibleSourceIds: Set<string>;
+  readonly topicSlug: string;
+}): string {
+  const sourceIds = [...input.visibleSourceIds].sort();
+  if (sourceIds.length === 0) return '';
+  const links = sourceIds.map((sid) => {
+    const name = input.sourcesById.get(sid)?.name ?? sid;
+    const selected = sid === input.sourceFilter;
+    const href = selected
+      ? `/topics/${encodeURIComponent(input.topicSlug)}`
+      : `/topics/${encodeURIComponent(input.topicSlug)}?source=${encodeURIComponent(sid)}`;
+    return `<a href="${escapeHtml(href)}"${selected ? ' class="selected"' : ''}>${escapeHtml(name)}</a>`;
+  });
+  return `<p class="filter-bar">Sources: ${links.join(' ')}</p>`;
+}
+
+function clusterWindowForm(input: {
+  readonly topic: Topic;
+  readonly topicSlug: string;
+}): string {
+  const action = `/topics/${escapeHtml(input.topicSlug)}/cluster-window`;
+  const min = MIN_CLUSTER_WINDOW_DAYS;
+  const max = MAX_CLUSTER_WINDOW_DAYS;
+  return `<form class="window-form" method="POST" action="${action}">
+      <label for="windowDays">Cluster window</label>
+      <input type="number" id="windowDays" name="windowDays" min="${min}" max="${max}" value="${input.topic.clusterWindowDays}">
+      <span>days (${min}-${max})</span>
+      <button type="submit">Save</button>
+    </form>`;
 }
 
 function notFoundPage(email: string, message: string): string {

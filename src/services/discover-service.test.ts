@@ -1,5 +1,15 @@
-import { describe, it, expect } from 'vitest';
+import { beforeAll, describe, it, expect } from 'vitest';
 import { DiscoverService } from './discover-service.js';
+import { tierOfPersistedUser } from '../testing/tier.js';
+import type { Tier } from '../domain/types.js';
+
+let free: Tier;
+let paid: Tier;
+
+beforeAll(async () => {
+  free = await tierOfPersistedUser('free');
+  paid = await tierOfPersistedUser('paid');
+});
 
 describe('DiscoverService', () => {
   it('filters templates not yet subscribed', () => {
@@ -39,22 +49,41 @@ describe('DiscoverService', () => {
     expect(trending[0]?.lift).toBe(4.2);
   });
 
-  it('enforces free-tier cap of 3 topics on clone', () => {
+  it('refuses a fourth clone for a User on the free tier', () => {
     const svc = new DiscoverService({
       templates: [{ id: 't1', slug: 'ai', title: 'AI', blurb: '', category: 'technology', defaultSourceIds: [] }],
       userTopicIds: new Set(['u1', 'u2', 'u3']),
-      freeTierCap: 3,
+      tier: free,
     });
-    const result = svc.canCloneTopic('t1');
-    expect(result).toBe(false);
+    expect(svc.canCloneTopic('t1')).toBe(false);
   });
 
-  it('allows clone when under cap', () => {
+  it('lets the same User clone once they are on the paid tier', () => {
     const svc = new DiscoverService({
       templates: [{ id: 't1', slug: 'ai', title: 'AI', blurb: '', category: 'technology', defaultSourceIds: [] }],
-      userTopicIds: new Set([]),
-      freeTierCap: 3,
+      userTopicIds: new Set(['u1', 'u2', 'u3']),
+      tier: paid,
     });
     expect(svc.canCloneTopic('t1')).toBe(true);
+  });
+
+  it('lets a free User clone while they are under the cap', () => {
+    const svc = new DiscoverService({
+      templates: [{ id: 't1', slug: 'ai', title: 'AI', blurb: '', category: 'technology', defaultSourceIds: [] }],
+      userTopicIds: new Set<string>(),
+      tier: free,
+    });
+    expect(svc.canCloneTopic('t1')).toBe(true);
+  });
+
+  it('still refuses a template the User already has, on any tier', () => {
+    for (const t of [free, paid]) {
+      const svc = new DiscoverService({
+        templates: [{ id: 't1', slug: 'ai', title: 'AI', blurb: '', category: 'technology', defaultSourceIds: [] }],
+        userTopicIds: new Set(['t1']),
+        tier: t,
+      });
+      expect(svc.canCloneTopic('t1'), `tier ${t}`).toBe(false);
+    }
   });
 });

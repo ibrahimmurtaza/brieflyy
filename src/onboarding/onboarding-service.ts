@@ -1,9 +1,11 @@
 import { z } from 'zod';
 
 import type { Clock } from '../domain/clock.js';
+import { DEFAULT_CLUSTER_WINDOW_DAYS } from '../domain/cluster-window.js';
 import type { RandomSource } from '../domain/crypto.js';
 import { slugify } from '../domain/slug.js';
 import { computeFirstBriefAt, isValidIanaTimezone, isValidDeliveryHour, isValidDeliveryMinute, type DeliveryTime } from '../domain/timezone.js';
+import { DEFAULT_TIER, resolveTier, topicCapFor } from '../domain/tier.js';
 import type {
   OnboardingState,
   Topic,
@@ -20,7 +22,12 @@ import type { TopicTemplateRepo } from '../repos/directory-repo.js';
 import type { UserRepo } from '../repos/user-repo.js';
 import { renderWelcomeEmail } from './welcome-email.js';
 
-export const FREE_TIER_TOPIC_CAP = 3;
+/**
+ * How many Topics the first-run picker asks for. This is a property of the
+ * onboarding flow, not of the tier: a paid user is still asked for three on the
+ * screen that introduces them, and is free to add as many as they like after it.
+ */
+export const INITIAL_TOPIC_COUNT = 3;
 
 export interface OnboardingServiceDeps {
   readonly topicTemplateRepo: TopicTemplateRepo;
@@ -86,6 +93,17 @@ export class OnboardingService {
     return this.topicRepo.listByUser(userId);
   }
 
+  /**
+   * How many Topics this User may hold at once, read from the tier they are on
+   * rather than from a constant, so moving a User onto the paid tier opens the
+   * cap without a code change.
+   */
+  async topicCapForUser(userId: UserId): Promise<number> {
+    const user = await this.userRepo.getById(userId);
+    if (!user) return topicCapFor(DEFAULT_TIER);
+    return topicCapFor(resolveTier(user));
+  }
+
   async selectTopics(input: SelectTopicsInput): Promise<SelectTopicsOutcome> {
     for (const id of input.templateIds) {
       const parsed = templateIdSchema.safeParse(id);
@@ -108,7 +126,7 @@ export class OnboardingService {
     }
 
     const total = input.templateIds.length + (freeformTitle ? 1 : 0);
-    if (total !== FREE_TIER_TOPIC_CAP) {
+    if (total !== INITIAL_TOPIC_COUNT) {
       return { status: 'invalid', reason: 'wrong_count' };
     }
 
@@ -122,7 +140,8 @@ export class OnboardingService {
 
     const existing = await this.topicRepo.listByUser(input.userId);
     const takenSlugs = new Set(await this.topicRepo.listSlugsByUser(input.userId));
-    if (existing.length + total > FREE_TIER_TOPIC_CAP) {
+    const cap = await this.topicCapForUser(input.userId);
+    if (existing.length + total > cap) {
       return { status: 'invalid', reason: 'paywall_tier_limit' };
     }
 
@@ -151,9 +170,9 @@ export class OnboardingService {
 
   /**
    * Add topics to a user who has already onboarded, rather than picking their
-   * initial three. A free user may hold at most FREE_TIER_TOPIC_CAP topics in
-   * total, so this fills the slots they have left and is refused once they are
-   * full; removing a topic frees a slot to fill again.
+   * initial three. The number they may hold comes from their tier, so this fills
+   * the slots they have left and is refused once they are full; removing a topic
+   * frees a slot to fill again.
    */
   async addTopics(input: SelectTopicsInput): Promise<SelectTopicsOutcome> {
     for (const id of input.templateIds) {
@@ -190,7 +209,8 @@ export class OnboardingService {
     }
 
     const existing = await this.topicRepo.listByUser(input.userId);
-    const remaining = FREE_TIER_TOPIC_CAP - existing.length;
+    const cap = await this.topicCapForUser(input.userId);
+    const remaining = cap - existing.length;
     if (total > remaining) {
       return { status: 'invalid', reason: 'paywall_tier_limit' };
     }
@@ -259,6 +279,7 @@ export class OnboardingService {
         },
         sourceIds: [...t.defaultSourceIds],
         cadence: 'daily',
+        clusterWindowDays: DEFAULT_CLUSTER_WINDOW_DAYS,
         createdAt: now,
         removedAt: null,
       };
@@ -286,6 +307,7 @@ export class OnboardingService {
         origin: { kind: 'freeform' },
         sourceIds: [],
         cadence: 'daily',
+        clusterWindowDays: DEFAULT_CLUSTER_WINDOW_DAYS,
         createdAt: now,
         removedAt: null,
       };

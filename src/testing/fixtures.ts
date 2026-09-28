@@ -1,13 +1,37 @@
+import { DEFAULT_CLUSTER_WINDOW_DAYS } from '../domain/cluster-window.js';
 import type {
   Cadence,
   Cluster,
   ClusterId,
+  OnboardingState,
+  Tier,
   Topic,
   TopicCategory,
   TopicId,
   TopicOrigin,
+  User,
   UserId,
 } from '../domain/types.js';
+
+export interface UserFixture {
+  readonly id: string;
+  readonly createdAt?: Date;
+  readonly onboardingState?: OnboardingState;
+  readonly tier?: Tier;
+}
+
+/**
+ * A User on the free tier with sensible defaults. Tests only state the fields
+ * they care about, so a new required field on User does not break every helper.
+ */
+export function makeUser(input: UserFixture): User {
+  return {
+    id: input.id as UserId,
+    createdAt: input.createdAt ?? new Date('2026-01-01T00:00:00Z'),
+    onboardingState: input.onboardingState ?? ('not_started' as OnboardingState),
+    tier: input.tier ?? ('free' as Tier),
+  };
+}
 
 export interface TopicFixture {
   readonly id: string;
@@ -17,6 +41,7 @@ export interface TopicFixture {
   readonly origin?: TopicOrigin;
   readonly sourceIds?: readonly string[];
   readonly cadence?: Cadence;
+  readonly clusterWindowDays?: number;
   readonly createdAt?: Date;
   readonly removedAt?: Date | null;
 }
@@ -36,6 +61,7 @@ export function makeTopic(input: TopicFixture): Topic {
     origin: input.origin ?? { kind: 'freeform' },
     sourceIds: input.sourceIds ?? [],
     cadence: input.cadence ?? 'daily',
+    clusterWindowDays: input.clusterWindowDays ?? DEFAULT_CLUSTER_WINDOW_DAYS,
     createdAt: input.createdAt ?? new Date('2026-09-01T00:00:00Z'),
     removedAt: input.removedAt ?? null,
   };
