@@ -158,6 +158,17 @@ function page(h: Harness, url: string) {
   });
 }
 
+/**
+ * The Source filter bar, or '' when the page has none.
+ *
+ * Scoped to the bar because `?source=` also appears in each Cluster's own
+ * Source links, which are a different control and are meant to be offered even
+ * when that Source is the one being filtered to.
+ */
+function filterBar(body: string): string {
+  return /<p class="filter-bar">(.*?)<\/p>/s.exec(body)?.[1] ?? '';
+}
+
 describe('HTTP: /topics/:slug as a LivingBrief', () => {
   let h: Harness;
 
@@ -346,21 +357,87 @@ describe('HTTP: /topics/:slug as a LivingBrief', () => {
     expect(resp.body).not.toContain('No stories yet');
   });
 
+  it('counts only the Clusters its way-out link can actually bring back', async () => {
+    const s1 = await givenStory(h, { id: 's1', title: 'Acme Corp unveils Foo' });
+    const s2 = await givenStory(h, {
+      id: 's2',
+      sourceId: 'the-guardian',
+      title: 'BrandX Inc talks to nobody',
+    });
+    const s3 = await givenStory(h, { id: 's3', title: 'Cement Co results surprise' });
+    await givenCluster(h, { id: 'cluster-1', storyId: s1, summary: 'Reuters one.', sourceIds: ['reuters'] });
+    await givenCluster(h, { id: 'cluster-2', storyId: s2, summary: 'Guardian one.', sourceIds: ['the-guardian'] });
+    await givenCluster(h, { id: 'cluster-3', storyId: s3, summary: 'Reuters two.', sourceIds: ['reuters'] });
+    // The User hides one Cluster from this Topic for good, then filters to a
+    // Source that matches nothing.
+    await h.app.inject({
+      method: 'POST',
+      url: '/topics/topic-1/feedback',
+      headers: { cookie: h.cookie },
+      payload: { clusterId: 'cluster-1', type: 'hide_source', scope: 'this_topic' },
+    });
+
+    const filtered = await page(h, '/topics/topic-1?source=the-guardian&hide=cluster-2');
+
+    // Three Clusters are Active, but a Feedback hide removes one of them for
+    // good, so the link can only promise the other two. Counting the Active set
+    // would have said "Show all 3".
+    expect(filtered.body).toContain('Show all 2 active clusters');
+    expect(filtered.body).not.toContain('Show all 3 active clusters');
+  });
+
+  it('does not offer a way out when Feedback alone is hiding everything', async () => {
+    const s1 = await givenStory(h, { id: 's1', title: 'Acme Corp unveils Foo' });
+    await givenCluster(h, { id: 'cluster-1', storyId: s1, summary: 'Reuters one.', sourceIds: ['reuters'] });
+    await h.app.inject({
+      method: 'POST',
+      url: '/topics/topic-1/feedback',
+      headers: { cookie: h.cookie },
+      payload: { clusterId: 'cluster-1', type: 'hide_source', scope: 'this_topic' },
+    });
+
+    const filtered = await page(h, '/topics/topic-1?source=the-guardian');
+
+    // A "Show all 0 active clusters" link would be a dead end: clearing the
+    // query string does not bring back a Cluster the User hid for good.
+    expect(filtered.body).not.toContain('No clusters match the current filter');
+    expect(filtered.body).not.toContain('Show all 0');
+    expect(filtered.body).toContain('you hid all 1 active cluster');
+  });
+
   it('drops the filter it is already applying rather than offering it again', async () => {
     const reutersStory = await givenStory(h, { id: 's1', title: 'Acme Corp unveils Foo' });
+    const guardianStory = await givenStory(h, {
+      id: 's2',
+      sourceId: 'the-guardian',
+      title: 'BrandX Inc talks to nobody',
+    });
     await givenCluster(h, {
       id: 'cluster-1',
       storyId: reutersStory,
       summary: 'A Reuters story about Acme Corp.',
       sourceIds: ['reuters'],
     });
+    await givenCluster(h, {
+      id: 'cluster-2',
+      storyId: guardianStory,
+      summary: 'A Guardian story about BrandX Inc.',
+      sourceIds: ['the-guardian'],
+    });
 
     const filtered = await page(h, '/topics/topic-1?source=reuters');
+    const bar = filterBar(filtered.body);
 
-    // The Guardian is not in the filtered brief, so it is not offered as a way
-    // to narrow further; the Source already applied links back to everything.
-    expect(filtered.body).not.toContain('?source=the-guardian');
-    expect(filtered.body).toContain('href="/topics/topic-1"');
+    // The Source being filtered to links back to everything rather than to
+    // itself. The other Source stays on offer even though its Cluster is
+    // filtered out, because the bar is built from the unfiltered set: every
+    // link there is one that can still show something.
+    expect(bar).toContain('?source=the-guardian');
+    expect(bar).not.toContain('?source=reuters');
+    expect(bar).toContain('href="/topics/topic-1"');
+    // And the filter really did remove the Guardian Cluster from the brief.
+    expect(filtered.body).not.toContain('A Guardian story about BrandX Inc.');
+    expect(filtered.body).toContain('A Reuters story about Acme Corp.');
   });
 
   it('shows the Cluster window the Topic is set to, and lets the User change it', async () => {
