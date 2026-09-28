@@ -189,6 +189,31 @@ describe('applySchema', () => {
     expect(topics[0]?.cadence).toBe('daily');
   });
 
+  it('adds topics.removed_at to a database created before soft delete existed', async () => {
+    const driver = createInMemorySqliteDriver();
+    driver.exec(LEGACY_SCHEMA_SQL);
+    driver.prepare(`INSERT INTO users (id) VALUES (?)`).run('user-1');
+    driver
+      .prepare(
+        `INSERT INTO topics (id, user_id, slug, title, blurb, category, origin_kind, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run('topic-1', 'user-1', 'ai', 'AI', 'AI news', 'technology', 'freeform', 1);
+
+    applySchema(driver);
+
+    const db = createDatabase({ driver });
+    const repo = new DrizzleTopicRepo(db);
+
+    // An upgraded topic is still active, and soft delete works on it.
+    const before = await repo.listByUser('user-1');
+    expect(before).toHaveLength(1);
+    expect(before[0]?.removedAt).toBeNull();
+
+    await repo.remove('topic-1', new Date('2026-02-01T00:00:00Z'));
+    expect(await repo.listByUser('user-1')).toHaveLength(0);
+  });
+
   it('leaves an already-migrated topics table alone', () => {
     const driver = createInMemorySqliteDriver();
     applySchema(driver);

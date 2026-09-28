@@ -86,8 +86,69 @@ export async function registerOnboardingRoutes(
     return reply
       .code(400)
       .type('text/html')
-      .send(pickTopicsErrorPage(humanReason(outcome.reason)));
+      .send(pickTopicsErrorPage(humanReason(outcome.reason, 'onboarding')));
   });
+
+  fastify.post('/pick-topics', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
+    if (!requireAuthPage(req, reply)) return reply;
+    const body = req.body;
+    const templateIds = readTemplateIds(body);
+    const freeformTitle = readField(body, 'freeformTitle');
+    const parsed = selectInputSchema.safeParse({ templateIds, freeformTitle });
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .type('text/html')
+        .send(pickTopicsErrorPage('Pick at least one topic.', '/pick-topics'));
+    }
+    const outcome = await onboardingService.addTopics({
+      userId: req.auth.user.id,
+      templateIds: parsed.data.templateIds,
+      ...(parsed.data.freeformTitle
+        ? { freeformTitle: parsed.data.freeformTitle }
+        : {}),
+    });
+    if (outcome.status === 'ok') {
+      return reply.code(302).header('location', '/topics').send();
+    }
+    if (outcome.reason === 'paywall_tier_limit') {
+      return reply.code(402).type('text/html').send(paywallPage());
+    }
+    return reply
+      .code(400)
+      .type('text/html')
+      .send(
+        pickTopicsErrorPage(humanReason(outcome.reason, 'manage'), '/pick-topics'),
+      );
+  });
+
+  fastify.post<{ Params: { slug: string } }>(
+    '/pick-topics/remove',
+    AUTHENTICATED_ROUTE_CONFIG,
+    async (req, reply) => {
+      if (!requireAuthPage(req, reply)) return reply;
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const slug =
+        typeof body.slug === 'string' && body.slug.length > 0
+          ? body.slug
+          : req.params.slug;
+      const outcome = await onboardingService.removeTopic(
+        req.auth.user.id,
+        slug,
+      );
+      if (outcome.status === 'ok') {
+        return reply.code(302).header('location', '/pick-topics').send();
+      }
+      return reply
+        .code(404)
+        .type('text/html')
+        .send(
+          notFoundHtml(
+            'That topic is not yours, or no longer exists.',
+          ),
+        );
+    },
+  );
 
   fastify.post('/onboarding/delivery-time', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
     if (!requireAuthPage(req, reply)) return reply;
@@ -101,8 +162,13 @@ export async function registerOnboardingRoutes(
         .type('text/html')
         .send(deliveryTimeErrorPage(req.auth.account.email, 'Please pick a valid time and timezone.'));
     }
+    const userId = req.auth.user.id;
+    // This screen exists to finish onboarding, so a valid submission always
+    // saves and moves on. Changing a time you already have is what
+    // /settings/delivery is for; the page there posts to its own endpoint. That
+    // keeps each endpoint to one job instead of guessing which one was meant.
     const outcome = await onboardingService.setDeliveryTime({
-      userId: req.auth.user.id,
+      userId,
       hour,
       minute,
       timezone,
@@ -224,14 +290,21 @@ function settingsDeliveryErrorPage(message: string): string {
 
 function humanReason(
   reason: Exclude<SelectTopicsOutcome, { status: 'ok' }>['reason'],
+  mode: 'onboarding' | 'manage',
 ): string {
+  // The onboarding form demands exactly three; the manage form fills the slots
+  // the user has left, so the count wording has to follow the flow.
   switch (reason) {
     case 'wrong_count':
-      return 'Please pick exactly 3 topics.';
+      return mode === 'onboarding'
+        ? 'Please pick exactly 3 topics.'
+        : 'Pick at least one topic.';
     case 'unknown_template':
       return 'One of the topics you selected is not in the Directory. Please pick again.';
     case 'duplicate_template':
-      return 'You picked the same topic more than once. Please pick 3 different ones.';
+      return mode === 'onboarding'
+        ? 'You picked the same topic more than once. Please pick 3 different ones.'
+        : 'You picked the same topic more than once. Please pick different ones.';
     case 'duplicate_freeform_slug':
       return 'You already have a topic with that name.';
     case 'paywall_tier_limit':
@@ -262,15 +335,40 @@ function paywallPage(): string {
     <p><strong>$15 / month</strong></p>
     <div class="actions">
       <a class="primary" href="/upgrade">Upgrade to paid</a>
-      <a class="secondary" href="/onboarding/pick-topics">Back to topic selection</a>
+      <a class="secondary" href="/pick-topics">Back to topic selection</a>
     </div>
   </main>
 </body>
 </html>`;
 }
 
-function pickTopicsErrorPage(message: string): string {
+function notFoundHtml(message: string): string {
   const safe = escapeHtml(message);
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Topic not found · Brieflyy</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 480px; margin: 4rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.4rem; margin: 0 0 0.5rem; }
+    p { color: #444; }
+    a { color: #1f6feb; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Topic not found</h1>
+    <p>${safe}</p>
+    <p><a href="/pick-topics">Back to your topics</a></p>
+  </main>
+</body>
+</html>`;
+}
+
+function pickTopicsErrorPage(message: string, backHref = '/onboarding/pick-topics'): string {
+  const safe = escapeHtml(message);
+  const safeHref = escapeHtml(backHref);
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -286,7 +384,7 @@ function pickTopicsErrorPage(message: string): string {
   <main>
     <h1>Topic selection</h1>
     <p>${safe}</p>
-    <p><a href="/onboarding/pick-topics">Try again</a></p>
+    <p><a href="${safeHref}">Try again</a></p>
   </main>
 </body>
 </html>`;
