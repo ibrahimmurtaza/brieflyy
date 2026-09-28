@@ -1,7 +1,11 @@
 import type { Clock } from '../domain/clock.js';
-import { extractEntities, extractKeyPhrases } from '../domain/extract.js';
-import { storyFingerprint } from '../domain/fingerprint.js';
+import { extractEntities, extractSignature } from '../domain/extract.js';
 import { safeExternalUrl } from '../domain/url.js';
+import {
+  bestStoryMatch,
+  normalizeSignature,
+  type StorySignature,
+} from '../domain/story-signature.js';
 import type { RandomSource } from '../domain/crypto.js';
 import type {
   Article,
@@ -112,7 +116,6 @@ export class IngestService {
     const touched = new Set<StoryId>();
     let inserted = 0;
     let merged = 0;
-    const windowStart = new Date(polledAt.getTime() - INGEST_WINDOW_MS);
 
     for (const entry of feed.entries) {
       if (entry.externalId.length === 0) continue;
@@ -130,31 +133,31 @@ export class IngestService {
         entry.title,
         entry.body,
       );
-      const keyPhrases = extractKeyPhrases(entry.body);
-      const fingerprint = storyFingerprint({
-        entities: entities.map((e) => e.canonicalName),
-        keyPhrases,
+      const signature = normalizeSignature(extractSignature(entry.body));
+
+      const candidates = await this.storyRepo.listCandidates({
+        sourceId: source.id,
+        publishedAt: entry.publishedAt,
+        windowMs: INGEST_WINDOW_MS,
       });
+      const match = bestStoryMatch(candidates, signature);
 
       let storyId: StoryId;
       let wasMerged = false;
-      const existingStory = await this.storyRepo.findByFingerprintInWindow({
-        sourceId: source.id,
-        fingerprint,
-        windowStart,
-      });
-      if (existingStory) {
-        storyId = existingStory.id;
+      if (match) {
+        storyId = match.id;
         await this.storyRepo.touch(storyId, polledAt);
-        wasMerged = existingStory.articleCount > 0;
+        await this.storyRepo.widenPublishedRange(storyId, entry.publishedAt);
+        wasMerged = match.articleCount > 0;
       } else {
         storyId = this.random.uuid() as StoryId;
         await this.storyRepo.insert({
           id: storyId,
           sourceId: source.id,
-          fingerprint,
+          signature,
           firstSeenAt: polledAt,
           lastSeenAt: polledAt,
+          published: { first: entry.publishedAt, last: entry.publishedAt },
         });
       }
 
@@ -171,8 +174,7 @@ export class IngestService {
         publishedAt: entry.publishedAt,
         ingestedAt: polledAt,
         entities,
-        keyPhrases,
-        fingerprint,
+        signature,
         storyId,
       };
 

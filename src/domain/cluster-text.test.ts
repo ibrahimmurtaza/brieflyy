@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import type { Article } from './types.js';
 import { bulletsFrom, extractSentences, oneLinerFrom } from './cluster-text.js';
+import { EMPTY_SIGNATURE } from './story-signature.js';
+
 
 function makeArticle(overrides: Partial<Article> & { readonly id: string }): Article {
   return {
@@ -13,8 +15,7 @@ function makeArticle(overrides: Partial<Article> & { readonly id: string }): Art
     publishedAt: new Date('2026-09-02T10:00:00Z'),
     ingestedAt: new Date('2026-09-02T10:00:00Z'),
     entities: [],
-    keyPhrases: [],
-    fingerprint: 'fp',
+    signature: EMPTY_SIGNATURE,
     storyId: 'story-1',
     ...overrides,
   };

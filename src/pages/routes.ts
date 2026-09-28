@@ -311,21 +311,32 @@ export async function registerPageRoutes(
         activeClusters = activeClusters.filter((c) => c.sourceIds.includes(sourceFilter));
       }
 
-      // Apply feedback-based filtering: hide clusters with active hide_source events
-      let hiddenIds = new Set<string>();
-      const queryHidden = (req.query.hide ? String(req.query.hide) : '').split(',').filter((s) => s.length > 0);
-      hiddenIds = new Set(queryHidden);
+      // Two ways a Cluster gets hidden, kept apart because only one of them is
+      // undone by dropping the query string. A Feedback hide is stored per User
+      // and outlives the request that set it.
+      const queryHidden = new Set(
+        (req.query.hide ? String(req.query.hide) : '')
+          .split(',')
+          .filter((s) => s.length > 0),
+      );
+      const feedbackHiddenIds = new Set<string>();
       if (opts.feedbackRepo) {
         const userEvents = await opts.feedbackRepo.listByUser(req.auth.user.id);
         const hideEvents = userEvents.filter((e) => e.feedbackType === 'hide_source');
         for (const ev of hideEvents) {
-          // Hide events reference clusters; apply scope to filter clusters
           if (ev.scope === 'global' || (ev.scope === 'this_topic' && ev.clusterId)) {
-            hiddenIds.add(ev.clusterId);
+            feedbackHiddenIds.add(ev.clusterId);
           }
         }
       }
-      activeClusters = activeClusters.filter((c) => !hiddenIds.has(c.id));
+      activeClusters = activeClusters.filter(
+        (c) => !queryHidden.has(c.id) && !feedbackHiddenIds.has(c.id),
+      );
+      // What the "show all" link will actually put back on the page: it drops
+      // the Source filter and a `hide=` the User typed, but nothing stored in
+      // Feedback. Counting from `active` instead would promise Clusters the
+      // link does not bring back.
+      const revealableCount = active.filter((c) => !feedbackHiddenIds.has(c.id)).length;
       const clusterArticles = new Map<string, readonly import('../domain/types.js').Article[]>();
       for (const c of activeClusters) {
         clusterArticles.set(c.id, await opts.clusterRepo.listArticlesByClusterId(c.id));
@@ -347,6 +358,7 @@ export async function registerPageRoutes(
           clusters: activeClusters,
           clusterCount: clusters.length,
           activeClusterCount: active.length,
+          revealableClusterCount: revealableCount,
           sourceFilter,
           sourcesById,
           visibleSourceIds: visibleSources,
@@ -982,6 +994,13 @@ function topicPage(input: {
    * three apart.
    */
   activeClusterCount: number;
+  /**
+   * How many Clusters the way-out link would restore: the Active ones that no
+   * stored Feedback hide has removed. Smaller than `activeClusterCount` when
+   * the User has hidden some of them for good, and the difference matters
+   * because the link can only undo a filter, not Feedback.
+   */
+  revealableClusterCount: number;
   sourceFilter: string | null;
   sourcesById: Map<string, { id: string; name: string }>;
   visibleSourceIds: Set<string>;
@@ -1100,11 +1119,17 @@ function emptyStateBlock(input: {
   readonly clusters: readonly Cluster[];
   readonly clusterCount: number;
   readonly activeClusterCount: number;
+  readonly revealableClusterCount: number;
   readonly topicSlug: string;
 }): string {
   if (input.clusters.length > 0) return '';
+  if (input.revealableClusterCount > 0) {
+    return `<p class="muted">No clusters match the current filter. <a href="/topics/${escapeHtml(input.topicSlug)}">Show all ${input.revealableClusterCount} active cluster${input.revealableClusterCount === 1 ? '' : 's'}</a></p>`;
+  }
+  // Everything still Active is hidden by stored Feedback, which no link on this
+  // page can undo. Saying "show all 0 clusters" here would be a dead end.
   if (input.activeClusterCount > 0) {
-    return `<p class="muted">No clusters match the current filter. <a href="/topics/${escapeHtml(input.topicSlug)}">Show all ${input.activeClusterCount} active cluster${input.activeClusterCount === 1 ? '' : 's'}</a></p>`;
+    return `<p class="muted">Nothing is showing because you hid all ${input.activeClusterCount} active cluster${input.activeClusterCount === 1 ? '' : 's'} on this topic.</p>`;
   }
   if (input.clusterCount > 0) {
     return `<p class="muted">Nothing is active on this topic right now. Its ${input.clusterCount} cluster${input.clusterCount === 1 ? ' has' : 's have'} been archived, and a Cluster becomes active again as its stories are covered.</p>`;

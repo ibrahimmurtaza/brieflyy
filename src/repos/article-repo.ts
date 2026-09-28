@@ -9,6 +9,7 @@ import {
   type ArticleRow,
   type EntityRow,
 } from '../db/schema.js';
+import { decodeSignature, encodeSignature } from '../domain/story-signature.js';
 import type {
   Article,
   ArticleId,
@@ -30,14 +31,17 @@ function rowToArticle(
     body: row.body,
     publishedAt: row.publishedAt,
     ingestedAt: row.ingestedAt,
-    fingerprint: row.fingerprint,
     storyId: (row.storyId ?? null) as StoryId | null,
     entities: entityRows.map((r) => ({
       id: r.id as EntityId,
       canonicalName: r.canonicalName,
       kind: r.kind,
     })),
-    keyPhrases: [],
+    // The signature an Article was matched on is part of how the pipeline
+    // recognises it, so it has to come back with it. An Article written before
+    // the column existed reads back empty, which says only that nothing has
+    // re-signed it yet.
+    signature: decodeSignature(row.signature),
   };
 }
 
@@ -50,11 +54,6 @@ export interface ArticleRepo {
     sourceId: SourceId,
     externalId: string,
   ): Promise<Article | null>;
-  findByFingerprintInWindow(input: {
-    readonly sourceId: SourceId;
-    readonly fingerprint: string;
-    readonly windowStart: Date;
-  }): Promise<readonly Article[]>;
   listBySourceIdsInWindow(input: {
     readonly sourceIds: readonly SourceId[];
     readonly windowStart: Date;
@@ -79,7 +78,7 @@ export class DrizzleArticleRepo implements ArticleRepo {
       body: input.article.body,
       publishedAt: input.article.publishedAt,
       ingestedAt: input.article.ingestedAt,
-      fingerprint: input.article.fingerprint,
+      signature: encodeSignature(input.article.signature),
       storyId: input.article.storyId,
     });
     for (const entityId of input.entityIds) {
@@ -107,28 +106,6 @@ export class DrizzleArticleRepo implements ArticleRepo {
     if (!row) return null;
     const byArticle = await this.loadEntitiesByArticleId([row.id]);
     return rowToArticle(row, byArticle.get(row.id) ?? []);
-  }
-
-  async findByFingerprintInWindow(input: {
-    readonly sourceId: SourceId;
-    readonly fingerprint: string;
-    readonly windowStart: Date;
-  }): Promise<readonly Article[]> {
-    const rows = (await this.db
-      .select()
-      .from(articles)
-      .where(
-        and(
-          eq(articles.sourceId, input.sourceId),
-          eq(articles.fingerprint, input.fingerprint),
-          gte(articles.publishedAt, input.windowStart),
-        ),
-      )) as readonly ArticleRow[];
-    if (rows.length === 0) return [];
-    const byArticle = await this.loadEntitiesByArticleId(
-      rows.map((r) => r.id),
-    );
-    return rows.map((row) => rowToArticle(row, byArticle.get(row.id) ?? []));
   }
 
   async listBySourceIdsInWindow(input: {

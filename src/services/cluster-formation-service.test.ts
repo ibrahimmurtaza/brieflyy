@@ -9,6 +9,7 @@ import { DrizzleSourceRepo } from '../repos/source-repo.js';
 import { DrizzleStoryRepo } from '../repos/story-repo.js';
 import { DrizzleTopicRepo } from '../repos/topic-repo.js';
 import { DrizzleUserRepo } from '../repos/user-repo.js';
+import { EMPTY_SIGNATURE } from '../domain/story-signature.js';
 import { CLUSTER_ACTIVE_VELOCITY_THRESHOLD } from './cluster-formation-service.js';
 import { ClusterFormationService } from './cluster-formation-service.js';
 import type { Clock } from '../domain/clock.js';
@@ -144,9 +145,10 @@ async function givenStory(
   await h.storyRepo.insert({
     id: input.storyId as StoryId,
     sourceId: input.sourceId ?? SOURCE_ID,
-    fingerprint: `fp-${input.storyId}`,
+    signature: EMPTY_SIGNATURE,
     firstSeenAt: seenAt,
     lastSeenAt: seenAt,
+    published: { first: seenAt, last: seenAt }
   });
   await h.articleRepo.insert({
     article: {
@@ -159,8 +161,7 @@ async function givenStory(
       publishedAt: seenAt,
       ingestedAt: seenAt,
       entities: [],
-      keyPhrases: [],
-      fingerprint: `fp-${input.storyId}`,
+      signature: EMPTY_SIGNATURE,
       storyId: input.storyId as StoryId,
     },
     entityIds,

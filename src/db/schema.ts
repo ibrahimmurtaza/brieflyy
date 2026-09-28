@@ -332,7 +332,12 @@ export const articles = sqliteTable(
     ingestedAt: integer('ingested_at', { mode: 'timestamp_ms' })
       .notNull()
       .default(sql`(unixepoch() * 1000)`),
-    fingerprint: text('fingerprint').notNull(),
+    /**
+     * The Article's Story signature, stored rather than hashed. Matching an
+     * Article against the Stories near it is a comparison, not an equality, so
+     * a hash of the signature would throw away the part that makes it useful.
+     */
+    signature: text('signature').notNull().default('{}'),
     storyId: text('story_id'),
   },
   (t) => ({
@@ -341,7 +346,6 @@ export const articles = sqliteTable(
       t.externalId,
     ),
     sourceIdx: index('articles_source_idx').on(t.sourceId),
-    fingerprintIdx: index('articles_fingerprint_idx').on(t.fingerprint),
     storyIdx: index('articles_story_idx').on(t.storyId),
     publishedIdx: index('articles_published_idx').on(t.publishedAt),
   }),
@@ -370,18 +374,32 @@ export const stories = sqliteTable(
     sourceId: text('source_id')
       .notNull()
       .references(() => sources.id, { onDelete: 'cascade' }),
-    fingerprint: text('fingerprint').notNull(),
+    /**
+     * The signature this Story was formed from. It is set once, by the Article
+     * that created the Story, and does not grow as copies arrive: a Story whose
+     * identity shifted every time another syndication copy landed would be a
+     * different Story each time, and the copies that were the point of it would
+     * not match.
+     */
+    signature: text('signature').notNull().default('{}'),
     firstSeenAt: integer('first_seen_at', { mode: 'timestamp_ms' }).notNull(),
     lastSeenAt: integer('last_seen_at', { mode: 'timestamp_ms' }).notNull(),
+    /**
+     * When this Story's oldest and newest Articles were published. The dedup
+     * window is measured against these rather than against when a poll happened
+     * to bring them in, so an Article republished from the archive today is
+     * compared with the Stories its own date puts it near.
+     */
+    firstPublishedAt: integer('first_published_at', { mode: 'timestamp_ms' })
+      .notNull()
+      .default(sql`0`),
+    lastPublishedAt: integer('last_published_at', { mode: 'timestamp_ms' })
+      .notNull()
+      .default(sql`0`),
   },
   (t) => ({
-    // A Story's identity is (source, fingerprint) *within its dedup window*, so
-    // the same fingerprint legitimately recurs in a later Story. Not unique.
-    sourceFingerprintIdx: index('stories_source_fingerprint_idx').on(
-      t.sourceId,
-      t.fingerprint,
-    ),
     sourceIdx: index('stories_source_idx').on(t.sourceId),
+    publishedIdx: index('stories_published_idx').on(t.lastPublishedAt),
   }),
 );
 

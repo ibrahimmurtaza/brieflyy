@@ -35,8 +35,11 @@ _Avoid_: post, item, document
 **Entity**: A named thing (person, organization, place, product, or concept) extracted from an Article by named-entity recognition. The key used for Cluster overlap and the unit of Trends.
 _Avoid_: tag, keyword, named entity
 
-**Story**: A deduped event — a group of near-duplicate Articles (same Entities and key phrases) within a 48–72h window. The working unit of the pipeline; the user never sees a Story directly.
+**Story**: A deduped event — a group of near-duplicate Articles published within a 48–72h window of each other. The working unit of the pipeline; the user never sees a Story directly.
 _Avoid_: event, article group
+
+**Story signature**: An Article's text-derived identity: its content words and its key phrases, stored and compared rather than hashed. Two Articles are one Story when enough of their signatures agree, and the threshold is a measured property of real wire copies rather than a constant that looks right.
+_Avoid_: fingerprint, fingerprint hash, article hash
 
 **Cluster**: The unit the user sees. A grouping of related Stories by Entity overlap, within a 7d window (per-topic tunable). Receives Feedback and is the target of Summarization. Its one-liner and bullets are its Cluster summary. A Cluster that is still picking up Stories is a new Cluster, not a new version of the old one.
 _Avoid_: story, topic, thread

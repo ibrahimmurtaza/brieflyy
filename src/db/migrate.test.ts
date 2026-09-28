@@ -8,6 +8,8 @@ import Database from 'better-sqlite3';
 import { createDatabase, createInMemorySqliteDriver } from './client.js';
 import { applySchema, migrateToDatabaseFile } from './migrate.js';
 import { DrizzleTopicRepo } from '../repos/topic-repo.js';
+import { decodeSignature } from '../domain/story-signature.js';
+import { signatureOf, WIRE_COPIES } from '../testing/story-fixtures.js';
 
 const LEGACY_SCHEMA_SQL = `
 CREATE TABLE users (
@@ -108,6 +110,46 @@ CREATE TABLE feedback_events (
   scope TEXT,
   timestamp INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
 );
+`;
+
+/**
+ * A database from before Stories and Articles were matched by comparison: both
+ * carried a `fingerprint` hash, each with an index on it, and neither had a
+ * stored signature or a publication range.
+ */
+const PRE_SIGNATURE_SQL = `
+CREATE TABLE sources (
+  id TEXT PRIMARY KEY NOT NULL,
+  slug TEXT NOT NULL,
+  name TEXT NOT NULL,
+  homepage_url TEXT NOT NULL,
+  feed_url TEXT,
+  last_polled_at INTEGER,
+  last_success_at INTEGER
+);
+CREATE UNIQUE INDEX sources_slug_unique ON sources (slug);
+CREATE TABLE articles (
+  id TEXT PRIMARY KEY NOT NULL,
+  source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+  external_id TEXT NOT NULL,
+  url TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  published_at INTEGER NOT NULL,
+  ingested_at INTEGER NOT NULL,
+  fingerprint TEXT NOT NULL,
+  story_id TEXT
+);
+CREATE UNIQUE INDEX articles_source_external_unique ON articles (source_id, external_id);
+CREATE INDEX articles_fingerprint_idx ON articles (fingerprint);
+CREATE TABLE stories (
+  id TEXT PRIMARY KEY NOT NULL,
+  source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+  fingerprint TEXT NOT NULL,
+  first_seen_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL
+);
+CREATE INDEX stories_source_fingerprint_idx ON stories (source_id, fingerprint);
 `;
 
 /**
@@ -407,11 +449,119 @@ describe('applySchema', () => {
     expect(indexIsUnique(driver, 'brief_plans_topic_user_idx')).toBe(true);
   });
 
-  it('leaves the story fingerprint index non-unique, so a fingerprint can recur in a later window', () => {
+  it('lets two Stories share a signature, because a signature recurs in a later window', () => {
     const driver = createInMemorySqliteDriver();
     driver.exec(PRE_FK_SCHEMA_SQL);
     driver.prepare(`INSERT INTO users (id) VALUES (?)`).run('user-1');
     applySchema(driver);
+    driver
+      .prepare(
+        `INSERT INTO sources (id, slug, name, homepage_url) VALUES (?, ?, ?, ?)`,
+      )
+      .run('src-1', 'outlet', 'Outlet', 'https://example.com');
+    const insertStory = (id: string, at: number): void => {
+      driver
+        .prepare(
+          `INSERT INTO stories (id, source_id, signature, first_seen_at, last_seen_at, first_published_at, last_published_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(id, 'src-1', '{"words":["acme"],"phrases":["acme launched"]}', at, at, at, at);
+    };
+    insertStory('story-1', 1);
+    expect(() => insertStory('story-2', 2)).not.toThrow();
+  });
+
+  it('replaces the retired fingerprint columns with the signature they stood in for', () => {
+    const driver = createInMemorySqliteDriver();
+    driver.exec(PRE_FK_SCHEMA_SQL);
+    applySchema(driver);
+
+    for (const table of ['articles', 'stories']) {
+      const columns = (
+        driver
+          .prepare(`SELECT name FROM pragma_table_info(?)`)
+          .all(table) as { name: string }[]
+      ).map((c) => c.name);
+      // Nothing reads the hash of a signature any more, and a column left
+      // behind reads like a Story's identity to whoever comes next.
+      expect(columns, table).not.toContain('fingerprint');
+      expect(columns, table).toContain('signature');
+    }
+    const storyColumns = (
+      driver.prepare(`SELECT name FROM pragma_table_info(?)`).all('stories') as {
+        name: string;
+      }[]
+    ).map((c) => c.name);
+    expect(storyColumns).toEqual(
+      expect.arrayContaining(['first_published_at', 'last_published_at']),
+    );
+    expect(
+      driver
+        .prepare(
+          `SELECT name FROM sqlite_master WHERE type = 'index' AND name IN ('articles_fingerprint_idx', 'stories_source_fingerprint_idx')`,
+        )
+        .all(),
+    ).toEqual([]);
+  });
+
+  it('drops the fingerprint columns from a database that had them, indexes and all', () => {
+    const driver = createInMemorySqliteDriver();
+    driver.exec(PRE_SIGNATURE_SQL);
+    driver
+      .prepare(
+        `INSERT INTO sources (id, slug, name, homepage_url) VALUES (?, ?, ?, ?)`,
+      )
+      .run('src-1', 'outlet', 'Outlet', 'https://example.com');
+    driver
+      .prepare(
+        `INSERT INTO articles (id, source_id, external_id, url, title, body, published_at, ingested_at, fingerprint, story_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        'a-1',
+        'src-1',
+        'ext-1',
+        'https://example.com/1',
+        'A headline',
+        'Acme Corp launched Foo on Tuesday, an AI assistant for enterprise customers.',
+        1000,
+        1000,
+        'old-hash',
+        'story-1',
+      );
+
+    applySchema(driver);
+
+    for (const table of ['articles', 'stories']) {
+      const columns = (
+        driver
+          .prepare(`SELECT name FROM pragma_table_info(?)`)
+          .all(table) as { name: string }[]
+      ).map((c) => c.name);
+      expect(columns, table).not.toContain('fingerprint');
+    }
+    const indexes = (
+      driver
+        .prepare(
+          `SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name IN ('articles', 'stories')`,
+        )
+        .all() as { name: string }[]
+    ).map((r) => r.name);
+    expect(indexes).not.toContain('articles_fingerprint_idx');
+    expect(indexes).not.toContain('stories_source_fingerprint_idx');
+    // And the Article that was there is still there, with its Story.
+    expect(
+      (
+        driver
+          .prepare(`SELECT story_id FROM articles WHERE id = ?`)
+          .get('a-1') as { story_id: string }
+      ).story_id,
+    ).toBe('story-1');
+  });
+
+  it('derives a signature and a published range for a Story written before the columns existed', () => {
+    const driver = createInMemorySqliteDriver();
+    driver.exec(PRE_SIGNATURE_SQL);
     driver
       .prepare(
         `INSERT INTO sources (id, slug, name, homepage_url) VALUES (?, ?, ?, ?)`,
@@ -422,15 +572,70 @@ describe('applySchema', () => {
         `INSERT INTO stories (id, source_id, fingerprint, first_seen_at, last_seen_at)
          VALUES (?, ?, ?, ?, ?)`,
       )
-      .run('story-1', 'src-1', 'same-fingerprint', 1, 1);
-    expect(() =>
+      .run('story-1', 'src-1', 'old-hash', 1, 1);
+    const insertArticle = (id: string, publishedAt: number, body: string): void => {
       driver
         .prepare(
-          `INSERT INTO stories (id, source_id, fingerprint, first_seen_at, last_seen_at)
-           VALUES (?, ?, ?, ?, ?)`,
+          `INSERT INTO articles (id, source_id, external_id, url, title, body, published_at, ingested_at, fingerprint, story_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run('story-2', 'src-1', 'same-fingerprint', 2, 2),
-    ).not.toThrow();
+        .run(id, 'src-1', `ext-${id}`, 'https://example.com/x', 'Headline', body, publishedAt, 1, 'old-hash', 'story-1');
+    };
+    insertArticle(
+      'a-1',
+      1000,
+      WIRE_COPIES[0]!.body,
+    );
+    insertArticle(
+      'a-2',
+      2000,
+      WIRE_COPIES[1]!.body,
+    );
+
+    applySchema(driver);
+
+    const row = driver
+      .prepare(
+        `SELECT signature, first_published_at, last_published_at FROM stories WHERE id = ?`,
+      )
+      .get('story-1') as {
+      signature: string;
+      first_published_at: number;
+      last_published_at: number;
+    };
+    // Left empty, this Story would match nothing and the next poll of the feed
+    // would re-form it from scratch alongside the original.
+    expect(decodeSignature(row.signature)).toEqual(
+      signatureOf(WIRE_COPIES[0]!.body),
+    );
+    expect(row.first_published_at).toBe(1000);
+    expect(row.last_published_at).toBe(2000);
+  });
+
+  it('leaves a Story with no Articles to derive from, rather than inventing a range', () => {
+    const driver = createInMemorySqliteDriver();
+    driver.exec(PRE_SIGNATURE_SQL);
+    driver
+      .prepare(
+        `INSERT INTO sources (id, slug, name, homepage_url) VALUES (?, ?, ?, ?)`,
+      )
+      .run('src-1', 'outlet', 'Outlet', 'https://example.com');
+    driver
+      .prepare(
+        `INSERT INTO stories (id, source_id, fingerprint, first_seen_at, last_seen_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run('empty-story', 'src-1', 'old-hash', 1, 1);
+
+    applySchema(driver);
+
+    const row = driver
+      .prepare(
+        `SELECT signature, first_published_at FROM stories WHERE id = ?`,
+      )
+      .get('empty-story') as { signature: string; first_published_at: number };
+    expect(row.signature).toBe('{}');
+    expect(row.first_published_at).toBe(0);
   });
 
   it('lets a magic link exist before the account it will create', () => {
