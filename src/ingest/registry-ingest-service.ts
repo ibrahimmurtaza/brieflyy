@@ -21,6 +21,7 @@ export interface RegistryIngestCycleReport {
     readonly merged: number;
     readonly storiesAffected: number;
     readonly failures: number;
+    readonly skipped: number;
   };
 }
 
@@ -33,10 +34,19 @@ export interface RegistryIngestServiceDeps {
   readonly cycleIdFn: () => string;
 }
 
+export interface IngestOnceOptions {
+  /**
+   * Whether a Source is due to be polled, given when it was last polled and how
+   * many consecutive failures it has. Absent means every Source is due, which is
+   * what a caller with no backoff state of its own wants.
+   */
+  readonly isDue?: (sourceId: SourceId, now: Date) => boolean;
+}
+
 export class RegistryIngestService {
   constructor(private readonly deps: RegistryIngestServiceDeps) {}
 
-  async ingestOnce(): Promise<RegistryIngestCycleReport> {
+  async ingestOnce(options: IngestOnceOptions = {}): Promise<RegistryIngestCycleReport> {
     const startedAt = this.deps.clock.now();
     const cycleId = this.deps.cycleIdFn();
 
@@ -45,6 +55,12 @@ export class RegistryIngestService {
 
     const reports: IngestSourceReport[] = [];
     for (const sourceId of sourceIds) {
+      // A Source that is serving out a failure backoff is not polled. Retrying
+      // it anyway is what turns one broken feed into a slow cycle for everyone.
+      if (options.isDue && !options.isDue(sourceId, this.deps.clock.now())) {
+        reports.push(skippedReport(sourceId, this.deps.clock.now()));
+        continue;
+      }
       const report = await this.deps.ingest.ingestSource(sourceId);
       reports.push(report);
     }
@@ -102,24 +118,42 @@ function uniqueSourcesAcrossTopics(
   return out;
 }
 
+function skippedReport(sourceId: SourceId, now: Date): IngestSourceReport {
+  // Reported as a success so a skipped Source is not counted as a failure. It
+  // is already carrying its failure count, and this cycle did not add to it.
+  return {
+    sourceId,
+    polledAt: now,
+    success: true,
+    fetched: 0,
+    inserted: 0,
+    merged: 0,
+    storiesAffected: 0,
+    skipped: true,
+  };
+}
+
 function sumReports(reports: readonly IngestSourceReport[]): {
-  readonly fetched: number;
-  readonly inserted: number;
-  readonly merged: number;
-  readonly storiesAffected: number;
-  readonly failures: number;
+  fetched: number;
+  inserted: number;
+  merged: number;
+  storiesAffected: number;
+  failures: number;
+  skipped: number;
 } {
   let fetched = 0;
   let inserted = 0;
   let merged = 0;
   let storiesAffected = 0;
   let failures = 0;
+  let skipped = 0;
   for (const r of reports) {
     fetched += r.fetched;
     inserted += r.inserted;
     merged += r.merged;
-    if (!r.success) failures++;
+    if (r.skipped) skipped++;
+    else if (!r.success) failures++;
     else storiesAffected += r.storiesAffected;
   }
-  return { fetched, inserted, merged, storiesAffected, failures };
+  return { fetched, inserted, merged, storiesAffected, failures, skipped };
 }

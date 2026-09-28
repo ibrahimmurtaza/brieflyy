@@ -1,6 +1,7 @@
 import type { Clock } from '../domain/clock.js';
 import { extractEntities, extractKeyPhrases } from '../domain/extract.js';
 import { storyFingerprint } from '../domain/fingerprint.js';
+import { safeExternalUrl } from '../domain/url.js';
 import type { RandomSource } from '../domain/crypto.js';
 import type {
   Article,
@@ -38,6 +39,8 @@ export interface IngestSourceReport {
   readonly merged: number;
   readonly storiesAffected: number;
   readonly error?: string;
+  /** True when a failure backoff kept this Source out of the cycle entirely. */
+  readonly skipped?: boolean;
 }
 
 export class IngestService {
@@ -159,7 +162,10 @@ export class IngestService {
         id: this.random.uuid() as ArticleId,
         sourceId: source.id,
         externalId: entry.externalId,
-        url: entry.url,
+        // A feed chooses the scheme, and a scheme is what runs on click. The
+        // Article is kept either way: its text is what the rest of the pipeline
+        // works from, so only the link is dropped.
+        url: safeExternalUrl(entry.url) ?? '',
         title: entry.title,
         body: entry.body,
         publishedAt: entry.publishedAt,
@@ -180,9 +186,11 @@ export class IngestService {
       touched.add(storyId);
     }
 
-    if (inserted + merged > 0) {
-      await this.sourceRepo.recordSuccess(source.id, polledAt);
-    }
+    // The poll itself is the thing that succeeded. A feed with nothing new in
+    // it, or no entries at all, is a working Source, and only recording a
+    // success when something was inserted makes the status view report a
+    // perfectly healthy Source as never having succeeded.
+    await this.sourceRepo.recordSuccess(source.id, polledAt);
 
     return {
       sourceId: source.id,

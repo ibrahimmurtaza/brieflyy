@@ -58,6 +58,10 @@ export class IngestScheduler {
   private lastCycleAt: Date | null = null;
   private lastCycleId: string | null = null;
   private nextDueAt: Date | null = null;
+  /** Resolvers for a wait that `stop()` is allowed to cut short. */
+  private readonly waitInterruptions = new Set<() => void>();
+  /** The cycle currently running, so a shutdown can wait for it. */
+  private inFlightCycle: Promise<unknown> | null = null;
 
   constructor(deps: IngestSchedulerDeps) {
     this.registry = deps.registry;
@@ -83,7 +87,11 @@ export class IngestScheduler {
 
   async tick(): Promise<RegistryIngestCycleReport> {
     const now = this.clock.now();
-    const report = await this.registry.ingestOnce();
+    // The scheduler owns the backoff state, so it is the one that decides which
+    // Sources this cycle is allowed to reach out to.
+    const report = await this.registry.ingestOnce({
+      isDue: (sourceId, at) => this.isSourceDue(sourceId, at),
+    });
     this.applyReportBackoff(report, now);
     this.lastCycleAt = report.finishedAt;
     this.lastCycleId = report.cycleId;
@@ -97,8 +105,53 @@ export class IngestScheduler {
     this.nextDueAt = this.clock.now();
   }
 
-  stop(): void {
+  /**
+   * Stop the loop and wait for the cycle in flight to finish.
+   *
+   * Waiting matters on shutdown: a cycle that is halfway through writing
+   * Articles must not be abandoned, and a process that closes its database
+   * underneath one is how a half-written Story happens. Awaiting is also what
+   * makes this safe to call from a signal handler, where there is no second
+   * chance to notice.
+   */
+  async stop(): Promise<void> {
     this.running = false;
+    for (const interrupt of [...this.waitInterruptions]) interrupt();
+    this.waitInterruptions.clear();
+    if (this.inFlightCycle) await this.inFlightCycle;
+  }
+
+  /**
+   * Whether a Source is due to be polled now. This is what the registry asks
+   * before it reaches out, so a Source serving out a backoff is left alone
+   * rather than being polled on every cycle regardless.
+   */
+  isSourceDue(sourceId: SourceId, now: Date): boolean {
+    const backoff = this.backoffs.get(sourceId);
+    return backoff === undefined || backoff.nextAttemptAt.getTime() <= now.getTime();
+  }
+
+  /**
+   * Wait for `ms`, resolving false as soon as the loop is stopped.
+   *
+   * A plain timer would leave `runForever` parked for a whole interval after
+   * `stop()`, which for the default interval is half an hour of a process that
+   * will not exit. The wait is always routed through the injected sleep, even
+   * when it is zero, so a caller substituting one sees every wait the loop makes.
+   */
+  private async sleepUnlessStopped(ms: number): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const finish = (completed: boolean) => {
+        if (settled) return;
+        settled = true;
+        this.waitInterruptions.delete(interrupt);
+        resolve(completed);
+      };
+      const interrupt = () => finish(false);
+      this.waitInterruptions.add(interrupt);
+      void this.sleepFn(Math.max(0, ms)).then(() => finish(true));
+    });
   }
 
   async runForever(): Promise<void> {
@@ -108,12 +161,16 @@ export class IngestScheduler {
         this.nextDueAt ??
         new Date(this.clock.now().getTime() + this.intervalMs());
       const delay = Math.max(0, dueAt.getTime() - this.clock.now().getTime());
-      await this.sleepFn(delay);
+      if (!(await this.sleepUnlessStopped(delay))) break;
       if (!this.running) break;
+      const cycle = this.tick();
+      this.inFlightCycle = cycle;
       try {
-        await this.tick();
+        await cycle;
       } catch (err) {
         console.error('[IngestScheduler] tick failed:', err);
+      } finally {
+        this.inFlightCycle = null;
       }
     }
   }
@@ -179,6 +236,13 @@ export class IngestScheduler {
         lastError: null,
         nextAttemptAt: cycleFinishedAt,
       };
+      // A Source that was left alone this cycle keeps whatever it was already
+      // serving out. Counting the skip as a success would clear the backoff
+      // without ever having retried the Source.
+      if (r.skipped) {
+        this.backoffs.set(r.sourceId, existing);
+        continue;
+      }
       if (r.success) {
         existing.consecutiveFailures = 0;
         existing.lastError = null;

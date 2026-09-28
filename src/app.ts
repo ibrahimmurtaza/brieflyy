@@ -40,7 +40,7 @@ import { systemClock } from './domain/clock.js';
 import type { RandomSource } from './domain/crypto.js';
 import { nodeRandom } from './domain/crypto.js';
 import { IngestService } from './ingest/ingest-service.js';
-import { IngestScheduler } from './ingest/ingest-scheduler.js';
+import { IngestScheduler, type IngestSchedulerConfig } from './ingest/ingest-scheduler.js';
 import { RegistryIngestService } from './ingest/registry-ingest-service.js';
 import { registerIngestRoutes } from './ingest/routes.js';
 import { registerTierRoutes } from './billing/tier-routes.js';
@@ -58,6 +58,11 @@ export interface CreateAppOptions {
   readonly logger?: boolean | undefined;
   readonly feedFetcher?: FeedFetcher | undefined;
   readonly ingestScheduler?: IngestScheduler | undefined;
+  /**
+   * How often the ingest loop runs and how its per-Source failure backoff grows.
+   * Absent means the scheduler's own defaults.
+   */
+  readonly ingestConfig?: IngestSchedulerConfig | undefined;
   readonly magicLinkRateLimits?: MagicLinkRateLimits | undefined;
   /**
    * Register the development-only routes, including the switch that moves the
@@ -65,6 +70,13 @@ export interface CreateAppOptions {
    * it on, so a production instance has no route that can change a tier.
    */
   readonly devToolsEnabled?: boolean | undefined;
+  /**
+   * Run the ingest loop for as long as the application is up. Off by default so
+   * a test can build the application without a background timer racing its
+   * fixtures; the server entrypoint turns it on, which is what makes starting
+   * the process the only trigger ingest needs.
+   */
+  readonly ingestAutoStart?: boolean | undefined;
   /** Believe `X-Forwarded-For`, so per-caller limits work behind a proxy. */
   readonly trustProxy?: boolean | undefined;
 }
@@ -169,6 +181,7 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     db: opts.db,
     clock,
     feedFetcher: opts.feedFetcher,
+    config: opts.ingestConfig,
   });
 
   const rateLimits = opts.magicLinkRateLimits ?? MAGIC_LINK_RATE_LIMITS;
@@ -205,6 +218,18 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     await registerIngestRoutes(app, { scheduler: ingestScheduler });
   }
 
+  if (ingestScheduler && opts.ingestAutoStart === true) {
+    // The loop is deliberately not awaited: it runs for the life of the process.
+    void ingestScheduler.runForever();
+    // Closing the app is a shutdown request, so the loop is stopped and its
+    // in-flight cycle waited for before the caller tears anything else down.
+    // Awaiting a half-finished cycle is what keeps a Story from being written
+    // against a database that is already closing.
+    app.addHook('onClose', async () => {
+      await ingestScheduler.stop();
+    });
+  }
+
   if (opts.devToolsEnabled === true) {
     await registerTierRoutes(app, { userRepo });
   }
@@ -217,6 +242,7 @@ async function resolveIngestScheduler(input: {
   readonly db: Db;
   readonly clock: Clock;
   readonly feedFetcher: FeedFetcher | undefined;
+  readonly config: IngestSchedulerConfig | undefined;
 }): Promise<IngestScheduler | null> {
   if (input.provided) return input.provided;
   if (!input.feedFetcher) return null;
@@ -246,6 +272,7 @@ async function resolveIngestScheduler(input: {
     registry,
     sourceRepo,
     clock: input.clock,
+    ...(input.config ? { config: input.config } : {}),
   });
 }
 

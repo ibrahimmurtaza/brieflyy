@@ -18,7 +18,8 @@
     "verify": "pnpm typecheck && pnpm test && pnpm secrets:check",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts",
-    "db:push": "drizzle-kit push"
+    "db:push": "drizzle-kit push",
+    "ingest:check-feeds": "tsx src/ingest/check-feeds.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.0",

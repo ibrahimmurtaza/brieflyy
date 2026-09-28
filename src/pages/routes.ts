@@ -941,8 +941,12 @@ function topicPage(input: {
         .map((b) => `<li>${escapeHtml(b)}</li>`)
         .join('\n');
       const articles = input.clusterArticles?.get(c.id) ?? [];
+      // An Article whose link the feed gave us in an unusable scheme is stored
+      // with no URL at all. Rendering that as `href=""` would be a link to the
+      // page the User is already on, so the title is shown without one.
       const articleLinks = articles
-        .map((a) => `<a href="${escapeHtml(a.url)}" target="_blank" rel="noopener">${escapeHtml(a.title || 'Source article')}</a>`)
+        .filter((a) => a.url.length > 0)
+        .map((a) => `<a href="${escapeHtml(a.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(a.title || 'Source article')}</a>`)
         .join(', ');
       const hideLink = `<a href="?hide=${encodeURIComponent(String(c.id))}" class="hide-btn">Hide</a>`;
       const feedbackButtons = `<form method="POST" action="/topics/${escapeHtml(input.topicSlug)}/feedback" style="display:inline;margin-right:0.5rem;">

@@ -1,21 +1,25 @@
 {
   "sources": [
-    { "slug": "reuters", "name": "Reuters", "homepageUrl": "https://www.reuters.com", "feedUrl": "https://www.reuters.com/rss/topNews" },
-    { "slug": "associated-press", "name": "Associated Press", "homepageUrl": "https://apnews.com" },
-    { "slug": "the-guardian", "name": "The Guardian", "homepageUrl": "https://www.theguardian.com" },
-    { "slug": "bbc-news", "name": "BBC News", "homepageUrl": "https://www.bbc.com/news" },
-    { "slug": "arstechnica", "name": "Ars Technica", "homepageUrl": "https://arstechnica.com" },
-    { "slug": "the-verge", "name": "The Verge", "homepageUrl": "https://www.theverge.com" },
-    { "slug": "wired", "name": "Wired", "homepageUrl": "https://www.wired.com" },
-    { "slug": "hacker-news", "name": "Hacker News", "homepageUrl": "https://news.ycombinator.com" },
-    { "slug": "nature", "name": "Nature", "homepageUrl": "https://www.nature.com" },
-    { "slug": "scientific-american", "name": "Scientific American", "homepageUrl": "https://www.scientificamerican.com" },
-    { "slug": "science-news", "name": "Science News", "homepageUrl": "https://www.sciencenews.org" },
-    { "slug": "quanta-magazine", "name": "Quanta Magazine", "homepageUrl": "https://www.quantamagazine.org" },
-    { "slug": "bloomberg", "name": "Bloomberg", "homepageUrl": "https://www.bloomberg.com" },
-    { "slug": "financial-times", "name": "Financial Times", "homepageUrl": "https://www.ft.com" },
-    { "slug": "the-wall-street-journal", "name": "The Wall Street Journal", "homepageUrl": "https://www.wsj.com" },
-    { "slug": "politico", "name": "Politico", "homepageUrl": "https://www.politico.com" }
+    { "slug": "the-guardian", "name": "The Guardian", "homepageUrl": "https://www.theguardian.com", "feedUrl": "https://www.theguardian.com/world/rss" },
+    { "slug": "bbc-news", "name": "BBC News", "homepageUrl": "https://www.bbc.com/news", "feedUrl": "https://feeds.bbci.co.uk/news/rss.xml" },
+    { "slug": "npr-news", "name": "NPR", "homepageUrl": "https://www.npr.org", "feedUrl": "https://feeds.npr.org/1001/rss.xml" },
+    { "slug": "sky-news", "name": "Sky News", "homepageUrl": "https://news.sky.com", "feedUrl": "https://feeds.skynews.com/feeds/rss/world.xml" },
+    { "slug": "the-verge", "name": "The Verge", "homepageUrl": "https://www.theverge.com", "feedUrl": "https://www.theverge.com/rss/index.xml" },
+    { "slug": "arstechnica", "name": "Ars Technica", "homepageUrl": "https://arstechnica.com", "feedUrl": "https://feeds.arstechnica.com/arstechnica/index" },
+    { "slug": "wired", "name": "Wired", "homepageUrl": "https://www.wired.com", "feedUrl": "https://www.wired.com/feed/rss" },
+    { "slug": "techcrunch", "name": "TechCrunch", "homepageUrl": "https://techcrunch.com", "feedUrl": "https://techcrunch.com/feed/" },
+    { "slug": "engadget", "name": "Engadget", "homepageUrl": "https://www.engadget.com", "feedUrl": "https://www.engadget.com/rss.xml" },
+    { "slug": "cnbc", "name": "CNBC", "homepageUrl": "https://www.cnbc.com", "feedUrl": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114" },
+    { "slug": "cnbc-technology", "name": "CNBC Technology", "homepageUrl": "https://www.cnbc.com/technology/", "feedUrl": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=19854910" },
+    { "slug": "cnbc-finance", "name": "CNBC Finance", "homepageUrl": "https://www.cnbc.com/finance/", "feedUrl": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664" },
+    { "slug": "marketwatch", "name": "MarketWatch", "homepageUrl": "https://www.marketwatch.com", "feedUrl": "https://feeds.content.dowjones.io/public/rss/mw_topstories" },
+    { "slug": "nature", "name": "Nature", "homepageUrl": "https://www.nature.com", "feedUrl": "https://www.nature.com/nature.rss" },
+    { "slug": "science-news", "name": "Science News", "homepageUrl": "https://www.sciencenews.org", "feedUrl": "https://www.sciencenews.org/feed" },
+    { "slug": "scientific-american", "name": "Scientific American", "homepageUrl": "https://www.scientificamerican.com", "feedUrl": "http://www.scientificamerican.com/platform/syndication/rss/" },
+    { "slug": "quanta-magazine", "name": "Quanta Magazine", "homepageUrl": "https://www.quantamagazine.org", "feedUrl": "https://www.quantamagazine.org/feed/" },
+    { "slug": "phys-org", "name": "Phys.org", "homepageUrl": "https://phys.org", "feedUrl": "https://phys.org/rss-feed/" },
+    { "slug": "politico", "name": "Politico", "homepageUrl": "https://www.politico.com", "feedUrl": "https://rss.politico.com/politics-news.xml" },
+    { "slug": "hacker-news", "name": "Hacker News", "homepageUrl": "https://news.ycombinator.com", "feedUrl": "https://hnrss.org/frontpage" }
   ],
   "templates": [
     {
@@ -23,56 +27,56 @@
       "title": "World news",
       "blurb": "Major international stories, day by day.",
       "category": "news",
-      "defaultSourceSlugs": ["reuters", "associated-press", "the-guardian", "bbc-news"]
-    },
-    {
-      "slug": "tech-industry",
-      "title": "Tech industry",
-      "blurb": "Product launches, earnings, and moves at the big platforms.",
-      "category": "technology",
-      "defaultSourceSlugs": ["the-verge", "wired", "arstechnica"]
-    },
-    {
-      "slug": "ai-and-ml",
-      "title": "AI & machine learning",
-      "blurb": "Research, model releases, and the people building them.",
-      "category": "technology",
-      "defaultSourceSlugs": ["arstechnica", "the-verge", "wired", "quanta-magazine"]
-    },
-    {
-      "slug": "startups",
-      "title": "Startups",
-      "blurb": "Funding rounds, exits, and the early-stage scene.",
-      "category": "business",
-      "defaultSourceSlugs": ["wired", "the-verge", "bloomberg"]
-    },
-    {
-      "slug": "markets",
-      "title": "Markets",
-      "blurb": "Equities, macro, and what moved today.",
-      "category": "business",
-      "defaultSourceSlugs": ["bloomberg", "financial-times", "the-wall-street-journal"]
-    },
-    {
-      "slug": "natural-sciences",
-      "title": "Natural sciences",
-      "blurb": "Physics, chemistry, biology — the week's papers and findings.",
-      "category": "science",
-      "defaultSourceSlugs": ["nature", "scientific-american", "science-news"]
-    },
-    {
-      "slug": "climate",
-      "title": "Climate",
-      "blurb": "Climate science, policy, and the energy transition.",
-      "category": "science",
-      "defaultSourceSlugs": ["nature", "scientific-american", "bbc-news"]
+      "defaultSourceSlugs": ["the-guardian", "bbc-news", "npr-news", "sky-news"]
     },
     {
       "slug": "us-politics",
       "title": "US politics",
       "blurb": "Washington, the White House, and the legislative agenda.",
       "category": "policy",
-      "defaultSourceSlugs": ["politico", "the-guardian", "bbc-news"]
+      "defaultSourceSlugs": ["politico", "npr-news", "the-guardian", "bbc-news"]
+    },
+    {
+      "slug": "tech-industry",
+      "title": "Tech industry",
+      "blurb": "Product launches, earnings, and moves at the big platforms.",
+      "category": "technology",
+      "defaultSourceSlugs": ["the-verge", "wired", "arstechnica", "engadget"]
+    },
+    {
+      "slug": "ai-and-ml",
+      "title": "AI & machine learning",
+      "blurb": "Research, model releases, and the people building them.",
+      "category": "technology",
+      "defaultSourceSlugs": ["arstechnica", "the-verge", "cnbc-technology", "quanta-magazine"]
+    },
+    {
+      "slug": "startups",
+      "title": "Startups",
+      "blurb": "Funding rounds, exits, and the early-stage scene.",
+      "category": "business",
+      "defaultSourceSlugs": ["techcrunch", "the-verge", "cnbc"]
+    },
+    {
+      "slug": "markets",
+      "title": "Markets",
+      "blurb": "Equities, macro, and what moved today.",
+      "category": "business",
+      "defaultSourceSlugs": ["cnbc-finance", "marketwatch", "cnbc"]
+    },
+    {
+      "slug": "natural-sciences",
+      "title": "Natural sciences",
+      "blurb": "Physics, chemistry, biology — the week's papers and findings.",
+      "category": "science",
+      "defaultSourceSlugs": ["nature", "science-news", "scientific-american", "phys-org"]
+    },
+    {
+      "slug": "climate",
+      "title": "Climate",
+      "blurb": "Climate science, policy, and the energy transition.",
+      "category": "science",
+      "defaultSourceSlugs": ["phys-org", "scientific-american", "the-guardian", "bbc-news"]
     },
     {
       "slug": "tech-policy",

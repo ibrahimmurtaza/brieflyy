@@ -105,6 +105,12 @@ export interface ServerConfig {
   readonly googleOAuthClientId: string | undefined;
   readonly googleOAuthClientSecret: string | undefined;
   readonly ingestEnabled: boolean;
+  /** How long to wait between ingest cycles. */
+  readonly ingestIntervalMs: number;
+  /** The first failure backoff step; each further failure doubles it. */
+  readonly ingestBackoffBaseMs: number;
+  /** The ceiling on the doubling. */
+  readonly ingestBackoffMaxMs: number;
   readonly cookieSecure: boolean;
   /**
    * Whether to register the development-only routes, such as the switch that
@@ -150,6 +156,9 @@ export function loadServerConfig(env: EnvSource): ServerConfig {
     googleOAuthClientId: readOptionalString(env, 'GOOGLE_OAUTH_CLIENT_ID'),
     googleOAuthClientSecret: readOptionalString(env, 'GOOGLE_OAUTH_CLIENT_SECRET'),
     ingestEnabled: readBool(env, 'INGEST_ENABLED', true),
+    ingestIntervalMs: readInt(env, 'INGEST_INTERVAL_MS', 30 * 60 * 1000),
+    ingestBackoffBaseMs: readInt(env, 'INGEST_BACKOFF_BASE_MS', 60 * 1000),
+    ingestBackoffMaxMs: readInt(env, 'INGEST_BACKOFF_MAX_MS', 30 * 60 * 1000),
     devToolsEnabled: readBool(env, 'DEV_TOOLS_ENABLED', !isProduction(env)),
     cookieSecure: readBool(env, 'COOKIE_SECURE', isProduction(env)),
     trustProxy: readBool(env, 'TRUST_PROXY', false),
