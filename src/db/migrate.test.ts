@@ -110,6 +110,66 @@ CREATE TABLE feedback_events (
 );
 `;
 
+/**
+ * A database from after clusters gained their foreign key, but before velocity
+ * became a Stories-per-day rate and before the per-Topic window existed. The
+ * clusters table is already correct as far as foreign keys go, so only a
+ * column-type change can be what rebuilds it.
+ */
+const PRE_VELOCITY_REAL_SQL = `
+CREATE TABLE users (
+  id TEXT PRIMARY KEY NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+  onboarding_state TEXT NOT NULL DEFAULT 'not_started',
+  tier TEXT NOT NULL DEFAULT 'free'
+);
+CREATE TABLE topics (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  slug TEXT NOT NULL,
+  title TEXT NOT NULL,
+  blurb TEXT NOT NULL,
+  category TEXT NOT NULL,
+  origin_kind TEXT NOT NULL,
+  origin_template_id TEXT,
+  cadence TEXT NOT NULL DEFAULT 'daily',
+  created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+  removed_at INTEGER
+);
+CREATE TABLE clusters (
+  id TEXT PRIMARY KEY NOT NULL,
+  topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  bullet_points TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL,
+  article_count INTEGER NOT NULL,
+  velocity INTEGER NOT NULL,
+  source_ids TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'active'
+);
+CREATE TABLE cluster_stories (
+  cluster_id TEXT NOT NULL REFERENCES clusters(id) ON DELETE CASCADE,
+  story_id TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE
+);
+CREATE TABLE stories (
+  id TEXT PRIMARY KEY NOT NULL,
+  source_id TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  first_seen_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL
+);
+CREATE TABLE feedback_events (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  cluster_id TEXT NOT NULL REFERENCES clusters(id) ON DELETE CASCADE,
+  feedback_type TEXT NOT NULL,
+  scope TEXT,
+  timestamp INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+);
+`;
+
 function foreignKeys(
   driver: Database.Database,
   table: string,
@@ -119,6 +179,18 @@ function foreignKeys(
       .prepare(`SELECT "from", "table" FROM pragma_foreign_key_list(?)`)
       .all(table) as { from: string; table: string }[]
   ).map((r) => ({ from: r.from, table: r.table }));
+}
+
+/** The declared SQL type of a column, as SQLite reports it. */
+function columnType(
+  driver: Database.Database,
+  table: string,
+  column: string,
+): string | undefined {
+  const row = driver
+    .prepare(`SELECT type FROM pragma_table_info(?) WHERE name = ?`)
+    .get(table, column) as { type: string } | undefined;
+  return row?.type;
 }
 
 function indexIsUnique(driver: Database.Database, name: string): boolean {
@@ -461,6 +533,71 @@ describe('applySchema', () => {
         )
         .run('cluster-1', 'no-such-topic', 'C', 'S', '[]', 1, 1, 1, 1, ''),
     ).toThrow(/FOREIGN KEY constraint failed/);
+  });
+
+  it('gives every existing Topic the default Cluster window', () => {
+    const driver = createInMemorySqliteDriver();
+    driver.exec(PRE_VELOCITY_REAL_SQL);
+    driver.prepare(`INSERT INTO users (id) VALUES (?)`).run('user-1');
+    driver
+      .prepare(
+        `INSERT INTO topics (id, user_id, slug, title, blurb, category, origin_kind, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run('topic-1', 'user-1', 'ai', 'AI', 'AI news', 'technology', 'freeform', 1);
+
+    applySchema(driver);
+
+    const row = driver
+      .prepare(`SELECT cluster_window_days FROM topics WHERE id = ?`)
+      .get('topic-1') as { cluster_window_days: number } | undefined;
+    expect(row?.cluster_window_days).toBe(7);
+  });
+
+  it('widens velocity to a real number so a fractional rate survives', () => {
+    const driver = createInMemorySqliteDriver();
+    driver.exec(PRE_VELOCITY_REAL_SQL);
+    driver.prepare(`INSERT INTO users (id) VALUES (?)`).run('user-1');
+    driver
+      .prepare(
+        `INSERT INTO topics (id, user_id, slug, title, blurb, category, origin_kind, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run('topic-1', 'user-1', 'ai', 'AI', 'AI news', 'technology', 'freeform', 1);
+    expect(columnType(driver, 'clusters', 'velocity')).toBe('INTEGER');
+
+    applySchema(driver);
+
+    expect(columnType(driver, 'clusters', 'velocity')).toBe('REAL');
+  });
+
+  it('keeps a Cluster a fractional velocity is written into', () => {
+    const driver = createInMemorySqliteDriver();
+    driver.exec(PRE_VELOCITY_REAL_SQL);
+    driver.prepare(`INSERT INTO users (id) VALUES (?)`).run('user-1');
+    driver
+      .prepare(
+        `INSERT INTO topics (id, user_id, slug, title, blurb, category, origin_kind, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run('topic-1', 'user-1', 'ai', 'AI', 'AI news', 'technology', 'freeform', 1);
+    driver
+      .prepare(
+        `INSERT INTO clusters (id, topic_id, title, summary, bullet_points, created_at, last_seen_at, article_count, velocity, source_ids)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run('cluster-1', 'topic-1', 'Kept', 'S', '[]', 1, 1, 1, 1, '');
+
+    applySchema(driver);
+
+    driver
+      .prepare(`UPDATE clusters SET velocity = ? WHERE id = ?`)
+      .run(0.142857, 'cluster-1');
+    const row = driver
+      .prepare(`SELECT velocity, title FROM clusters WHERE id = ?`)
+      .get('cluster-1') as { velocity: number; title: string } | undefined;
+    expect(row?.title).toBe('Kept');
+    expect(row?.velocity).toBeCloseTo(0.142857, 6);
   });
 });
 

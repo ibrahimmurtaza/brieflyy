@@ -69,6 +69,15 @@ describe('DrizzleClusterRepo', () => {
       tier: 'free',
     });
     await topicRepo.insert(makeTopic({ id: 'topic-1', userId: 'user-1' }));
+    await sourceRepo.insert({
+      id: 'src-test',
+      slug: 'test',
+      name: 'Test Source',
+      homepageUrl: 'https://example.com',
+      feedUrl: 'https://example.com/feed',
+      lastPolledAt: null,
+      lastSuccessAt: null,
+    });
   });
 
   it('creates a Cluster with extractive summary and bullet points from Stories', async () => {
@@ -205,5 +214,91 @@ describe('DrizzleClusterRepo', () => {
     expect(clusters[0]?.title).toBe('Cluster 1');
     expect(clusters[1]?.title).toBe('Cluster 2');
     expect(clusters.map((c) => c.title)).toEqual(['Cluster 1', 'Cluster 2']);
+  });
+
+  it('stores a velocity that is a rate rather than a whole number', async () => {
+    await clusterRepo.insert(
+      makeCluster({ id: 'cluster-1', topicId: 'topic-1', velocity: 2 / 7 }),
+      [],
+    );
+
+    const found = await clusterRepo.findById('cluster-1');
+
+    expect(found?.velocity).toBeCloseTo(2 / 7, 6);
+  });
+
+  it('re-forming a Cluster updates it rather than raising a duplicate-key error', async () => {
+    const now = new Date('2026-09-02T12:00:00Z');
+    const storyId = 'story-1' as StoryId;
+    await storyRepo.insert({
+      id: storyId,
+      sourceId: 'src-test',
+      fingerprint: 'fp1',
+      firstSeenAt: now,
+      lastSeenAt: now,
+    });
+    await clusterRepo.insert(
+      makeCluster({
+        id: 'cluster-1',
+        topicId: 'topic-1',
+        summary: 'First pass at this Cluster.',
+        velocity: 1,
+      }),
+      [storyId],
+    );
+
+    await clusterRepo.insert(
+      makeCluster({
+        id: 'cluster-1',
+        topicId: 'topic-1',
+        summary: 'Second pass at this Cluster.',
+        velocity: 3,
+        lastSeenAt: new Date('2026-09-02T13:00:00Z'),
+      }),
+      [storyId],
+    );
+
+    const clusters = await clusterRepo.listByTopicId('topic-1');
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0]?.summary).toBe('Second pass at this Cluster.');
+    expect(clusters[0]?.velocity).toBe(3);
+  });
+
+  it('archives the Clusters a re-form left behind', async () => {
+    const now = new Date('2026-09-02T12:00:00Z');
+    await clusterRepo.insert(makeCluster({ id: 'cluster-1', topicId: 'topic-1' }), []);
+    await clusterRepo.insert(makeCluster({ id: 'cluster-2', topicId: 'topic-1' }), []);
+
+    const archived = await clusterRepo.archiveExcluding(
+      'topic-1',
+      ['cluster-2'],
+      new Date('2026-09-02T13:00:00Z'),
+    );
+
+    expect(archived).toBe(1);
+    const clusters = await clusterRepo.listByTopicId('topic-1');
+    expect(clusters.find((c) => c.id === 'cluster-1')?.state).toBe('archive');
+    expect(clusters.find((c) => c.id === 'cluster-2')?.state).toBe('active');
+  });
+
+  it('archives every Cluster of a Topic that has none left to show', async () => {
+    await clusterRepo.insert(makeCluster({ id: 'cluster-1', topicId: 'topic-1' }), []);
+
+    const archived = await clusterRepo.archiveExcluding('topic-1', [], new Date());
+
+    expect(archived).toBe(1);
+    const clusters = await clusterRepo.listByTopicId('topic-1');
+    expect(clusters.every((c) => c.state === 'archive')).toBe(true);
+  });
+
+  it('leaves another Topic alone when archiving', async () => {
+    await topicRepo.insert(makeTopic({ id: 'topic-2', userId: 'user-1' }));
+    await clusterRepo.insert(makeCluster({ id: 'cluster-1', topicId: 'topic-1' }), []);
+    await clusterRepo.insert(makeCluster({ id: 'cluster-2', topicId: 'topic-2' }), []);
+
+    await clusterRepo.archiveExcluding('topic-1', [], new Date());
+
+    const other = await clusterRepo.findById('cluster-2');
+    expect(other?.state).toBe('active');
   });
 });

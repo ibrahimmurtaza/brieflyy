@@ -38,6 +38,15 @@ export interface IngestSchedulerDeps {
   readonly clock: Clock;
   readonly config?: IngestSchedulerConfig;
   readonly sleep?: (ms: number) => Promise<void>;
+  /**
+   * Runs at the end of a cycle, once the Stories it wrote have settled.
+   *
+   * This is where Cluster formation hangs: Clusters are a grouping of the Stories
+   * a cycle produced, so forming them any earlier would group against a window
+   * the cycle has not finished filling. Absent means the caller only wants
+   * Articles ingested.
+   */
+  readonly afterCycle?: (report: RegistryIngestCycleReport) => Promise<void>;
 }
 
 interface SourceBackoff {
@@ -51,6 +60,7 @@ export class IngestScheduler {
   private readonly sourceRepo: SourceRepo;
   private readonly clock: Clock;
   private readonly config: IngestSchedulerConfig;
+  private readonly afterCycle: ((report: RegistryIngestCycleReport) => Promise<void>) | undefined;
   private sleepFn: (ms: number) => Promise<void>;
 
   private readonly backoffs = new Map<SourceId, SourceBackoff>();
@@ -68,6 +78,7 @@ export class IngestScheduler {
     this.sourceRepo = deps.sourceRepo;
     this.clock = deps.clock;
     this.config = deps.config ?? DEFAULT_INGEST_SCHEDULER_CONFIG;
+    this.afterCycle = deps.afterCycle;
     this.sleepFn =
       deps.sleep ??
       ((ms: number): Promise<void> =>
@@ -93,6 +104,10 @@ export class IngestScheduler {
       isDue: (sourceId, at) => this.isSourceDue(sourceId, at),
     });
     this.applyReportBackoff(report, now);
+    // After the backoff state, so the cycle is finished as far as the registry
+    // and the scheduler are concerned before anything downstream reads what it
+    // wrote.
+    if (this.afterCycle) await this.afterCycle(report);
     this.lastCycleAt = report.finishedAt;
     this.lastCycleId = report.cycleId;
     this.nextDueAt = this.computeNextDueAt(this.clock.now());

@@ -122,6 +122,12 @@ export interface Topic {
   readonly origin: TopicOrigin;
   readonly sourceIds: readonly SourceId[];
   readonly cadence: Cadence;
+  /**
+   * How far back this Topic looks when it forms Clusters, in days. The glossary
+   * makes the 7d window a per-Topic tunable; `DEFAULT_CLUSTER_WINDOW_DAYS` is
+   * what a Topic starts on.
+   */
+  readonly clusterWindowDays: number;
   readonly createdAt: Date;
   readonly removedAt: Date | null;
 }

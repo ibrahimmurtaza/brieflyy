@@ -1,6 +1,7 @@
 import { and, asc, eq, inArray, isNull } from 'drizzle-orm';
 
 import type { Db } from '../db/client.js';
+import { DEFAULT_CLUSTER_WINDOW_DAYS, clampClusterWindowDays } from '../domain/cluster-window.js';
 import {
   topicSources,
   topics,
@@ -31,6 +32,7 @@ function rowToTopic(row: TopicRow, sourceIds: readonly string[]): Topic {
     origin,
     sourceIds,
     cadence: (row.cadence ?? 'daily') as Cadence,
+    clusterWindowDays: row.clusterWindowDays,
     createdAt: row.createdAt,
     removedAt: row.removedAt ?? null,
   };
@@ -59,6 +61,13 @@ export interface TopicRepo {
   listByUser(userId: UserId): Promise<readonly Topic[]>;
   listAll(): Promise<readonly Topic[]>;
   getById(id: TopicId): Promise<Topic | null>;
+  /**
+   * One of a User's own Topics, by the slug their URL carries.
+   *
+   * Scoped to the User on purpose: a slug is only unique per User, and a page
+   * reached by slug must not resolve to somebody else's Topic.
+   */
+  findBySlug(userId: UserId, slug: string): Promise<Topic | null>;
   insertTopicSource(
     topicId: TopicId,
     sourceId: string,
@@ -76,6 +85,12 @@ export interface TopicRepo {
    * has to see them or re-adding a removed topic raises a constraint error.
    */
   listSlugsByUser(userId: UserId): Promise<readonly string[]>;
+  /**
+   * Change how far back this Topic looks when it forms Clusters. The value is
+   * clamped rather than rejected, so an out-of-range number typed into the form
+   * narrows to the nearest window that still means something.
+   */
+  setClusterWindowDays(id: TopicId, days: number): Promise<void>;
 }
 
 export class DrizzleTopicRepo implements TopicRepo {
@@ -94,6 +109,10 @@ export class DrizzleTopicRepo implements TopicRepo {
       originKind: topic.origin.kind,
       originTemplateId,
       cadence: topic.cadence ?? 'daily',
+      // Required on Topic, but defaulted here the way `cadence` is: a Topic
+      // assembled by a caller that predates the field still gets the window the
+      // glossary names rather than a null reaching the pipeline.
+      clusterWindowDays: topic.clusterWindowDays ?? DEFAULT_CLUSTER_WINDOW_DAYS,
       createdAt: topic.createdAt,
       removedAt: topic.removedAt,
     });
@@ -155,6 +174,27 @@ export class DrizzleTopicRepo implements TopicRepo {
     return rowToTopic(row, sourceIds);
   }
 
+  async findBySlug(userId: UserId, slug: string): Promise<Topic | null> {
+    const rows = (await this.db
+      .select()
+      .from(topics)
+      .where(
+        and(
+          eq(topics.userId, userId),
+          eq(topics.slug, slug),
+          isNull(topics.removedAt),
+        ),
+      )) as readonly TopicRow[];
+    const row = rows[0];
+    if (!row) return null;
+    const linkRows = (await this.db
+      .select()
+      .from(topicSources)
+      .where(eq(topicSources.topicId, row.id))
+      .orderBy(asc(topicSources.position))) as readonly TopicSourceRow[];
+    return rowToTopic(row, linkRows.map((l) => l.sourceId));
+  }
+
   async insertTopicSource(
     topicId: TopicId,
     sourceId: string,
@@ -178,7 +218,14 @@ export class DrizzleTopicRepo implements TopicRepo {
     const rows = (await this.db
       .select({ slug: topics.slug })
       .from(topics)
-      .where(eq(topics.userId, userId))) as readonly { slug: string }[];
+      .where(eq(topics.userId, userId))) as { slug: string }[];
     return rows.map((r) => r.slug);
+  }
+
+  async setClusterWindowDays(id: TopicId, days: number): Promise<void> {
+    await this.db
+      .update(topics)
+      .set({ clusterWindowDays: clampClusterWindowDays(days) })
+      .where(eq(topics.id, id));
   }
 }

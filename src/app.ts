@@ -41,8 +41,12 @@ import type { RandomSource } from './domain/crypto.js';
 import { nodeRandom } from './domain/crypto.js';
 import { IngestService } from './ingest/ingest-service.js';
 import { IngestScheduler, type IngestSchedulerConfig } from './ingest/ingest-scheduler.js';
-import { RegistryIngestService } from './ingest/registry-ingest-service.js';
+import {
+  RegistryIngestService,
+  type RegistryIngestCycleReport,
+} from './ingest/registry-ingest-service.js';
 import { registerIngestRoutes } from './ingest/routes.js';
+import { ClusterFormationService } from './services/cluster-formation-service.js';
 import { registerTierRoutes } from './billing/tier-routes.js';
 import type { FeedFetcher } from './ingest/feed-fetcher.js';
 
@@ -57,6 +61,13 @@ export interface CreateAppOptions {
   readonly oauthClient?: OAuthClient | undefined;
   readonly logger?: boolean | undefined;
   readonly feedFetcher?: FeedFetcher | undefined;
+  /**
+   * A scheduler the caller has already built, instead of one built from a
+   * `feedFetcher`. Taking over the loop means taking over what runs at the end
+   * of it too: Cluster formation is wired into the scheduler this function
+   * builds, so a caller supplying their own also has to run
+   * `ClusterFormationService` themselves.
+   */
   readonly ingestScheduler?: IngestScheduler | undefined;
   /**
    * How often the ingest loop runs and how its per-Source failure backoff grows.
@@ -141,6 +152,8 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
   const topicRepo = new DrizzleTopicRepo(opts.db);
   const clusterRepo = new DrizzleClusterRepo(opts.db);
   const sourceRepo = new DrizzleSourceRepo(opts.db);
+  const articleRepo = new DrizzleArticleRepo(opts.db);
+  const storyRepo = new DrizzleStoryRepo(opts.db);
   const feedbackRepo = new DrizzleFeedbackRepo(opts.db);
   const deliverySettingsRepo = new DrizzleDeliverySettingsRepo(opts.db);
 
@@ -176,12 +189,26 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     random: opts.random ?? nodeRandom,
   });
 
+  const clusterFormationService = new ClusterFormationService({
+    storyRepo,
+    articleRepo,
+    clusterRepo,
+    topicRepo,
+    clock,
+  });
+
   const ingestScheduler = await resolveIngestScheduler({
     provided: opts.ingestScheduler,
     db: opts.db,
+    repos: { sourceRepo, articleRepo, storyRepo, topicRepo },
     clock,
     feedFetcher: opts.feedFetcher,
     config: opts.ingestConfig,
+    // Clusters are a grouping of the Stories a cycle wrote, so they are formed
+    // once the cycle is done rather than alongside it.
+    afterCycle: async () => {
+      await clusterFormationService.formForAllTopics();
+    },
   });
 
   const rateLimits = opts.magicLinkRateLimits ?? MAGIC_LINK_RATE_LIMITS;
@@ -240,17 +267,21 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
 async function resolveIngestScheduler(input: {
   readonly provided: IngestScheduler | undefined;
   readonly db: Db;
+  readonly repos: {
+    readonly sourceRepo: DrizzleSourceRepo;
+    readonly articleRepo: DrizzleArticleRepo;
+    readonly storyRepo: DrizzleStoryRepo;
+    readonly topicRepo: DrizzleTopicRepo;
+  };
   readonly clock: Clock;
   readonly feedFetcher: FeedFetcher | undefined;
   readonly config: IngestSchedulerConfig | undefined;
+  readonly afterCycle?: ((report: RegistryIngestCycleReport) => Promise<void>) | undefined;
 }): Promise<IngestScheduler | null> {
   if (input.provided) return input.provided;
   if (!input.feedFetcher) return null;
-  const sourceRepo = new DrizzleSourceRepo(input.db);
-  const articleRepo = new DrizzleArticleRepo(input.db);
-  const storyRepo = new DrizzleStoryRepo(input.db);
+  const { sourceRepo, articleRepo, storyRepo, topicRepo } = input.repos;
   const entityRepo = new DrizzleEntityRepo(input.db);
-  const topicRepo = new DrizzleTopicRepo(input.db);
   const ingestService = new IngestService({
     sourceRepo,
     articleRepo,
@@ -273,6 +304,7 @@ async function resolveIngestScheduler(input: {
     sourceRepo,
     clock: input.clock,
     ...(input.config ? { config: input.config } : {}),
+    ...(input.afterCycle ? { afterCycle: input.afterCycle } : {}),
   });
 }
 

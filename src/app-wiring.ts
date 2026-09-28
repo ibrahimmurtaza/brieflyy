@@ -10,7 +10,6 @@
 export const DEFERRED_SERVICES: Readonly<Record<string, string>> = {
   ArchiveSearchService: '#49',
   BriefPlanService: '#40',
-  ClusterFormationService: '#37',
   DiscoverService: '#47',
   FeedbackService: '#45',
   OpenAILLMSummaryService: '#44',

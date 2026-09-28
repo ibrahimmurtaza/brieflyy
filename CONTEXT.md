@@ -38,8 +38,14 @@ _Avoid_: tag, keyword, named entity
 **Story**: A deduped event — a group of near-duplicate Articles (same Entities and key phrases) within a 48–72h window. The working unit of the pipeline; the user never sees a Story directly.
 _Avoid_: event, article group
 
-**Cluster**: The unit the user sees. A grouping of related Stories by Entity overlap, within a 7d window (per-topic tunable). Receives Feedback and is the target of Summarization.
+**Cluster**: The unit the user sees. A grouping of related Stories by Entity overlap, within a 7d window (per-topic tunable). Receives Feedback and is the target of Summarization. Its one-liner and bullets are its Cluster summary. A Cluster that is still picking up Stories is a new Cluster, not a new version of the old one.
 _Avoid_: story, topic, thread
+
+**Cluster window**: How far back a Topic looks when it groups Stories into Clusters. Seven days by default, and a User can change it per Topic.
+_Avoid_: cluster TTL, retention window
+
+**Cluster summary**: The one-liner and the bullet points a Cluster is shown with. Every line is quoted from an Article in that Cluster, never written afresh, so nothing reaches a User that a Source did not write.
+_Avoid_: abstract, digest, synopsis
 
 **BriefPlan**: A selection and ordering of Clusters for a Topic at a moment in time. The regenerable artifact that BriefSnapshots and LivingBriefs are derived from.
 _Avoid_: brief, digest
@@ -80,7 +86,7 @@ _Avoid_: trending topic, hot entity
 
 ### State
 
-**Active (Cluster)**: A Cluster's state while its velocity (Stories per unit time) is above a threshold. Active Clusters appear in LivingBriefs and in new BriefPlans.
+**Active (Cluster)**: A Cluster's state while it is still picking up Stories — while its velocity (Stories per unit time) is above a threshold. Active Clusters appear in LivingBriefs and in new BriefPlans. A Cluster that stops getting covered loses Active on its own, rather than being switched off.
 _Avoid_: live, current
 
 **Retired (Story)**: A Story's state once none of its Clusters is Active. Retired Stories are retained per tier but are not surfaced in new Briefs.

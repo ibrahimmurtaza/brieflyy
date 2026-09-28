@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import type { Clock } from '../domain/clock.js';
+import { DEFAULT_CLUSTER_WINDOW_DAYS } from '../domain/cluster-window.js';
 import type { RandomSource } from '../domain/crypto.js';
 import { slugify } from '../domain/slug.js';
 import { computeFirstBriefAt, isValidIanaTimezone, isValidDeliveryHour, isValidDeliveryMinute, type DeliveryTime } from '../domain/timezone.js';
@@ -278,6 +279,7 @@ export class OnboardingService {
         },
         sourceIds: [...t.defaultSourceIds],
         cadence: 'daily',
+        clusterWindowDays: DEFAULT_CLUSTER_WINDOW_DAYS,
         createdAt: now,
         removedAt: null,
       };
@@ -305,6 +307,7 @@ export class OnboardingService {
         origin: { kind: 'freeform' },
         sourceIds: [],
         cadence: 'daily',
+        clusterWindowDays: DEFAULT_CLUSTER_WINDOW_DAYS,
         createdAt: now,
         removedAt: null,
       };

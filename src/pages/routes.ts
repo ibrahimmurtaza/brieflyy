@@ -1,6 +1,10 @@
 import type { FastifyInstance } from 'fastify';
 
 import { type Topic, type TopicTemplate, type Cluster, type Tier } from '../domain/types.js';
+import {
+  MAX_CLUSTER_WINDOW_DAYS,
+  MIN_CLUSTER_WINDOW_DAYS,
+} from '../domain/cluster-window.js';
 import { resolveTier, topicCapFor } from '../domain/tier.js';
 import { isValidIanaTimezone, partsInTz } from '../domain/timezone.js';
 import { INITIAL_TOPIC_COUNT } from '../onboarding/onboarding-service.js';
@@ -252,13 +256,41 @@ export async function registerPageRoutes(
     },
   );
 
+  fastify.post<{ Params: { slug: string }; Body: { windowDays?: string } }>(
+    '/topics/:slug/cluster-window',
+    AUTHENTICATED_ROUTE_CONFIG,
+    async (req, reply) => {
+      if (!requireAuthPage(req, reply)) return reply;
+      const topic = await opts.topicRepo.findBySlug(
+        req.auth.user.id,
+        req.params.slug,
+      );
+      if (!topic) {
+        return reply
+          .code(404)
+          .type('text/html')
+          .send(notFoundPage(req.auth.account.email, `Topic "${req.params.slug}" not found`));
+      }
+      // Parsed rather than trusted: a value the User typed that is not a number
+      // becomes NaN and falls back to the default, and one outside the range
+      // narrows to the nearest window that still means something. Neither is
+      // worth refusing a form submission over.
+      await opts.topicRepo.setClusterWindowDays(
+        topic.id,
+        Number(req.body.windowDays),
+      );
+      return reply.code(302).header('location', `/topics/${req.params.slug}`).send();
+    },
+  );
+
   fastify.get<{ Params: { slug: string }; Querystring: { source?: string; hide?: string } }>(
     '/topics/:slug',
     AUTHENTICATED_ROUTE_CONFIG,
     async (req, reply) => {
       if (!requireAuthPage(req, reply)) return reply;
-      const topic = await opts.topicRepo.listByUser(req.auth.user.id).then((rows) =>
-        rows.find((t) => t.slug === req.params.slug),
+      const topic = await opts.topicRepo.findBySlug(
+        req.auth.user.id,
+        req.params.slug,
       );
       if (!topic) {
         return reply
@@ -267,10 +299,14 @@ export async function registerPageRoutes(
           .send(notFoundPage(req.auth.account.email, `Topic "${req.params.slug}" not found`));
       }
       const clusters = await opts.clusterRepo.listByTopicId(topic.id);
-      let activeClusters = clusters
+      // The Active set before any filter is applied. A filter that happens to
+      // match nothing is a different situation from a Topic with no Clusters at
+      // all, and the page has to be able to tell them apart.
+      const active = clusters
         .filter((c) => c.state === 'active')
         .sort((a, b) => b.lastSeenAt.getTime() - a.lastSeenAt.getTime());
       const sourceFilter = req.query.source ? String(req.query.source) : null;
+      let activeClusters = active;
       if (sourceFilter) {
         activeClusters = activeClusters.filter((c) => c.sourceIds.includes(sourceFilter));
       }
@@ -297,8 +333,10 @@ export async function registerPageRoutes(
       const sourcesById = new Map(
         (await opts.sourceRepo.list()).map((s) => [s.id, s] as const),
       );
+      // The Source filter is offered from the Sources the unfiltered Clusters
+      // carry, so the link a User clicks is one that can still show something.
       const visibleSources = new Set<string>();
-      for (const c of activeClusters) {
+      for (const c of active) {
         for (const sid of c.sourceIds) visibleSources.add(sid);
       }
       return reply.type('text/html').send(
@@ -307,6 +345,9 @@ export async function registerPageRoutes(
           topic,
           topicSlug: req.params.slug,
           clusters: activeClusters,
+          clusterCount: clusters.length,
+          activeClusterCount: active.length,
+          sourceFilter,
           sourcesById,
           visibleSourceIds: visibleSources,
           clusterArticles,
@@ -929,6 +970,19 @@ function topicPage(input: {
   topic: Topic;
   topicSlug: string;
   clusters: readonly Cluster[];
+  /**
+   * How many Clusters the Topic has in total, Active or not. This is what tells
+   * "nothing has been ingested yet" apart from "everything has been archived",
+   * which the visible list cannot say on its own.
+   */
+  clusterCount: number;
+  /**
+   * How many of those are Active, before any filter narrowed them. What the
+   * filter happened to match is a third thing again, and the page keeps all
+   * three apart.
+   */
+  activeClusterCount: number;
+  sourceFilter: string | null;
   sourcesById: Map<string, { id: string; name: string }>;
   visibleSourceIds: Set<string>;
   clusterArticles?: Map<string, readonly import('../domain/types.js').Article[]>;
@@ -951,8 +1005,8 @@ function topicPage(input: {
       const hideLink = `<a href="?hide=${encodeURIComponent(String(c.id))}" class="hide-btn">Hide</a>`;
       const feedbackButtons = `<form method="POST" action="/topics/${escapeHtml(input.topicSlug)}/feedback" style="display:inline;margin-right:0.5rem;">
         <input type="hidden" name="clusterId" value="${escapeHtml(c.id)}">
-        <button type="submit" name="type" value="thumbs_up" style="font-size:0.75rem;padding:0.1rem 0.4rem;border-radius:4px;background:#e6f4ea;border:1px solid #a3d4a8;cursor:pointer;">ðŸ‘</button>
-        <button type="submit" name="type" value="thumbs_down" style="font-size:0.75rem;padding:0.1rem 0.4rem;border-radius:4px;background:#fff5f5;border:1px solid #f0baba;cursor:pointer;">ðŸ‘Ž</button>
+        <button type="submit" name="type" value="thumbs_up" style="font-size:0.75rem;padding:0.1rem 0.4rem;border-radius:4px;background:#e6f4ea;border:1px solid #a3d4a8;cursor:pointer;">👍</button>
+        <button type="submit" name="type" value="thumbs_down" style="font-size:0.75rem;padding:0.1rem 0.4rem;border-radius:4px;background:#fff5f5;border:1px solid #f0baba;cursor:pointer;">👎</button>
         <button type="submit" name="type" value="more_like_this" style="font-size:0.75rem;padding:0.1rem 0.4rem;border-radius:4px;background:#eef5ff;border:1px solid #c2d6f2;cursor:pointer;">More</button>
         <button type="submit" name="type" value="less_like_this" style="font-size:0.75rem;padding:0.1rem 0.4rem;border-radius:4px;background:#fff8e6;border:1px solid #e0c66b;cursor:pointer;">Less</button>
         <button type="submit" name="type" value="hide_source" style="font-size:0.75rem;padding:0.1rem 0.4rem;border-radius:4px;background:#f5f0ee;border:1px solid #ccc;cursor:pointer;">Hide source</button>
@@ -974,15 +1028,15 @@ function topicPage(input: {
       </article>`;
     })
     .join('\n');
-  const emptyState = input.clusters.length === 0
-    ? `<p class="muted">No stories yet for this topic. Check back after the next ingest.</p>`
-    : '';
+  const emptyState = emptyStateBlock(input);
+  const sourceFilterBar = sourceFilterBarHtml(input);
+  const windowForm = clusterWindowForm(input);
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${safeTitle} Â· Brieflyy</title>
+  <title>${safeTitle} · Brieflyy</title>
   <style>
     :root { color-scheme: light dark; }
     body { font-family: system-ui, sans-serif; max-width: 760px; margin: 3rem auto; padding: 0 1rem; }
@@ -1000,6 +1054,11 @@ function topicPage(input: {
     .article-links { margin-top: 0.5rem; font-size: 0.85rem; color: #555; }
     .article-links a { color: #1f6feb; text-decoration: none; }
     .article-links a:hover { text-decoration: underline; }
+    .filter-bar, .window-form { margin: 1rem 0; font-size: 0.85rem; color: #555; }
+    .filter-bar a { color: #1f6feb; margin-right: 0.75rem; }
+    .window-form label { margin-right: 0.4rem; }
+    .window-form input { width: 4rem; padding: 0.2rem; }
+    .window-form button { padding: 0.2rem 0.6rem; }
     .nav { margin-top: 2rem; }
     .nav a { margin-right: 1rem; }
     form.logout { display: inline; }
@@ -1009,9 +1068,11 @@ function topicPage(input: {
 <body>
   <main>
     <h1>${safeTitle}</h1>
-    <p class="lede">Signed in as ${safeEmail} Â· ${escapeHtml(input.topic.category)} Â· ${input.clusters.length} active cluster${input.clusters.length === 1 ? '' : 's'}</p>
+    <p class="lede">Signed in as ${safeEmail} · ${escapeHtml(input.topic.category)} · ${input.clusters.length} active cluster${input.clusters.length === 1 ? '' : 's'}</p>
+    ${sourceFilterBar}
     ${emptyState}
     ${rows}
+    ${windowForm}
     <div class="nav">
       <a href="/topics">All topics</a>
       <a href="/pick-topics">Manage topics</a>
@@ -1020,6 +1081,77 @@ function topicPage(input: {
   </main>
 </body>
 </html>`;
+}
+
+/**
+ * What the page says when it has no Clusters to render.
+ *
+ * Three different situations, and conflating any two of them misleads the User
+ * about their own Topic. An empty Topic has nothing yet. A Topic whose Clusters
+ * have all gone Archived has something, just nothing current. And a Topic whose
+ * Clusters a Source filter or a Hide has removed still has Clusters — saying
+ * "no stories yet" there would tell them their ingest is broken when it is
+ * working exactly as asked.
+ *
+ * Nothing is said when there are Clusters on the page. A brief that is showing
+ * Clusters is not filtered to nothing, whatever the query string says.
+ */
+function emptyStateBlock(input: {
+  readonly clusters: readonly Cluster[];
+  readonly clusterCount: number;
+  readonly activeClusterCount: number;
+  readonly topicSlug: string;
+}): string {
+  if (input.clusters.length > 0) return '';
+  if (input.activeClusterCount > 0) {
+    return `<p class="muted">No clusters match the current filter. <a href="/topics/${escapeHtml(input.topicSlug)}">Show all ${input.activeClusterCount} active cluster${input.activeClusterCount === 1 ? '' : 's'}</a></p>`;
+  }
+  if (input.clusterCount > 0) {
+    return `<p class="muted">Nothing is active on this topic right now. Its ${input.clusterCount} cluster${input.clusterCount === 1 ? ' has' : 's have'} been archived, and a Cluster becomes active again as its stories are covered.</p>`;
+  }
+  return `<p class="muted">No stories yet for this topic. Check back after the next ingest.</p>`;
+}
+
+/**
+ * The Sources a User can narrow the brief by, and the way back out of a filter
+ * already applied.
+ *
+ * Offered from the Sources the unfiltered Clusters carry, so every link is one
+ * that can still show something, and the Source currently being filtered to
+ * links back to everything rather than to itself.
+ */
+function sourceFilterBarHtml(input: {
+  readonly sourceFilter: string | null;
+  readonly sourcesById: Map<string, { id: string; name: string }>;
+  readonly visibleSourceIds: Set<string>;
+  readonly topicSlug: string;
+}): string {
+  const sourceIds = [...input.visibleSourceIds].sort();
+  if (sourceIds.length === 0) return '';
+  const links = sourceIds.map((sid) => {
+    const name = input.sourcesById.get(sid)?.name ?? sid;
+    const selected = sid === input.sourceFilter;
+    const href = selected
+      ? `/topics/${encodeURIComponent(input.topicSlug)}`
+      : `/topics/${encodeURIComponent(input.topicSlug)}?source=${encodeURIComponent(sid)}`;
+    return `<a href="${escapeHtml(href)}"${selected ? ' class="selected"' : ''}>${escapeHtml(name)}</a>`;
+  });
+  return `<p class="filter-bar">Sources: ${links.join(' ')}</p>`;
+}
+
+function clusterWindowForm(input: {
+  readonly topic: Topic;
+  readonly topicSlug: string;
+}): string {
+  const action = `/topics/${escapeHtml(input.topicSlug)}/cluster-window`;
+  const min = MIN_CLUSTER_WINDOW_DAYS;
+  const max = MAX_CLUSTER_WINDOW_DAYS;
+  return `<form class="window-form" method="POST" action="${action}">
+      <label for="windowDays">Cluster window</label>
+      <input type="number" id="windowDays" name="windowDays" min="${min}" max="${max}" value="${input.topic.clusterWindowDays}">
+      <span>days (${min}-${max})</span>
+      <button type="submit">Save</button>
+    </form>`;
 }
 
 function notFoundPage(email: string, message: string): string {

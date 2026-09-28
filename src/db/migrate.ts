@@ -108,7 +108,8 @@ CREATE TABLE IF NOT EXISTS topics (
   origin_template_id TEXT REFERENCES topic_templates(id) ON DELETE SET NULL,
   cadence TEXT NOT NULL DEFAULT 'daily',
   created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-  removed_at INTEGER
+  removed_at INTEGER,
+  cluster_window_days INTEGER NOT NULL DEFAULT 7
 );
 CREATE UNIQUE INDEX IF NOT EXISTS topics_user_slug_unique ON topics (user_id, slug);
 CREATE INDEX IF NOT EXISTS topics_user_idx ON topics (user_id);
@@ -181,7 +182,7 @@ CREATE TABLE IF NOT EXISTS clusters (
   created_at INTEGER NOT NULL,
   last_seen_at INTEGER NOT NULL,
   article_count INTEGER NOT NULL,
-  velocity INTEGER NOT NULL,
+  velocity REAL NOT NULL,
   source_ids TEXT NOT NULL,
   state TEXT NOT NULL DEFAULT 'active'
 );
@@ -257,6 +258,15 @@ interface TableRebuild {
    */
   readonly notNull?: readonly string[];
   /**
+   * Declared SQL type per column, for the columns whose type changed after the
+   * table shipped. SQLite cannot alter a column's type in place either, so a
+   * table that has one of these as the wrong type is rebuilt even when its
+   * foreign keys are already right. `clusters.velocity` is the case that
+   * needed it: velocity became a Stories-per-day rate, and an INTEGER column
+   * silently truncates every fraction of one.
+   */
+  readonly types?: Readonly<Record<string, string>>;
+  /**
    * SQL for a column the old table does not have, written against the old table
    * and its aliases. Needed when a new required column can only be worked out
    * from the rows already stored.
@@ -300,6 +310,14 @@ function foreignKeyPairs(
   return new Set(rows.map((r) => `${r.from}->${r.target}`));
 }
 
+/** The declared SQL type of every column of a table. */
+function columnTypes(driver: SqliteDriver, table: string): Map<string, string> {
+  const rows = driver
+    .prepare(`SELECT name, type FROM pragma_table_info(?)`)
+    .all(table) as { name: string; type: string }[];
+  return new Map(rows.map((r) => [r.name, r.type]));
+}
+
 function rebuildTable(driver: SqliteDriver, rebuild: TableRebuild): void {
   if (!tableExists(driver, rebuild.table)) return;
   const present = foreignKeyPairs(driver, rebuild.table);
@@ -310,7 +328,14 @@ function rebuildTable(driver: SqliteDriver, rebuild: TableRebuild): void {
   const missingNotNull = (rebuild.notNull ?? []).some(
     (column) => !presentNotNull.has(column),
   );
-  if (!missingForeignKey && !missingNotNull) return;
+  // SQLite reports the declared type uppercased, and a column the old table does
+  // not have at all is left to `createSql` failing rather than compared here.
+  const presentTypes = columnTypes(driver, rebuild.table);
+  const wrongType = Object.entries(rebuild.types ?? {}).some(
+    ([column, type]) =>
+      presentTypes.has(column) && presentTypes.get(column) !== type,
+  );
+  if (!missingForeignKey && !missingNotNull && !wrongType) return;
 
   const temp = `${rebuild.table}__rebuild`;
   const existing = columnNames(driver, rebuild.table);
@@ -366,6 +391,7 @@ const TABLE_REBUILDS: readonly TableRebuild[] = [
   {
     table: 'clusters',
     foreignKeys: [{ column: 'topic_id', table: 'topics' }],
+    types: { velocity: 'REAL' },
     columns: [
       'id',
       'topic_id',
@@ -388,7 +414,7 @@ const TABLE_REBUILDS: readonly TableRebuild[] = [
   created_at INTEGER NOT NULL,
   last_seen_at INTEGER NOT NULL,
   article_count INTEGER NOT NULL,
-  velocity INTEGER NOT NULL,
+  velocity REAL NOT NULL,
   source_ids TEXT NOT NULL,
   state TEXT NOT NULL DEFAULT 'active'
 )`,
@@ -499,6 +525,15 @@ const COLUMN_MIGRATIONS: readonly ColumnMigration[] = [
     table: 'topics',
     column: 'removed_at',
     ddl: `ALTER TABLE topics ADD COLUMN removed_at INTEGER`,
+  },
+  {
+    // How far back this Topic looks when it forms Clusters. The glossary makes
+    // the 7d window a per-Topic tunable, so it is a column rather than a
+    // constant, and the default puts every existing Topic on the window the
+    // glossary names.
+    table: 'topics',
+    column: 'cluster_window_days',
+    ddl: `ALTER TABLE topics ADD COLUMN cluster_window_days INTEGER NOT NULL DEFAULT 7`,
   },
   {
     // Tier was a literal passed into service functions. Making it a fact about a

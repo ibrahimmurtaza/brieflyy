@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { IngestService } from './ingest-service.js';
 import { IngestScheduler } from './ingest-scheduler.js';
 import { RegistryIngestService } from './registry-ingest-service.js';
+import type { RegistryIngestCycleReport } from './registry-ingest-service.js';
 import type {
   FeedFetcher,
   RawFeed,
@@ -42,6 +43,8 @@ interface BuildInput {
   readonly intervalMs?: number;
   readonly backoffBaseMs?: number;
   readonly backoffMaxMs?: number;
+  /** The step the scheduler runs at the end of every cycle. */
+  readonly afterCycle?: (report: RegistryIngestCycleReport) => Promise<void>;
 }
 
 interface BuildResult {
@@ -51,6 +54,7 @@ interface BuildResult {
   readonly sourceRepo: DrizzleSourceRepo;
   readonly topicRepo: DrizzleTopicRepo;
   readonly userRepo: DrizzleUserRepo;
+  readonly storyRepo: DrizzleStoryRepo;
   readonly reuters: Source;
   readonly guardian: Source;
   readonly clock: ReturnType<typeof makeTestClock>;
@@ -158,6 +162,7 @@ async function buildHarness(opts: BuildInput = {}): Promise<BuildResult> {
       backoffBaseMs: opts.backoffBaseMs ?? 60 * 1000,
       backoffMaxMs: opts.backoffMaxMs ?? 30 * 60 * 1000,
     },
+    ...(opts.afterCycle ? { afterCycle: opts.afterCycle } : {}),
   });
 
   return {
@@ -165,6 +170,7 @@ async function buildHarness(opts: BuildInput = {}): Promise<BuildResult> {
     sourceRepo,
     topicRepo,
     userRepo,
+    storyRepo,
     reuters,
     guardian,
     clock,
@@ -239,6 +245,46 @@ describe('IngestScheduler', () => {
 
     const guardianAfter = await sourceRepo.getById(guardian.id);
     expect(guardianAfter?.lastSuccessAt).toEqual(pollAt);
+  });
+
+  it('runs the after-cycle step after the registry has finished the cycle', async () => {
+    const insertedWhenRan: number[] = [];
+    const { topicRepo, userRepo, scheduler } = await buildHarness({
+      afterCycle: async (report) => {
+        insertedWhenRan.push(report.totals.inserted);
+      },
+    });
+    await insertTopicWithSources(topicRepo, userRepo, {
+      id: 't',
+      userId: 'u',
+      sourceIds: ['reuters', 'the-guardian'],
+    });
+
+    const report = await scheduler.tick();
+
+    // The step ran once, and it ran against a cycle that had already written
+    // its Articles, so anything grouping them sees the whole cycle.
+    expect(insertedWhenRan).toEqual([report.totals.inserted]);
+    expect(insertedWhenRan[0]).toBe(2);
+  });
+
+  it('runs the after-cycle step on every cycle, not just the first', async () => {
+    let runs = 0;
+    const { topicRepo, userRepo, scheduler } = await buildHarness({
+      afterCycle: async () => {
+        runs += 1;
+      },
+    });
+    await insertTopicWithSources(topicRepo, userRepo, {
+      id: 't',
+      userId: 'u',
+      sourceIds: ['reuters'],
+    });
+
+    await scheduler.tick();
+    await scheduler.tick();
+
+    expect(runs).toBe(2);
   });
 
   it('does not enter backoff after a successful cycle', async () => {

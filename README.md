@@ -15,7 +15,7 @@ personalized brief feed with insights and visual trends.
 - [ ] [04] DeliveryTime picker & welcome email
 - [ ] [05] Single-source ingest + Story dedup
 - [ ] [06] Full source registry ingest
-- [ ] [07] Cluster formation & extractive summary
+- [x] **[07]** Cluster formation & extractive summary
 - [ ] [08] LivingBrief in-app
 - [ ] [09] Feedback signals
 - [ ] [10] BriefPlan + scheduled BriefSnapshot
@@ -145,6 +145,10 @@ shape change needs one of:
   - A column the current shape makes `NOT NULL` but the old table has as
     nullable also triggers the rebuild, via the entry's `notNull` list. SQLite
     cannot relax a constraint, so there is no other way.
+  - A column whose declared type changed goes in the entry's `types` map, for
+    the same reason: SQLite cannot alter a column in place. `clusters.velocity`
+    is the case that needed it — velocity became a Stories-per-day rate, and an
+    `INTEGER` column truncates every fraction of one.
   - A column the old table does not have at all and that cannot simply default
     to nothing goes in `backfill`, as the SQL that produces it from the rows
     already stored — `magic_links.email` is worked out from the account the old
@@ -193,6 +197,7 @@ The system has a small number of seams where behaviour is plugged in:
 | `Clock`          | `now()`                  | `systemClock`, `fixedClock`, `makeTestClock` |
 | `RandomSource`   | `bytes()`, `uuid()`      | `nodeRandom`, `deterministicRandom`         |
 | `EnvSource`      | `Record<string, string?>` | `process.env`, a plain object in tests      |
+| `afterCycle`     | `run(report)`            | `ClusterFormationService`                    |
 Tests at the `AuthService` seam use real SQLite (in-memory), a fake clock, a
 fake random source, and a `ConsoleEmailTransport`. Tests at the HTTP seam use
 Fastify's `inject()` against the same `createApp` factory.
