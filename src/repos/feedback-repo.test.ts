@@ -21,6 +21,7 @@ describe('DrizzleFeedbackRepo', () => {
       id: 'user-1',
       createdAt: new Date('2026-01-01T00:00:00Z'),
       onboardingState: 'completed',
+      tier: 'free',
     });
     await topicRepo.insert(makeTopic({ id: 'topic-1', userId: 'user-1' }));
     await clusterRepo.insert(

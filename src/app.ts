@@ -43,6 +43,7 @@ import { IngestService } from './ingest/ingest-service.js';
 import { IngestScheduler } from './ingest/ingest-scheduler.js';
 import { RegistryIngestService } from './ingest/registry-ingest-service.js';
 import { registerIngestRoutes } from './ingest/routes.js';
+import { registerTierRoutes } from './billing/tier-routes.js';
 import type { FeedFetcher } from './ingest/feed-fetcher.js';
 
 export interface CreateAppOptions {
@@ -58,6 +59,12 @@ export interface CreateAppOptions {
   readonly feedFetcher?: FeedFetcher | undefined;
   readonly ingestScheduler?: IngestScheduler | undefined;
   readonly magicLinkRateLimits?: MagicLinkRateLimits | undefined;
+  /**
+   * Register the development-only routes, including the switch that moves the
+   * signed-in User onto the paid tier. Off unless the server configuration turns
+   * it on, so a production instance has no route that can change a tier.
+   */
+  readonly devToolsEnabled?: boolean | undefined;
   /** Believe `X-Forwarded-For`, so per-caller limits work behind a proxy. */
   readonly trustProxy?: boolean | undefined;
 }
@@ -196,6 +203,10 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
 
   if (ingestScheduler) {
     await registerIngestRoutes(app, { scheduler: ingestScheduler });
+  }
+
+  if (opts.devToolsEnabled === true) {
+    await registerTierRoutes(app, { userRepo });
   }
 
   return app;

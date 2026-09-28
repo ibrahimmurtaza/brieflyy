@@ -8,6 +8,7 @@ import { DrizzleTopicRepo } from '../repos/topic-repo.js';
 import { DrizzleUserRepo } from '../repos/user-repo.js';
 import { createTestDb } from '../testing/test-db.js';
 import { applyDirectorySeed } from '../directory/seed.js';
+import type { Tier } from '../domain/types.js';
 import {
   deterministicRandom,
   makeTestClock,
@@ -22,7 +23,7 @@ interface Harness {
   userRepo: DrizzleUserRepo;
   accountRepo: DrizzleAccountRepo;
   clock: ReturnType<typeof makeTestClock>;
-  signedInUser: (email: string) => Promise<{ userId: string }>;
+  signedInUser: (email: string, tier?: Tier) => Promise<{ userId: string }>;
 }
 
 async function makeHarness(): Promise<Harness> {
@@ -45,12 +46,13 @@ async function makeHarness(): Promise<Harness> {
     random: deterministicRandom,
   });
 
-  const signedInUser = async (email: string) => {
+  const signedInUser = async (email: string, tier: Tier = 'free') => {
     const userId = deterministicRandom.uuid();
     await userRepo.insert({
       id: userId,
       createdAt: clock.clock.now(),
       onboardingState: 'not_started',
+      tier,
     });
     await accountRepo.insert({
       id: deterministicRandom.uuid(),
@@ -477,5 +479,77 @@ describe('OnboardingService.removeTopic', () => {
     const outcome = await service.removeTopic(userId, 'no-such-topic');
 
     expect(outcome.status).toBe('not_found');
+  });
+});
+
+describe('OnboardingService topic cap by tier', () => {
+  beforeEach(() => {
+    resetDeterministic();
+  });
+
+  it('caps a FreeTier user at three topics', async () => {
+    const { service, signedInUser } = await makeHarness();
+    const { userId } = await signedInUser('iris@example.com', 'free');
+    const templates = await service.listTemplates();
+
+    expect(await service.topicCapForUser(userId)).toBe(3);
+    const outcome = await service.addTopics({
+      userId,
+      templateIds: templates.slice(0, 4).map((t) => t.id),
+    });
+    expect(outcome.status).toBe('invalid');
+    if (outcome.status === 'invalid') {
+      expect(outcome.reason).toBe('paywall_tier_limit');
+    }
+  });
+
+  it('does not cap a PaidTier user', async () => {
+    const { service, signedInUser } = await makeHarness();
+    const { userId } = await signedInUser('pay@example.com', 'paid');
+    const templates = await service.listTemplates();
+    expect(templates.length).toBeGreaterThanOrEqual(7);
+
+    expect(await service.topicCapForUser(userId)).toBe(Number.POSITIVE_INFINITY);
+
+    const outcome = await service.addTopics({
+      userId,
+      templateIds: templates.slice(0, 7).map((t) => t.id),
+    });
+    expect(outcome.status).toBe('ok');
+    expect(await service.listTopics(userId)).toHaveLength(7);
+  });
+
+  it('still asks a paid user for exactly three on their first run', async () => {
+    const { service, signedInUser } = await makeHarness();
+    const { userId } = await signedInUser('pay@example.com', 'paid');
+    const templates = await service.listTemplates();
+
+    const outcome = await service.selectTopics({
+      userId,
+      templateIds: templates.slice(0, 4).map((t) => t.id),
+    });
+    expect(outcome.status).toBe('invalid');
+    if (outcome.status === 'invalid') expect(outcome.reason).toBe('wrong_count');
+  });
+
+  it('follows the user onto the paid tier without them losing their topics', async () => {
+    const { service, signedInUser, userRepo } = await makeHarness();
+    const { userId } = await signedInUser('iris@example.com', 'free');
+    const templates = await service.listTemplates();
+    await service.addTopics({
+      userId,
+      templateIds: templates.slice(0, 3).map((t) => t.id),
+    });
+
+    expect(await service.topicCapForUser(userId)).toBe(3);
+    await userRepo.setTier(userId, 'paid');
+
+    expect(await service.topicCapForUser(userId)).toBe(Number.POSITIVE_INFINITY);
+    expect(await service.listTopics(userId)).toHaveLength(3);
+    const outcome = await service.addTopics({
+      userId,
+      templateIds: [templates[3]!.id],
+    });
+    expect(outcome.status).toBe('ok');
   });
 });

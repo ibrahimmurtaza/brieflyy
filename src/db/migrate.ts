@@ -8,9 +8,11 @@ const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY NOT NULL,
   created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-  onboarding_state TEXT NOT NULL DEFAULT 'not_started'
+  onboarding_state TEXT NOT NULL DEFAULT 'not_started',
+  tier TEXT NOT NULL DEFAULT 'free'
 );
 CREATE INDEX IF NOT EXISTS users_onboarding_idx ON users (onboarding_state);
+CREATE INDEX IF NOT EXISTS users_tier_idx ON users (tier);
 
 CREATE TABLE IF NOT EXISTS accounts (
   id TEXT PRIMARY KEY NOT NULL,
@@ -497,6 +499,14 @@ const COLUMN_MIGRATIONS: readonly ColumnMigration[] = [
     table: 'topics',
     column: 'removed_at',
     ddl: `ALTER TABLE topics ADD COLUMN removed_at INTEGER`,
+  },
+  {
+    // Tier was a literal passed into service functions. Making it a fact about a
+    // User means the paywalls read the same value the glossary describes, and
+    // the default keeps every existing row on the free tier they always had.
+    table: 'users',
+    column: 'tier',
+    ddl: `ALTER TABLE users ADD COLUMN tier TEXT NOT NULL DEFAULT 'free'`,
   },
 ];
 

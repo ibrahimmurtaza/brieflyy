@@ -1,8 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 
-import { type Topic, type TopicTemplate, type Cluster } from '../domain/types.js';
+import { type Topic, type TopicTemplate, type Cluster, type Tier } from '../domain/types.js';
+import { resolveTier, topicCapFor } from '../domain/tier.js';
 import { isValidIanaTimezone, partsInTz } from '../domain/timezone.js';
-import { FREE_TIER_TOPIC_CAP } from '../onboarding/onboarding-service.js';
+import { INITIAL_TOPIC_COUNT } from '../onboarding/onboarding-service.js';
 import type { OnboardingService } from '../onboarding/onboarding-service.js';
 import type { ClusterRepo } from '../repos/cluster-repo.js';
 import type { SourceRepo } from '../repos/source-repo.js';
@@ -77,7 +78,8 @@ export async function registerPageRoutes(
     }
     const templates = await onboardingService.listTemplates();
     const existing = await onboardingService.listTopics(req.auth.user.id);
-    const atCap = existing.length >= FREE_TIER_TOPIC_CAP;
+    const cap = await onboardingService.topicCapForUser(req.auth.user.id);
+    const atCap = existing.length >= cap;
     return reply
       .type('text/html')
       .send(
@@ -86,6 +88,7 @@ export async function registerPageRoutes(
           templates,
           existing,
           atCap,
+          cap,
           mode: 'onboarding',
         }),
       );
@@ -95,7 +98,8 @@ export async function registerPageRoutes(
     if (!requireAuthPage(req, reply)) return reply;
     const templates = await onboardingService.listTemplates();
     const existing = await onboardingService.listTopics(req.auth.user.id);
-    const atCap = existing.length >= FREE_TIER_TOPIC_CAP;
+    const cap = await onboardingService.topicCapForUser(req.auth.user.id);
+    const atCap = existing.length >= cap;
     return reply
       .type('text/html')
       .send(
@@ -104,6 +108,7 @@ export async function registerPageRoutes(
           templates,
           existing,
           atCap,
+          cap,
           mode: 'manage',
         }),
       );
@@ -188,7 +193,13 @@ export async function registerPageRoutes(
     const topics = await onboardingService.listTopics(req.auth.user.id);
     return reply
       .type('text/html')
-      .send(upgradePage({ email: req.auth.account.email, topicCount: topics.length }));
+      .send(
+        upgradePage({
+          email: req.auth.account.email,
+          topicCount: topics.length,
+          tier: resolveTier(req.auth.user),
+        }),
+      );
   });
 
   fastify.get('/archive/search', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
@@ -206,7 +217,17 @@ export async function registerPageRoutes(
   fastify.get('/topics', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
     if (!requireAuthPage(req, reply)) return reply;
     const topics = await opts.onboardingService.listTopics(req.auth.user.id);
-    return reply.type('text/html').send(homePage({ email: req.auth.account.email, topics }));
+    const cap = await opts.onboardingService.topicCapForUser(req.auth.user.id);
+    return reply
+      .type('text/html')
+      .send(
+        homePage({
+          email: req.auth.account.email,
+          topics,
+          tier: resolveTier(req.auth.user),
+          atCap: topics.length >= cap,
+        }),
+      );
   });
 
   fastify.post<{ Params: { slug: string }; Body: { clusterId?: string; type?: string; scope?: string } }>(
@@ -387,11 +408,15 @@ function pickTopicsPage(input: {
   templates: readonly TopicTemplate[];
   existing: readonly Topic[];
   atCap: boolean;
+  cap: number;
   mode: 'onboarding' | 'manage';
 }): string {
   const safeEmail = escapeHtml(input.email);
   const onboarding = input.mode === 'onboarding';
-  const remaining = Math.max(0, FREE_TIER_TOPIC_CAP - input.existing.length);
+  const cap = input.cap;
+  // An uncapped tier has no slots to count down, so the wording that talks
+  // about slots left only applies where a cap exists at all.
+  const remaining = Number.isFinite(cap) ? Math.max(0, cap - input.existing.length) : null;
   // A free user at the cap may not tick anything: no add, no swap. The only way
   // to change a topic is to delete one first, or upgrade.
   const locked = input.atCap;
@@ -454,13 +479,15 @@ function pickTopicsPage(input: {
     : '';
 
   const lede = onboarding
-    ? 'Choose exactly 3 â€” from the Directory below, your own free-form idea, or a mix.'
+    ? `Choose exactly ${INITIAL_TOPIC_COUNT} — from the Directory below, your own free-form idea, or a mix.`
     : remaining === 0
-      ? `You are using all ${FREE_TIER_TOPIC_CAP} free topics. Remove one to pick a replacement, or upgrade.`
-      : `Pick up to ${remaining} more topic${remaining === 1 ? '' : 's'} â€” from the Directory below, your own free-form idea, or a mix.`;
+      ? `You are using all ${cap} free topics. Remove one to pick a replacement, or upgrade.`
+      : remaining === null
+        ? 'Add as many topics as you like — from the Directory below, your own free-form idea, or a mix.'
+        : `Pick up to ${remaining} more topic${remaining === 1 ? '' : 's'} — from the Directory below, your own free-form idea, or a mix.`;
 
   const paywallHtml = locked
-    ? `<div class="paywall">You have reached the free-topic limit (${FREE_TIER_TOPIC_CAP}). <a href="/upgrade">Upgrade</a> to add more, or remove a topic to swap it.</div>`
+    ? `<div class="paywall">You have reached the free-topic limit (${cap}). <a href="/upgrade">Upgrade</a> to add more, or remove a topic to swap it.</div>`
     : '';
 
   const actionHref = onboarding ? '/onboarding/pick-topics' : '/pick-topics';
@@ -507,7 +534,11 @@ function pickTopicsPage(input: {
     <form id="pick" method="POST" action="${actionHref}">
       ${sectionsHtml}
       <div class="freeform">
-        <label for="freeformTitle"><strong>Or add your own</strong> (optional â€” uses up one of your ${FREE_TIER_TOPIC_CAP} slots)</label>
+        <label for="freeformTitle"><strong>Or add your own</strong> (optional${
+          remaining === null
+            ? ' &mdash; a paid plan has no limit on how many topics you hold'
+            : ` &mdash; uses up one of your ${cap} slots`
+        })</label>
         <input id="freeformTitle" name="freeformTitle" type="text" maxlength="80" placeholder="e.g. fusion energy, tabletop RPGs, indie hacking" ${locked ? 'disabled' : ''}>
       </div>
       <div class="actions">
@@ -525,8 +556,10 @@ function pickTopicsPage(input: {
       if (!form) return;
       var status = document.getElementById('status');
       var exact = ${onboarding ? 'true' : 'false'};
-      var min = ${onboarding ? String(FREE_TIER_TOPIC_CAP) : '1'};
-      var max = ${onboarding ? String(FREE_TIER_TOPIC_CAP) : String(remaining)};
+      // An uncapped tier has no ceiling, so the client check is skipped rather
+      // than being handed a number it could never satisfy.
+      var min = ${onboarding ? String(INITIAL_TOPIC_COUNT) : '1'};
+      var max = ${remaining === null ? 'null' : String(remaining)};
       var button = form.querySelector('button[type=submit]');
       var checkboxes = Array.prototype.slice.call(form.querySelectorAll('input[type=checkbox][name=templateIds]'));
       var freeform = form.querySelector('input[name=freeformTitle]');
@@ -537,17 +570,22 @@ function pickTopicsPage(input: {
       }
       function validate() {
         var n = selectedCount();
-        if (n >= min && n <= max) { status.textContent = ''; button.disabled = false; return; }
-        if (n > max) {
+        if (n < min) {
           status.textContent = exact
-            ? 'Please pick exactly 3 topics.'
+            ? 'Pick ' + (min - n) + ' more to continue.'
+            : 'Pick at least one topic.';
+          button.disabled = true;
+          return;
+        }
+        if (max !== null && n > max) {
+          status.textContent = exact
+            ? 'Please pick exactly ' + min + ' topics.'
             : 'You can add ' + max + ' more topic' + (max === 1 ? '' : 's') + ' right now.';
           button.disabled = true;
           return;
         }
-        if (exact) status.textContent = 'Pick ' + (max - n) + ' more to continue.';
-        else status.textContent = 'Pick at least one topic.';
-        button.disabled = true;
+        status.textContent = '';
+        button.disabled = false;
       }
       checkboxes.forEach(function (cb) { cb.addEventListener('change', validate); });
       if (freeform) freeform.addEventListener('input', validate);
@@ -742,14 +780,23 @@ function welcomePage(input: {
 </html>`;
 }
 
-function upgradePage(input: { email: string; topicCount: number }): string {
+function upgradePage(input: { email: string; topicCount: number; tier: Tier }): string {
   const safeEmail = escapeHtml(input.email);
   const used = input.topicCount === 1 ? '1 topic' : `${input.topicCount} topics`;
+  // A paid user reaching this page already has what it is selling, so say that
+  // rather than pitching them a plan they are on.
+  const alreadyPaid = input.tier === 'paid';
+  const headline = alreadyPaid
+    ? 'You are on the paid plan'
+    : 'Upgrade to paid';
+  const priceHtml = alreadyPaid
+    ? '<p class="price"><strong>Paid &middot; $15 / month</strong></p>'
+    : '<p class="price"><strong>$15 / month</strong></p>';
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Upgrade to paid Â· Brieflyy</title>
+  <title>Upgrade to paid &middot; Brieflyy</title>
   <style>
     :root { color-scheme: light dark; }
     body { font-family: system-ui, sans-serif; max-width: 520px; margin: 3rem auto; padding: 0 1rem; }
@@ -765,9 +812,9 @@ function upgradePage(input: { email: string; topicCount: number }): string {
 </head>
 <body>
   <main>
-    <h1>Upgrade to paid</h1>
+    <h1>${headline}</h1>
     <p class="lede">Signed in as ${safeEmail}.</p>
-    <p class="price"><strong>$15 / month</strong></p>
+    ${priceHtml}
     <p class="perks">Paid Brieflyy includes unlimited topics, indefinite archive retention, and the full trends view.</p>
     <div class="not-yet">
       <strong>Billing isn't connected yet.</strong>
@@ -811,8 +858,19 @@ function formatHumanTime(date: Date, timezone: string): string {
 function homePage(input: {
   email: string;
   topics: readonly Topic[];
+  tier: Tier;
+  atCap: boolean;
 }): string {
   const safeEmail = escapeHtml(input.email);
+  const cap = topicCapFor(input.tier);
+  const plan = Number.isFinite(cap)
+    ? `Free plan &middot; ${input.topics.length} of ${cap} topics`
+    : `Paid plan &middot; ${input.topics.length} topics`;
+  // A user who cannot add another topic is told so on the page they land on,
+  // not only on the picker they have to go and find.
+  const atCapHtml = input.atCap
+    ? `<div class="paywall">You are using all ${cap} free topics. <a href="/upgrade">Upgrade</a> to add more, or remove one to pick a replacement.</div>`
+    : '';
   const rows = input.topics
     .map(
       (t) => `<li>
@@ -835,6 +893,7 @@ function homePage(input: {
     body { font-family: system-ui, sans-serif; max-width: 720px; margin: 3rem auto; padding: 0 1rem; }
     h1 { font-size: 1.6rem; margin: 0 0 0.25rem; }
     p.lede { color: #555; margin-top: 0; }
+    p.plan { color: #888; font-size: 0.85rem; margin-top: -0.5rem; }
     ul.topics { list-style: none; padding: 0; margin: 1rem 0; }
     ul.topics li { padding: 0.75rem 0; border-bottom: 1px solid #eee; }
     a { color: #1f6feb; text-decoration: none; }
@@ -842,6 +901,7 @@ function homePage(input: {
     .muted { color: #888; }
     .nav { margin-top: 2rem; }
     .nav a { margin-right: 1rem; }
+    .paywall { background: #fff5d6; border: 1px solid #e0c66b; padding: 0.75rem 1rem; border-radius: 6px; margin: 1rem 0; }
     form.logout { display: inline; }
     form.logout button { background: none; color: inherit; border: 0; padding: 0; cursor: pointer; text-decoration: underline; }
   </style>
@@ -850,6 +910,8 @@ function homePage(input: {
   <main>
     <h1>Your topics</h1>
     <p class="lede">Signed in as ${safeEmail}. Pick a topic to open its living brief.</p>
+    <p class="plan">${plan}</p>
+    ${atCapHtml}
     ${emptyState}
     <ul class="topics">${rows}</ul>
     <div class="nav">

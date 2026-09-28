@@ -1,4 +1,5 @@
-import type { TopicTemplate, TopicId, SourceId } from '../domain/types.js';
+import type { Tier, TopicTemplate, TopicId, SourceId } from '../domain/types.js';
+import { DEFAULT_TIER, topicCapFor } from '../domain/tier.js';
 
 export interface UserTopicForOverlap {
   readonly id: TopicId;
@@ -15,7 +16,8 @@ export interface DiscoverServiceInput {
   readonly userTopicIds?: Set<string>;
   readonly userTopics?: readonly UserTopicForOverlap[];
   readonly trends?: readonly TemplateTrend[];
-  readonly freeTierCap?: number;
+  /** How many Topics this User may hold, which is what decides a clone. */
+  readonly tier?: Tier;
 }
 
 export class DiscoverService {
@@ -30,7 +32,7 @@ export class DiscoverService {
     this.userTopicIds = input.userTopicIds ?? new Set();
     this.userTopics = input.userTopics ?? [];
     this.trends = input.trends ?? [];
-    this.cap = input.freeTierCap ?? 3;
+    this.cap = topicCapFor(input.tier ?? DEFAULT_TIER);
   }
 
   getUnsubscribedTemplates(): readonly TopicTemplate[] {

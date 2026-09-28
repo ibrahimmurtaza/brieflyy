@@ -1,10 +1,20 @@
-import { describe, it, expect } from 'vitest';
+import { beforeAll, describe, it, expect } from 'vitest';
 import { TrendsService } from './trends-service.js';
+import { tierOfPersistedUser } from '../testing/tier.js';
+import type { Tier } from '../domain/types.js';
 
 function mockClock(dateStr: string) {
   const d = new Date(dateStr);
   return { now: () => d };
 }
+
+let free: Tier;
+let paid: Tier;
+
+beforeAll(async () => {
+  free = await tierOfPersistedUser('free');
+  paid = await tierOfPersistedUser('paid');
+});
 
 describe('TrendsService', () => {
   it('builds a 7d observation / 30d baseline window', () => {
@@ -35,8 +45,8 @@ describe('TrendsService', () => {
       ],
       entities: [],
     };
-    const free = svc.filterForTier(trend, 'free', new Date('2024-06-15'));
-    expect(free.volumeOverTime.map((v) => v.date)).toEqual([
+    const result = svc.filterForTier(trend, free, new Date('2024-06-15'));
+    expect(result.volumeOverTime.map((v) => v.date)).toEqual([
       '2024-06-13',
       '2024-06-14',
     ]);
@@ -50,8 +60,8 @@ describe('TrendsService', () => {
       volumeOverTime: [{ date: '2024-01-01', count: 1 }],
       entities: [],
     };
-    const paid = svc.filterForTier(trend, 'paid', new Date('2024-06-15'));
-    expect(paid.volumeOverTime.length).toBe(1);
+    const result = svc.filterForTier(trend, paid, new Date('2024-06-15'));
+    expect(result.volumeOverTime.length).toBe(1);
   });
 
   it('sorts emerging entities by lift descending', () => {

@@ -68,6 +68,7 @@ describe('configuration surface', () => {
       'APP_BASE_URL',
       'COOKIE_SECURE',
       'DATABASE_URL',
+      'DEV_TOOLS_ENABLED',
       'EMAIL_FROM',
       'EMAIL_TRANSPORT',
       'GOOGLE_OAUTH_CLIENT_ID',

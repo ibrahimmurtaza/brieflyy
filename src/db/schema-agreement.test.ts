@@ -50,14 +50,27 @@ function tableBlock(name: string): string {
   throw new Error(`unterminated sqliteTable for ${name}`);
 }
 
+/** The first `{ ... }` in a block, matched by nesting rather than by position. */
+function firstObjectLiteral(block: string): string {
+  const open = block.indexOf('{');
+  if (open === -1) return '';
+  let depth = 0;
+  for (let i = open; i < block.length; i++) {
+    if (block[i] === '{') depth++;
+    if (block[i] === '}') {
+      depth--;
+      // The table's own columns object, not the index callback that follows it.
+      if (depth === 0) return block.slice(open, i + 1);
+    }
+  }
+  throw new Error('unterminated object literal in table block');
+}
+
 /** Each column declared in a table's column object, with its SQL column name. */
 function columnDeclarations(
   table: string,
 ): { sqlName: string; body: string }[] {
-  const block = tableBlock(table);
-  const open = block.indexOf('{');
-  const close = block.lastIndexOf('},\n');
-  const object = block.slice(open + 1, close === -1 ? block.length : close);
+  const object = firstObjectLiteral(tableBlock(table));
   const starts: { index: number; sqlName: string }[] = [];
   for (const m of object.matchAll(/^\s{4}(\w+):\s*\w+\('([\w]+)'/gm)) {
     starts.push({ index: m.index, sqlName: m[2] ?? '' });
@@ -133,6 +146,18 @@ function appliedForeignKeys(
     .sort((a, b) => a.from.localeCompare(b.from));
 }
 
+function appliedColumns(table: string): { name: string; notNull: number; dflt: string | null }[] {
+  const driver = createInMemorySqliteDriver();
+  applySchema(driver);
+  return (
+    driver.prepare(`SELECT name, "notnull", dflt_value FROM pragma_table_info(?)`).all(table) as {
+      name: string;
+      notnull: number;
+      dflt_value: string | null;
+    }[]
+  ).map((r) => ({ name: r.name, notNull: r.notnull, dflt: r.dflt_value }));
+}
+
 const TABLES = tableNames();
 
 describe('declared schema and applied DDL agree', () => {
@@ -179,6 +204,23 @@ describe('declared schema and applied DDL agree', () => {
       }
     }
     expect(mismatches).toEqual([]);
+  });
+
+  it('applies every declared column', () => {
+    // A column in schema.ts that the DDL does not create reads as `undefined`
+    // forever, and nothing else in the suite would notice.
+    const missing: string[] = [];
+    for (const table of TABLES) {
+      const declared = columnDeclarations(table);
+      // If the parse stopped matching anything the loop below would pass
+      // vacuously, so a table that yielded no columns is itself the failure.
+      expect(declared.length, `${table} has no declared columns`).toBeGreaterThan(0);
+      const applied = new Set(appliedColumns(table).map((c) => c.name));
+      for (const column of declared) {
+        if (!applied.has(column.sqlName)) missing.push(`${table}.${column.sqlName}`);
+      }
+    }
+    expect(missing).toEqual([]);
   });
 
   it('declares the mandatory foreign keys on clusters, brief snapshots and email deliveries', () => {

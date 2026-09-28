@@ -106,6 +106,12 @@ export interface ServerConfig {
   readonly googleOAuthClientSecret: string | undefined;
   readonly ingestEnabled: boolean;
   readonly cookieSecure: boolean;
+  /**
+   * Whether to register the development-only routes, such as the switch that
+   * moves a User onto the paid tier. Defaults on outside production so a local
+   * instance can exercise the paywalls, and off in production so it cannot.
+   */
+  readonly devToolsEnabled: boolean;
   /** Whether to believe `X-Forwarded-For` when working out the caller's address. */
   readonly trustProxy: boolean;
   readonly port: number;
@@ -144,6 +150,7 @@ export function loadServerConfig(env: EnvSource): ServerConfig {
     googleOAuthClientId: readOptionalString(env, 'GOOGLE_OAUTH_CLIENT_ID'),
     googleOAuthClientSecret: readOptionalString(env, 'GOOGLE_OAUTH_CLIENT_SECRET'),
     ingestEnabled: readBool(env, 'INGEST_ENABLED', true),
+    devToolsEnabled: readBool(env, 'DEV_TOOLS_ENABLED', !isProduction(env)),
     cookieSecure: readBool(env, 'COOKIE_SECURE', isProduction(env)),
     trustProxy: readBool(env, 'TRUST_PROXY', false),
     port: readInt(env, 'PORT', 3000),

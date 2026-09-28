@@ -45,6 +45,7 @@ async function main(): Promise<void> {
     logger: true,
     oauthClient,
     feedFetcher,
+    devToolsEnabled: config.devToolsEnabled,
   });
 
   await app.listen({ port: config.port, host: config.host });

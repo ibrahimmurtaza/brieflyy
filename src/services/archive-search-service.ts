@@ -1,3 +1,6 @@
+import { entitlementsFor } from '../domain/tier.js';
+import type { Tier } from '../domain/types.js';
+
 export interface ArchiveItemInput {
   readonly kind: 'cluster' | 'snapshot' | 'feedback' | 'article';
   readonly id: string;
@@ -20,7 +23,7 @@ export interface ArchiveSearchFilter {
 }
 
 export interface ArchiveSearchServiceDeps {
-  readonly tier: 'free' | 'paid';
+  readonly tier: Tier;
   readonly now: Date;
   readonly archiveItems: readonly ArchiveItemInput[];
 }
@@ -36,24 +39,29 @@ export interface ArchiveSearchResult {
 }
 
 export class ArchiveSearchService {
-  private readonly tier: 'free' | 'paid';
+  private readonly retentionDays: number | null;
   private readonly now: Date;
   private readonly archiveItems: readonly ArchiveItemInput[];
 
   constructor(deps: ArchiveSearchServiceDeps) {
-    this.tier = deps.tier;
+    const entitlements = entitlementsFor(deps.tier);
+    // A null retention is the paid tier's indefinite Archive, which needs no
+    // cutoff at all. The snapshot exemption is likewise null on both tiers, so
+    // the two are the same branch for different reasons.
+    this.retentionDays = entitlements.archiveRetentionDays;
     this.now = deps.now;
     this.archiveItems = deps.archiveItems;
   }
 
   search(filter: ArchiveSearchFilter = {}): ArchiveSearchResult {
     let results = this.archiveItems.filter((item) => {
-      if (this.tier === 'free' && item.kind !== 'snapshot') {
-        const cutoff = new Date(this.now);
-        cutoff.setUTCDate(cutoff.getUTCDate() - 30);
-        if (item.createdAt < cutoff) return false;
-      }
-      return true;
+      if (this.retentionDays === null) return true;
+      // A BriefSnapshot is the record of what was sent, so the Archive's age
+      // limit never applies to one.
+      if (item.kind === 'snapshot') return true;
+      const cutoff = new Date(this.now);
+      cutoff.setUTCDate(cutoff.getUTCDate() - this.retentionDays);
+      return item.createdAt >= cutoff;
     });
 
     if (filter.query) {

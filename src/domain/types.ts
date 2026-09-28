@@ -19,10 +19,18 @@ export type AccountId = string;
 export type SessionId = string;
 export type MagicLinkId = string;
 
+/**
+ * What a User pays for. `FreeTier` and `PaidTier` in the glossary; the
+ * entitlements each carries live in `domain/tier.ts`.
+ */
+export const TIERS = ['free', 'paid'] as const;
+export type Tier = (typeof TIERS)[number];
+
 export interface User {
   readonly id: UserId;
   readonly createdAt: Date;
   readonly onboardingState: OnboardingState;
+  readonly tier: Tier;
 }
 
 export interface Account {

@@ -31,6 +31,7 @@ async function insertTopicWithSources(
     id: input.userId as UserId,
     createdAt: new Date('2026-09-01T00:00:00Z'),
     onboardingState: 'topics_picked',
+    tier: 'free',
   });
   await topicRepo.insert(
     makeTopic({ id: input.id, userId: input.userId }),
@@ -65,6 +66,7 @@ describe('DrizzleClusterRepo', () => {
       id: 'user-1' as UserId,
       createdAt: new Date('2026-09-01T00:00:00Z'),
       onboardingState: 'completed',
+      tier: 'free',
     });
     await topicRepo.insert(makeTopic({ id: 'topic-1', userId: 'user-1' }));
   });

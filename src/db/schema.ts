@@ -19,9 +19,14 @@ export const users = sqliteTable(
     })
       .notNull()
       .default('not_started'),
+    // What the User pays for, and therefore what they get. Not a billing
+    // integration: it is the fact every paywall reads, so it has to be persisted
+    // rather than passed around as a literal.
+    tier: text('tier', { enum: ['free', 'paid'] }).notNull().default('free'),
   },
   (t) => ({
     onboardingIdx: index('users_onboarding_idx').on(t.onboardingState),
+    tierIdx: index('users_tier_idx').on(t.tier),
   }),
 );
 

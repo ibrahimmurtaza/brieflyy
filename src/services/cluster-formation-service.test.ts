@@ -32,6 +32,7 @@ async function insertTopicWithSources(
     id: input.userId as UserId,
     createdAt: new Date('2026-09-01T00:00:00Z'),
     onboardingState: 'topics_picked',
+    tier: 'free',
   });
   await topicRepo.insert(
     makeTopic({ id: input.id, userId: input.userId }),

@@ -85,6 +85,7 @@ describe('loadServerConfig', () => {
     expect(config.resendApiKey).toBeUndefined();
     expect(config.oauthProvider).toBeUndefined();
     expect(config.ingestEnabled).toBe(true);
+    expect(config.devToolsEnabled).toBe(true);
     expect(config.cookieSecure).toBe(false);
     expect(config.trustProxy).toBe(false);
     expect(config.port).toBe(3000);
@@ -108,6 +109,26 @@ describe('loadServerConfig', () => {
     expect(
       loadServerConfig({ ...MINIMAL, NODE_ENV: 'production', COOKIE_SECURE: 'false' }).cookieSecure,
     ).toBe(false);
+  });
+
+  it('does not register the dev tools in production, and does outside it', () => {
+    expect(
+      loadServerConfig({ ...MINIMAL, NODE_ENV: 'production' }).devToolsEnabled,
+    ).toBe(false);
+    expect(loadServerConfig({ ...MINIMAL, NODE_ENV: 'development' }).devToolsEnabled).toBe(
+      true,
+    );
+  });
+
+  it('lets DEV_TOOLS_ENABLED override the NODE_ENV default', () => {
+    expect(
+      loadServerConfig({ ...MINIMAL, NODE_ENV: 'development', DEV_TOOLS_ENABLED: '0' })
+        .devToolsEnabled,
+    ).toBe(false);
+    expect(
+      loadServerConfig({ ...MINIMAL, NODE_ENV: 'production', DEV_TOOLS_ENABLED: 'true' })
+        .devToolsEnabled,
+    ).toBe(true);
   });
 
   it('enables Google sign-in whatever the casing of OAUTH_PROVIDER', () => {
@@ -153,6 +174,7 @@ describe('loadServerConfig', () => {
       OAUTH_PROVIDER: 'googly',
       INGEST_ENABLED: 'perhaps',
       COOKIE_SECURE: 'sometimes',
+      DEV_TOOLS_ENABLED: 'perhaps',
       TRUST_PROXY: 'maybe',
       PORT: 'eighty',
     };
