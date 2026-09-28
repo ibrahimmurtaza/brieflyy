@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BriefSnapshotRenderer } from './brief-snapshot-renderer.js';
 import type { LLMSummaryClient, LLMSummaryOutput } from '../domain/llm.js';
+import { EMPTY_SIGNATURE } from '../domain/story-signature.js';
 
 class MockLLMClient implements LLMSummaryClient {
   async generateSummary(
@@ -47,8 +48,7 @@ describe('BriefSnapshotRenderer', () => {
             publishedAt: new Date(),
             ingestedAt: new Date(),
             entities: [],
-            keyPhrases: [],
-            fingerprint: 'fp1',
+            signature: EMPTY_SIGNATURE,
             storyId: 'st1',
           },
         ],

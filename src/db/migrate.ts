@@ -1,6 +1,11 @@
 import Database from 'better-sqlite3';
 
 import type { SqliteDriver } from './client.js';
+import { extractSignature } from '../domain/extract.js';
+import {
+  encodeSignature,
+  normalizeSignature,
+} from '../domain/story-signature.js';
 import { readRequiredString } from '../env.js';
 import { pathToFileURL } from 'node:url';
 
@@ -147,12 +152,11 @@ CREATE TABLE IF NOT EXISTS articles (
   body TEXT NOT NULL,
   published_at INTEGER NOT NULL,
   ingested_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-  fingerprint TEXT NOT NULL,
+  signature TEXT NOT NULL DEFAULT '{}',
   story_id TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS articles_source_external_unique ON articles (source_id, external_id);
 CREATE INDEX IF NOT EXISTS articles_source_idx ON articles (source_id);
-CREATE INDEX IF NOT EXISTS articles_fingerprint_idx ON articles (fingerprint);
 CREATE INDEX IF NOT EXISTS articles_story_idx ON articles (story_id);
 CREATE INDEX IF NOT EXISTS articles_published_idx ON articles (published_at);
 
@@ -166,12 +170,14 @@ CREATE INDEX IF NOT EXISTS article_entities_entity_idx ON article_entities (enti
 CREATE TABLE IF NOT EXISTS stories (
   id TEXT PRIMARY KEY NOT NULL,
   source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
-  fingerprint TEXT NOT NULL,
+  signature TEXT NOT NULL DEFAULT '{}',
   first_seen_at INTEGER NOT NULL,
-  last_seen_at INTEGER NOT NULL
+  last_seen_at INTEGER NOT NULL,
+  first_published_at INTEGER NOT NULL DEFAULT 0,
+  last_published_at INTEGER NOT NULL DEFAULT 0
 );
-CREATE INDEX IF NOT EXISTS stories_source_fingerprint_idx ON stories (source_id, fingerprint);
 CREATE INDEX IF NOT EXISTS stories_source_idx ON stories (source_id);
+CREATE INDEX IF NOT EXISTS stories_published_idx ON stories (last_published_at);
 
 CREATE TABLE IF NOT EXISTS clusters (
   id TEXT PRIMARY KEY NOT NULL,
@@ -543,7 +549,71 @@ const COLUMN_MIGRATIONS: readonly ColumnMigration[] = [
     column: 'tier',
     ddl: `ALTER TABLE users ADD COLUMN tier TEXT NOT NULL DEFAULT 'free'`,
   },
+  {
+    // An Article's Story signature, stored rather than hashed, so that matching
+    // an Article against a Story is a comparison of the two rather than a test
+    // for equality. Rows written before this column existed read back as an
+    // empty signature, which matches nothing, and the next poll of that feed
+    // re-derives it.
+    table: 'articles',
+    column: 'signature',
+    ddl: `ALTER TABLE articles ADD COLUMN signature TEXT NOT NULL DEFAULT '{}'`,
+  },
+  {
+    table: 'stories',
+    column: 'signature',
+    ddl: `ALTER TABLE stories ADD COLUMN signature TEXT NOT NULL DEFAULT '{}'`,
+  },
+  {
+    // The Story's published range, which is what the dedup window is measured
+    // against. A Story created before this column existed has an empty range
+    // and is therefore never a candidate again, rather than being compared
+    // against a range of zeros and so matching everything.
+    table: 'stories',
+    column: 'first_published_at',
+    ddl: `ALTER TABLE stories ADD COLUMN first_published_at INTEGER NOT NULL DEFAULT 0`,
+  },
+  {
+    table: 'stories',
+    column: 'last_published_at',
+    ddl: `ALTER TABLE stories ADD COLUMN last_published_at INTEGER NOT NULL DEFAULT 0`,
+  },
 ];
+
+/**
+ * Columns a table used to carry and no longer declares. SQLite can drop a
+ * column, but only once nothing indexes it, so the index goes first. A no-op
+ * once the column is gone, and a no-op on a database that never had it.
+ *
+ * The retired `fingerprint` columns are the reason this exists. They held a hash
+ * of the Article's key phrases and were the sole test for whether two Articles
+ * were one Story, so leaving them on an existing database would leave a column
+ * nothing reads and that a later reader could reasonably take for the identity of
+ * a Story.
+ */
+const RETIRED_COLUMNS: readonly {
+  readonly table: string;
+  readonly column: string;
+  readonly indexes: readonly string[];
+}[] = [
+  { table: 'articles', column: 'fingerprint', indexes: ['articles_fingerprint_idx'] },
+  {
+    table: 'stories',
+    column: 'fingerprint',
+    indexes: ['stories_source_fingerprint_idx'],
+  },
+];
+
+function applyRetiredColumns(driver: SqliteDriver): void {
+  for (const retired of RETIRED_COLUMNS) {
+    if (!tableExists(driver, retired.table)) continue;
+    if (!hasColumn(driver, retired.table, retired.column)) continue;
+    for (const index of retired.indexes) {
+      driver.exec(`DROP INDEX IF EXISTS ${index}`);
+    }
+    driver.exec(`ALTER TABLE ${retired.table} DROP COLUMN ${retired.column}`);
+  }
+}
 
 function hasColumn(
   driver: SqliteDriver,
@@ -573,16 +643,78 @@ function applyTableRebuilds(driver: SqliteDriver): void {
   }
 }
 
+/**
+ * Give Stories that predate the signature columns the two things a Story needs
+ * to be matched again: a signature to compare an incoming Article against, and
+ * the publication range the dedup window is measured over.
+ *
+ * Without this, every Story written by an older build reads back with an empty
+ * signature and a zero range, matches nothing, and is never a candidate again —
+ * so the next poll of every feed re-formed all of its Stories from scratch and
+ * the Story table doubled. The Articles are right there in the same database, so
+ * both values are derived from them: the signature from the oldest Article's text
+ * and the range from the oldest and newest Article in the Story.
+ *
+ * A Story with no Articles has neither, and there is nothing to derive from, so
+ * it is left alone: it was already a Story that nothing could be added to.
+ */
+function backfillStorySignatures(driver: SqliteDriver): void {
+  if (!tableExists(driver, 'stories') || !tableExists(driver, 'articles')) {
+    return;
+  }
+  const stories = driver
+    .prepare(
+      `SELECT s.id AS id,
+              MIN(a.published_at) AS first_published_at,
+              MAX(a.published_at) AS last_published_at
+       FROM stories s
+       JOIN articles a ON a.story_id = s.id
+       WHERE s.signature = '{}'
+       GROUP BY s.id`,
+    )
+    .all() as {
+    id: string;
+    first_published_at: number;
+    last_published_at: number;
+  }[];
+  const update = driver.prepare(
+    `UPDATE stories SET signature = ?, first_published_at = ?, last_published_at = ? WHERE id = ?`,
+  );
+  const oldestBody = driver.prepare(
+    `SELECT body FROM articles
+     WHERE story_id = ? AND published_at = ?
+     ORDER BY id
+     LIMIT 1`,
+  );
+  for (const story of stories) {
+    const row = oldestBody.get(story.id, story.first_published_at) as
+      | { body: string }
+      | undefined;
+    if (!row) continue;
+    const signature = normalizeSignature(extractSignature(row.body));
+    update.run(
+      encodeSignature(signature),
+      story.first_published_at,
+      story.last_published_at,
+      story.id,
+    );
+  }
+}
+
 export function applySchema(driver: SqliteDriver): void {
   // Tables and columns that changed shape are brought up to date first, so the
   // DDL below already matches what they became: an index on a column an older
   // table does not have would otherwise fail against the table as it stands.
   applyTableRebuilds(driver);
   applyColumnMigrations(driver);
+  applyRetiredColumns(driver);
   driver.exec(SCHEMA_SQL);
   rebuildNonUniqueIndexes(driver);
   // Recreate any index the rebuilds dropped with their tables.
   driver.exec(SCHEMA_SQL);
+  // Runs last because it reads both tables in their current shape, and only
+  // touches rows the new columns left empty.
+  backfillStorySignatures(driver);
 }
 
 function schemaStatements(): string[] {

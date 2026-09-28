@@ -8,6 +8,7 @@ import { DrizzleArticleRepo } from './article-repo.js';
 import { DrizzleSourceRepo } from './source-repo.js';
 import { DrizzleTopicRepo } from './topic-repo.js';
 import { DrizzleUserRepo } from './user-repo.js';
+import { EMPTY_SIGNATURE } from '../domain/story-signature.js';
 import type {
   Source,
   StoryId,
@@ -100,9 +101,10 @@ describe('DrizzleClusterRepo', () => {
     await storyRepo.insert({
       id: storyId,
       sourceId: source.id,
-      fingerprint: 'fp1',
+      signature: EMPTY_SIGNATURE,
       firstSeenAt: now,
       lastSeenAt: now,
+      published: { first: now, last: now }
     });
 
     await articleRepo.insert({
@@ -116,8 +118,7 @@ describe('DrizzleClusterRepo', () => {
         publishedAt: now,
         ingestedAt: now,
         entities: [],
-        keyPhrases: [],
-        fingerprint: 'fp1',
+        signature: EMPTY_SIGNATURE,
         storyId,
       },
       entityIds: [],
@@ -174,9 +175,10 @@ describe('DrizzleClusterRepo', () => {
     await storyRepo.insert({
       id: storyId,
       sourceId: source.id,
-      fingerprint: 'fp1',
+      signature: EMPTY_SIGNATURE,
       firstSeenAt: now,
       lastSeenAt: now,
+      published: { first: now, last: now }
     });
 
     const cluster1: Cluster = makeCluster({
@@ -233,9 +235,10 @@ describe('DrizzleClusterRepo', () => {
     await storyRepo.insert({
       id: storyId,
       sourceId: 'src-test',
-      fingerprint: 'fp1',
+      signature: EMPTY_SIGNATURE,
       firstSeenAt: now,
       lastSeenAt: now,
+      published: { first: now, last: now }
     });
     await clusterRepo.insert(
       makeCluster({

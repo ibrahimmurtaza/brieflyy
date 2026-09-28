@@ -1,3 +1,5 @@
+import type { StorySignature } from './story-signature.js';
+
 export const TOPIC_CATEGORIES = [
   'news',
   'technology',
@@ -165,8 +167,8 @@ export interface Article {
   readonly publishedAt: Date;
   readonly ingestedAt: Date;
   readonly entities: readonly Entity[];
-  readonly keyPhrases: readonly string[];
-  readonly fingerprint: string;
+  /** The Article's text-derived identity, as stored and read back. */
+  readonly signature: StorySignature;
   readonly storyId: StoryId | null;
 }
 
@@ -186,12 +188,28 @@ export interface Cluster {
   readonly state: 'active' | 'archive';
 }
 
+/**
+ * When a Story's Articles were published, oldest and newest.
+ *
+ * The dedup window is a fact about when the reporting happened, so it is measured
+ * against this rather than against when a poll brought the Articles in. It is
+ * one value rather than two fields because a Story whose range could be set
+ * inconsistently — newest before oldest, or one end left behind when a copy
+ * arrived — is a Story whose window is quietly wrong.
+ */
+export interface PublishedRange {
+  readonly first: Date;
+  readonly last: Date;
+}
+
 export interface Story {
   readonly id: StoryId;
   readonly sourceId: SourceId;
-  readonly fingerprint: string;
+  /** The signature this Story was formed from, fixed when it was created. */
+  readonly signature: StorySignature;
   readonly firstSeenAt: Date;
   readonly lastSeenAt: Date;
+  readonly published: PublishedRange;
   readonly articleCount: number;
 }
 

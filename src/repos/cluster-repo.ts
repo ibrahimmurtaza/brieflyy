@@ -11,6 +11,7 @@ import {
   type ArticleRow,
   type EntityRow,
 } from '../db/schema.js';
+import { decodeSignature } from '../domain/story-signature.js';
 import type {
   Article,
   Cluster,
@@ -77,14 +78,13 @@ function rowToArticle(row: ArticleRow, entityRows: readonly EntityRow[]): Articl
     body: row.body,
     publishedAt: row.publishedAt,
     ingestedAt: row.ingestedAt,
-    fingerprint: row.fingerprint,
     storyId: (row.storyId ?? null) as StoryId | null,
     entities: entityRows.map((r) => ({
       id: r.id as EntityId,
       canonicalName: r.canonicalName,
       kind: r.kind,
     })),
-    keyPhrases: [],
+    signature: decodeSignature(row.signature),
   };
 }
 

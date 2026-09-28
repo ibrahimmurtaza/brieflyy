@@ -155,10 +155,21 @@ shape change needs one of:
     link pointed at.
 - **An index that must change uniqueness.** `rebuildNonUniqueIndexes` drops a
   same-named index that is not unique so the unique form can be created.
+- **A column being retired.** `RETIRED_COLUMNS` in `src/db/migrate.ts` lists the
+  column and every index that has to go with it, because SQLite cannot drop a
+  column an index refers to:
+  ```ts
+  { table: 'articles', column: 'fingerprint',
+    indexes: ['articles_fingerprint_idx'] }
+  ```
+  Each entry is skipped once the column is gone. Removing a column is
+  one-way — a build that still writes it cannot open the database afterwards — so
+  retire a column only when nothing reads it, and say so in the commit: a column
+  left behind holding a superseded value reads like the current one.
 
-Rebuilds and column migrations run *before* `SCHEMA_SQL`, so the DDL that
-follows already matches the shape they produced; an index on a column an older
-table does not have would otherwise fail against the table as it stands.
+Rebuilds, column migrations and retired columns run *before* `SCHEMA_SQL`, so the
+DDL that follows already matches the shape they produced; an index on a column an
+older table does not have would otherwise fail against the table as it stands.
 
 ## Architecture
 

@@ -15,6 +15,7 @@ import { DrizzleClusterRepo } from '../repos/cluster-repo.js';
 import { DrizzleSourceRepo } from '../repos/source-repo.js';
 import { DrizzleStoryRepo } from '../repos/story-repo.js';
 import { DrizzleTopicRepo } from '../repos/topic-repo.js';
+import { EMPTY_SIGNATURE } from '../domain/story-signature.js';
 import type { SourceId, StoryId, TopicId } from '../domain/types.js';
 
 const NOW = new Date('2026-09-02T12:00:00Z');
@@ -100,13 +101,14 @@ async function givenStory(
   await h.storyRepo.insert({
     id: storyId,
     sourceId: input.sourceId ?? ('reuters' as SourceId),
-    fingerprint: `fp-${input.id}`,
+    signature: EMPTY_SIGNATURE,
     firstSeenAt: NOW,
     lastSeenAt: NOW,
+    published: { first: NOW, last: NOW }
   });
   h.driver
     .prepare(
-      `INSERT INTO articles (id, source_id, external_id, url, title, body, published_at, ingested_at, fingerprint, story_id)
+      `INSERT INTO articles (id, source_id, external_id, url, title, body, published_at, ingested_at, signature, story_id)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
@@ -118,7 +120,7 @@ async function givenStory(
       `${input.title} happened in full, according to people who were there.`,
       NOW.getTime(),
       NOW.getTime(),
-      `fp-${input.id}`,
+      '{}',
       storyId,
     );
   return storyId;

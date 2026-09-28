@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { BriefSnapshotRenderer } from '../../src/services/brief-snapshot-renderer.js';
+import { EMPTY_SIGNATURE } from '../../src/domain/story-signature.js';
 import type { LLMSummaryOutput } from '../../src/domain/llm.js';
 import { writeFileSync, unlinkSync } from 'fs';
 import { tmpdir } from 'os';
@@ -48,8 +49,7 @@ function createMockClusterRepo() {
         publishedAt: new Date(),
         ingestedAt: new Date(),
         entities: [],
-        keyPhrases: [],
-        fingerprint: 'fp-ai',
+        signature: EMPTY_SIGNATURE,
         storyId: 'st-1',
       },
     ],
