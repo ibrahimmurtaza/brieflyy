@@ -1,3 +1,4 @@
+import { inArray, notInArray } from 'drizzle-orm';
 import seedJson from './seed.json' with { type: 'json' };
 
 import type { TopicCategory } from '../domain/types.js';
@@ -131,8 +132,30 @@ function parseSeed(raw: unknown): DirectorySeed {
 
 export const directorySeed: DirectorySeed = parseSeed(seedJson);
 
-export async function applyDirectorySeed(db: Db): Promise<void> {
-  for (const s of directorySeed.sources) {
+export async function applyDirectorySeed(
+  db: Db,
+  seed: DirectorySeed = directorySeed,
+): Promise<void> {
+  const seedSlugs = seed.sources.map((s) => s.slug);
+
+  // This function withdraws Sources, so an empty registry is not a state to act
+  // on — it is a seed.json that lost its contents, and acting on it would
+  // cascade away every user's Topic sources. Fail loudly at boot instead.
+  if (seedSlugs.length === 0) {
+    throw new Error(
+      'Directory seed: refusing to apply a registry with no Sources, because ' +
+        'applying it would delete every Source in the database',
+    );
+  }
+
+  // Upsert, not insert-and-ignore. A Source's name, homepage and feed URL are
+  // facts the registry owns, so a database created against an older seed.json
+  // has to be brought up to date or it keeps Sources that can never be
+  // ingested — silently, with no error to notice. last_polled_at and
+  // last_success_at are deliberately untouched: they are this installation's
+  // poll history, and the backoff is computed from them, so writing them here
+  // would clear every Source's failure streak on each boot.
+  for (const s of seed.sources) {
     await db
       .insert(sources)
       .values({
@@ -142,9 +165,27 @@ export async function applyDirectorySeed(db: Db): Promise<void> {
         homepageUrl: s.homepageUrl,
         feedUrl: s.feedUrl ?? null,
       })
-      .onConflictDoNothing();
+      .onConflictDoUpdate({
+        target: sources.id,
+        set: {
+          slug: s.slug,
+          name: s.name,
+          homepageUrl: s.homepageUrl,
+          feedUrl: s.feedUrl ?? null,
+        },
+      });
   }
-  for (const t of directorySeed.templates) {
+
+  // A Source the registry no longer lists has been withdrawn. topic_sources
+  // cascades on delete, so a Topic that was following it keeps its other
+  // Sources instead of keeping one nothing can ever ingest. The alternative —
+  // leaving the row — means the operator removes an outlet and it is still
+  // there, still in the picker, still polled. Nothing outside the seed writes
+  // to this table, so a row the registry does not name is one the registry
+  // withdrew.
+  await db.delete(sources).where(notInArray(sources.slug, seedSlugs));
+
+  for (const t of seed.templates) {
     await db
       .insert(topicTemplates)
       .values({
@@ -154,17 +195,28 @@ export async function applyDirectorySeed(db: Db): Promise<void> {
         blurb: t.blurb,
         category: t.category,
       })
-      .onConflictDoNothing();
+      .onConflictDoUpdate({
+        target: topicTemplates.id,
+        set: {
+          slug: t.slug,
+          title: t.title,
+          blurb: t.blurb,
+          category: t.category,
+        },
+      });
+    // Replace the list rather than merge into it. Positions are part of the
+    // seed, and a Source the template no longer offers must not linger at its
+    // old position for the picker to show.
+    await db
+      .delete(topicTemplateSources)
+      .where(inArray(topicTemplateSources.topicTemplateId, [t.slug]));
     for (let i = 0; i < t.defaultSourceSlugs.length; i++) {
       const sourceSlug = t.defaultSourceSlugs[i]!;
-      await db
-        .insert(topicTemplateSources)
-        .values({
-          topicTemplateId: t.slug,
-          sourceId: sourceSlug,
-          position: i,
-        })
-        .onConflictDoNothing();
+      await db.insert(topicTemplateSources).values({
+        topicTemplateId: t.slug,
+        sourceId: sourceSlug,
+        position: i,
+      });
     }
   }
 }
