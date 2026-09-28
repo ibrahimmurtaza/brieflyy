@@ -701,6 +701,36 @@ function backfillStorySignatures(driver: SqliteDriver): void {
   }
 }
 
+/**
+ * Give Articles that predate the signature column the key phrases that used to
+ * exist only in memory for the duration of one ingest.
+ *
+ * The Article's signature is what a later read returns, so an Article written by
+ * an older build reads back empty: half the matching mechanism, the words and
+ * phrases, simply is not there for anything written before the column. The body
+ * is right there in the same row, so the signature is derived from it.
+ *
+ * Only rows the column migration left empty are touched. A signature a newer
+ * build wrote is left exactly as it is, since that build derived it from the
+ * same body but may not have done it the way this one would.
+ */
+function backfillArticleSignatures(driver: SqliteDriver): void {
+  if (!tableExists(driver, 'articles') || !hasColumn(driver, 'articles', 'signature')) {
+    return;
+  }
+  const unsigned = driver
+    .prepare(`SELECT id, body FROM articles WHERE signature = '{}'`)
+    .all() as { id: string; body: string }[];
+  if (unsigned.length === 0) return;
+  const update = driver.prepare(`UPDATE articles SET signature = ? WHERE id = ?`);
+  for (const article of unsigned) {
+    // An Article with no text to take a signature from has none, and an empty
+    // signature says exactly that. Writing one for a body that was never read
+    // would be inventing a claim about it.
+    update.run(encodeSignature(normalizeSignature(extractSignature(article.body))), article.id);
+  }
+}
+
 export function applySchema(driver: SqliteDriver): void {
   // Tables and columns that changed shape are brought up to date first, so the
   // DDL below already matches what they became: an index on a column an older
@@ -712,9 +742,10 @@ export function applySchema(driver: SqliteDriver): void {
   rebuildNonUniqueIndexes(driver);
   // Recreate any index the rebuilds dropped with their tables.
   driver.exec(SCHEMA_SQL);
-  // Runs last because it reads both tables in their current shape, and only
-  // touches rows the new columns left empty.
+  // Run last because they read the tables in their current shape, and only
+  // touch rows the new columns left empty.
   backfillStorySignatures(driver);
+  backfillArticleSignatures(driver);
 }
 
 function schemaStatements(): string[] {
