@@ -47,7 +47,7 @@ _Avoid_: story, topic, thread
 **Cluster window**: How far back a Topic looks when it groups Stories into Clusters. Seven days by default, and a User can change it per Topic.
 _Avoid_: cluster TTL, retention window
 
-**Cluster summary**: The one-liner and the bullet points a Cluster is shown with. Every line is quoted from an Article in that Cluster, never written afresh, so nothing reaches a User that a Source did not write.
+**Cluster summary**: The one-liner and the bullet points a Cluster is shown with. Every line is quoted from an Article in that Cluster, never written afresh, so nothing reaches a User that a Source did not write. A feed's own metadata about an item — the link and score a feed with no description gives instead of text — is not a statement a Source made about the story, so it is not quoted either, and the Article's headline is used instead.
 _Avoid_: abstract, digest, synopsis
 
 **BriefPlan**: A selection and ordering of Clusters for a Topic at a moment in time. The regenerable artifact that BriefSnapshots and LivingBriefs are derived from.

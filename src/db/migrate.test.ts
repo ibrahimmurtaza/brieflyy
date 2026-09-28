@@ -8,7 +8,7 @@ import Database from 'better-sqlite3';
 import { createDatabase, createInMemorySqliteDriver } from './client.js';
 import { applySchema, migrateToDatabaseFile } from './migrate.js';
 import { DrizzleTopicRepo } from '../repos/topic-repo.js';
-import { decodeSignature } from '../domain/story-signature.js';
+import { decodeSignature, encodeSignature } from '../domain/story-signature.js';
 import { signatureOf, WIRE_COPIES } from '../testing/story-fixtures.js';
 
 const LEGACY_SCHEMA_SQL = `
@@ -636,6 +636,114 @@ describe('applySchema', () => {
       .get('empty-story') as { signature: string; first_published_at: number };
     expect(row.signature).toBe('{}');
     expect(row.first_published_at).toBe(0);
+  });
+
+  it('derives a signature for an Article written before the column existed', () => {
+    const driver = createInMemorySqliteDriver();
+    driver.exec(PRE_SIGNATURE_SQL);
+    driver
+      .prepare(
+        `INSERT INTO sources (id, slug, name, homepage_url) VALUES (?, ?, ?, ?)`,
+      )
+      .run('src-1', 'outlet', 'Outlet', 'https://example.com');
+    driver
+      .prepare(
+        `INSERT INTO articles (id, source_id, external_id, url, title, body, published_at, ingested_at, fingerprint)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        'a-1',
+        'src-1',
+        'ext-1',
+        'https://example.com/1',
+        'A headline',
+        WIRE_COPIES[0]!.body,
+        1000,
+        1000,
+        'old-hash',
+      );
+
+    applySchema(driver);
+
+    // Left empty, the Article reads back with no key phrases at all, which is
+    // the half of the mechanism that was only ever in memory.
+    const row = driver
+      .prepare(`SELECT signature FROM articles WHERE id = ?`)
+      .get('a-1') as { signature: string };
+    expect(decodeSignature(row.signature)).toEqual(
+      signatureOf(WIRE_COPIES[0]!.body),
+    );
+  });
+
+  it('leaves a signature a newer build already wrote alone', () => {
+    const driver = createInMemorySqliteDriver();
+    driver.exec(PRE_SIGNATURE_SQL);
+    driver
+      .prepare(
+        `INSERT INTO sources (id, slug, name, homepage_url) VALUES (?, ?, ?, ?)`,
+      )
+      .run('src-1', 'outlet', 'Outlet', 'https://example.com');
+    driver
+      .prepare(
+        `INSERT INTO articles (id, source_id, external_id, url, title, body, published_at, ingested_at, fingerprint)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        'a-1',
+        'src-1',
+        'ext-1',
+        'https://example.com/1',
+        'A headline',
+        'A body that is not the one the signature was taken from.',
+        1000,
+        1000,
+        'old-hash',
+      );
+    // A second boot, after a build that already knows how to sign Articles has
+    // signed this one. Its signature came from this same body, and the backfill
+    // must not overwrite it with a value derived a different way.
+    applySchema(driver);
+    driver
+      .prepare(`UPDATE articles SET signature = ? WHERE id = ?`)
+      .run(encodeSignature({ words: ['kept'], phrases: [] }), 'a-1');
+
+    applySchema(driver);
+
+    const row = driver
+      .prepare(`SELECT signature FROM articles WHERE id = ?`)
+      .get('a-1') as { signature: string };
+    expect(decodeSignature(row.signature)).toEqual({
+      words: ['kept'],
+      phrases: [],
+    });
+  });
+
+  it('records an Article it had no text to sign, rather than leaving it unsigned', () => {
+    const driver = createInMemorySqliteDriver();
+    driver.exec(PRE_SIGNATURE_SQL);
+    driver
+      .prepare(
+        `INSERT INTO sources (id, slug, name, homepage_url) VALUES (?, ?, ?, ?)`,
+      )
+      .run('src-1', 'outlet', 'Outlet', 'https://example.com');
+    driver
+      .prepare(
+        `INSERT INTO articles (id, source_id, external_id, url, title, body, published_at, ingested_at, fingerprint)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run('a-1', 'src-1', 'ext-1', 'https://example.com/1', 'A headline', '', 1000, 1000, 'old-hash');
+
+    applySchema(driver);
+
+    const row = driver
+      .prepare(`SELECT signature FROM articles WHERE id = ?`)
+      .get('a-1') as { signature: string };
+    // A signed Article with nothing in its signature is a different claim from
+    // an Article that was never signed at all, and only the first is true here:
+    // the body was read, and it had no words. The default '{}' is kept for rows
+    // the backfill cannot reach, so it stays the "not signed" marker.
+    expect(row.signature).not.toBe('{}');
+    expect(decodeSignature(row.signature)).toEqual({ words: [], phrases: [] });
   });
 
   it('lets a magic link exist before the account it will create', () => {

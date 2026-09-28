@@ -44,6 +44,45 @@ describe('extractSentences', () => {
     expect(extractSentences('')).toEqual([]);
     expect(extractSentences('   ')).toEqual([]);
   });
+
+  it('returns nothing for a body that is a link and a score rather than a statement', () => {
+    // What a feed with no description gives us. Quoting it back would put a
+    // URL in front of a User as though it were what happened.
+    expect(
+      extractSentences(
+        'Article URL: https://git.mills.io/prologic/parley Comments URL: https://news.ycombinator.com/item?id=49875913 Points: 33 # Comments: 10',
+      ),
+    ).toEqual([]);
+  });
+
+  it('keeps a real sentence that merely mentions a link', () => {
+    const sentence =
+      'A webassembly web based app that help editing raster and vector on browser without any subscription or signups Comments URL: https://news.ycombinator.com/item?id=1 Points: 9 # Comments: 0';
+
+    expect(extractSentences(sentence)).toEqual([
+      'A webassembly web based app that help editing raster and vector on browser without any subscription or signups',
+    ]);
+  });
+
+  it('strips the citation header a feed puts in front of the text', () => {
+    expect(
+      extractSentences(
+        'Nature, Published online: 28 September 2026; doi:10.1038/d41586-026-03004-3 China tests these therapies faster than the rest of the world.',
+      ),
+    ).toEqual([
+      'China tests these therapies faster than the rest of the world.',
+    ]);
+  });
+
+  it('leaves nothing when a citation header is all a feed gave an Article', () => {
+    // What survives the header is too short to be a statement, so the Article
+    // has no sentence to quote and its callers fall back to the title.
+    expect(
+      extractSentences(
+        'Nature, Published online: 23 September 2026; doi:10.1038/d41586-026-02861-2 A special delivery.',
+      ),
+    ).toEqual([]);
+  });
 });
 
 describe('oneLinerFrom', () => {
@@ -83,6 +122,18 @@ describe('oneLinerFrom', () => {
     const article = makeArticle({ id: 'a-1', title: 'Acme Corp launches Foo' });
 
     expect(oneLinerFrom(article)).toBe('Acme Corp launches Foo');
+  });
+
+  it('falls back to the title when the body is only feed metadata', () => {
+    const article = makeArticle({
+      id: 'a-1',
+      title: 'Parley: Federated, decentralised chat that speaks plain IRC',
+      body: 'Article URL: https://git.mills.io/prologic/parley Comments URL: https://news.ycombinator.com/item?id=49875913 Points: 33 # Comments: 10',
+    });
+
+    expect(oneLinerFrom(article)).toBe(
+      'Parley: Federated, decentralised chat that speaks plain IRC',
+    );
   });
 });
 
@@ -152,6 +203,25 @@ describe('bulletsFrom', () => {
     expect(bullets).toEqual([
       'Acme Corp unveiled Foo today.',
       'BrandX Inc acquires TinyCo',
+    ]);
+  });
+
+  it('falls back to an Article title when its body is only feed metadata', () => {
+    const bullets = bulletsFrom(
+      [
+        makeArticle({ id: 'a-1', body: 'Acme Corp unveiled Foo today.' }),
+        makeArticle({
+          id: 'a-2',
+          title: 'Parley: Federated, decentralised chat that speaks plain IRC',
+          body: 'Article URL: https://git.mills.io/prologic/parley Comments URL: https://news.ycombinator.com/item?id=49875913 Points: 33 # Comments: 10',
+        }),
+      ],
+      3,
+    );
+
+    expect(bullets).toEqual([
+      'Acme Corp unveiled Foo today.',
+      'Parley: Federated, decentralised chat that speaks plain IRC',
     ]);
   });
 
