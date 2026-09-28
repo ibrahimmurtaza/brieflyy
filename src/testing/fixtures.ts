@@ -18,6 +18,7 @@ export interface TopicFixture {
   readonly sourceIds?: readonly string[];
   readonly cadence?: Cadence;
   readonly createdAt?: Date;
+  readonly removedAt?: Date | null;
 }
 
 /**
@@ -36,6 +37,7 @@ export function makeTopic(input: TopicFixture): Topic {
     sourceIds: input.sourceIds ?? [],
     cadence: input.cadence ?? 'daily',
     createdAt: input.createdAt ?? new Date('2026-09-01T00:00:00Z'),
+    removedAt: input.removedAt ?? null,
   };
 }
 

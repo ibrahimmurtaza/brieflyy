@@ -29,7 +29,9 @@ async function makeTestApp(): Promise<{
   return { app, transport };
 }
 
-async function signInFresh(): Promise<{
+async function signIn(
+  email: string,
+): Promise<{
   app: FastifyInstance;
   transport: ConsoleEmailTransport;
   cookie: string;
@@ -38,7 +40,7 @@ async function signInFresh(): Promise<{
   await app.inject({
     method: 'POST',
     url: '/auth/magic-link/request',
-    payload: { email: 'iris@example.com' },
+    payload: { email },
   });
   const text = transport.snapshot()[0]!.text;
   const token = extractMagicLinkToken(text);
@@ -50,6 +52,91 @@ async function signInFresh(): Promise<{
   const setCookieText = Array.isArray(setCookie) ? setCookie[0]! : setCookie!;
   const cookie = setCookieText.split(';')[0]!;
   return { app, transport, cookie };
+}
+
+async function signInFresh(): Promise<{
+  app: FastifyInstance;
+  transport: ConsoleEmailTransport;
+  cookie: string;
+}> {
+  return signIn('iris@example.com');
+}
+
+/**
+ * A second user in the *same* app and database. Two separate apps would each
+ * get their own test database, so a cross-user test built that way proves
+ * nothing about ownership scoping.
+ */
+async function signInSecond(
+  app: FastifyInstance,
+  transport: ConsoleEmailTransport,
+  email: string,
+): Promise<string> {
+  await app.inject({
+    method: 'POST',
+    url: '/auth/magic-link/request',
+    payload: { email },
+  });
+  const text = transport.snapshot().at(-1)!.text;
+  const token = extractMagicLinkToken(text);
+  const verify = await app.inject({
+    method: 'GET',
+    url: `/auth/magic-link/verify?token=${encodeURIComponent(token)}`,
+  });
+  const setCookie = verify.headers['set-cookie'];
+  const setCookieText = Array.isArray(setCookie) ? setCookie[0]! : setCookie!;
+  return setCookieText.split(';')[0]!;
+}
+
+/** Slugs of the topics the user currently holds, read off the manage page. */
+function slugsOnPage(body: string): string[] {
+  return [...body.matchAll(/name="slug" value="([^"]*)"/g)].map((m) => m[1]!);
+}
+
+async function firstSlug(
+  app: FastifyInstance,
+  cookie: string,
+): Promise<string> {
+  const page = await app.inject({
+    method: 'GET',
+    url: '/pick-topics',
+    headers: { cookie },
+  });
+  expect(page.statusCode).toBe(200);
+  const slug = slugsOnPage(page.body)[0];
+  expect(slug).toBeDefined();
+  return slug!;
+}
+
+async function removeFirstTopic(
+  app: FastifyInstance,
+  cookie: string,
+): Promise<void> {
+  const slug = await firstSlug(app, cookie);
+  const response = await app.inject({
+    method: 'POST',
+    url: '/pick-topics/remove',
+    headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+    payload: `slug=${encodeURIComponent(slug)}`,
+  });
+  expect(response.statusCode).toBe(302);
+}
+
+async function setDeliveryTime(
+  app: FastifyInstance,
+  cookie: string,
+  time: { hour: number; minute: number; timezone: string },
+): Promise<void> {
+  const response = await app.inject({
+    method: 'POST',
+    url: '/onboarding/delivery-time',
+    headers: {
+      cookie,
+      'content-type': 'application/x-www-form-urlencoded',
+    },
+    payload: `hour=${time.hour}&minute=${time.minute}&timezone=${encodeURIComponent(time.timezone)}`,
+  });
+  expect(response.statusCode).toBe(302);
 }
 
 async function fetchTemplateIds(
@@ -277,6 +364,15 @@ describe('HTTP: POST /onboarding/pick-topics', () => {
     expect(second.statusCode).toBe(402);
     expect(second.body).toMatch(/free-topic limit/);
     expect(second.body).toMatch(/Upgrade/);
+    expect(second.body).toMatch(/href="\/upgrade"/);
+    // The promise the paywall makes has to land somewhere. This used to 404.
+    const upgrade = await app.inject({
+      method: 'GET',
+      url: '/upgrade',
+      headers: { cookie },
+    });
+    expect(upgrade.statusCode).toBe(200);
+    expect(upgrade.body).toMatch(/isn't connected yet|isn&#39;t connected yet/);
   });
 
   it('redirects to /signup when the user is not authenticated', async () => {
@@ -316,6 +412,92 @@ describe('HTTP: GET /onboarding/delivery-time', () => {
     expect(response.body).toMatch(/name="timezone"/);
   });
 
+  it('offers Save and continue, and no change control, while no time is set yet', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/onboarding/delivery-time',
+      headers: { cookie },
+    });
+    expect(response.statusCode).toBe(200);
+    // A prefilled suggestion is not a saved time, so there is nothing to state
+    // and nothing to change: the form is the whole page.
+    expect(response.body).not.toMatch(/arrives daily at/);
+    expect(response.body).not.toMatch(/Change delivery time/);
+    expect(response.body).toMatch(/>Save and continue<\/button>/);
+    // The button no longer changes meaning, so nothing needs a script to do it.
+    expect(response.body).not.toMatch(/data-initial-hour/);
+    expect(response.body).not.toMatch(/<script/);
+  });
+
+  it('sends a user who already has a time to the settings screen, not onboarding', async () => {
+    await setDeliveryTime(app, cookie, {
+      hour: 8,
+      minute: 0,
+      timezone: 'America/New_York',
+    });
+    const response = await app.inject({
+      method: 'GET',
+      url: '/onboarding/delivery-time',
+      headers: { cookie },
+    });
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toBe('/settings/delivery');
+  });
+
+  it('states the time already set and offers a change control on the settings screen', async () => {
+    await setDeliveryTime(app, cookie, {
+      hour: 8,
+      minute: 0,
+      timezone: 'America/New_York',
+    });
+    const response = await app.inject({
+      method: 'GET',
+      url: '/settings/delivery',
+      headers: { cookie },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatch(
+      /arrives daily at <strong>08:00<\/strong> \(America\/New_York\)/,
+    );
+    expect(response.body).toMatch(
+      /<details class="change" id="change-delivery">/,
+    );
+    expect(response.body).toMatch(/<summary>Change delivery time<\/summary>/);
+    expect(response.body).toMatch(/action="\/settings\/delivery"/);
+    expect(response.body).toMatch(/>Save time<\/button>/);
+    // The change control is a native disclosure, so it works without JavaScript.
+    expect(response.body).not.toMatch(/<script/);
+  });
+
+  it('confirms a save on the settings screen and shows the new time', async () => {
+    await setDeliveryTime(app, cookie, {
+      hour: 8,
+      minute: 0,
+      timezone: 'America/New_York',
+    });
+    const saved = await app.inject({
+      method: 'POST',
+      url: '/settings/delivery',
+      headers: {
+        cookie,
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      payload: 'hour=19&minute=30&timezone=America%2FNew_York',
+    });
+    expect(saved.statusCode).toBe(302);
+    expect(saved.headers.location).toBe('/settings/delivery?saved=1');
+
+    const after = await app.inject({
+      method: 'GET',
+      url: '/settings/delivery?saved=1',
+      headers: { cookie },
+    });
+    expect(after.statusCode).toBe(200);
+    expect(after.body).toMatch(/Time saved\./);
+    expect(after.body).toMatch(/arrives daily at <strong>19:30<\/strong>/);
+  });
+
+
   it('redirects to /signup when not authenticated', async () => {
     const response = await app.inject({
       method: 'GET',
@@ -347,6 +529,62 @@ describe('HTTP: POST /onboarding/delivery-time', () => {
         'content-type': 'application/x-www-form-urlencoded',
       },
       payload: 'hour=8&minute=0&timezone=America%2FNew_York',
+    });
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toBe('/onboarding/welcome');
+  });
+
+  it('advances to welcome even when a time that was already set changes', async () => {
+    await setDeliveryTime(app, cookie, {
+      hour: 8,
+      minute: 0,
+      timezone: 'America/New_York',
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/onboarding/delivery-time',
+      headers: {
+        cookie,
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      payload: 'hour=19&minute=30&timezone=America%2FNew_York',
+    });
+    // No inference: this endpoint exists to finish onboarding, so it saves and
+    // moves on. Editing an existing time is what the settings screen is for.
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toBe('/onboarding/welcome');
+  });
+
+  it('advances rather than bouncing when the time is submitted unchanged', async () => {
+    await setDeliveryTime(app, cookie, {
+      hour: 8,
+      minute: 0,
+      timezone: 'America/New_York',
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/onboarding/delivery-time',
+      headers: {
+        cookie,
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      payload: 'hour=8&minute=0&timezone=America%2FNew_York',
+    });
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toBe('/onboarding/welcome');
+  });
+
+  it('advances for a first pick even when it differs from the suggestion', async () => {
+    // Nothing is stored, so there is no saved time to edit; every pick is a
+    // first pick, and the screen says Continue.
+    const response = await app.inject({
+      method: 'POST',
+      url: '/onboarding/delivery-time',
+      headers: {
+        cookie,
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      payload: 'hour=19&minute=30&timezone=America%2FNew_York',
     });
     expect(response.statusCode).toBe(302);
     expect(response.headers.location).toBe('/onboarding/welcome');
@@ -506,9 +744,297 @@ describe('HTTP: GET/POST /settings/delivery', () => {
       headers: { cookie },
     });
     expect(after.statusCode).toBe(200);
-    expect(after.body).toMatch(/Delivery time updated/);
+    expect(after.body).toMatch(/Time saved\./);
+    expect(after.body).toMatch(/arrives daily at <strong>09:30<\/strong>/);
     expect(after.body).toMatch(/value="9"/);
     expect(after.body).toMatch(/value="30"/);
     expect(after.body).toMatch(/Europe\/London/);
+  });
+});
+
+describe('HTTP: /pick-topics (managing topics after onboarding)', () => {
+  let app: FastifyInstance;
+  let transport: ConsoleEmailTransport;
+  let cookie: string;
+  let ids: string[];
+
+  beforeEach(async () => {
+    ({ app, transport, cookie } = await signInFresh());
+    ids = await fetchTemplateIds(app, cookie);
+    const picked = await app.inject({
+      method: 'POST',
+      url: '/onboarding/pick-topics',
+      headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      payload: `templateIds=${ids[0]}&templateIds=${ids[1]}&templateIds=${ids[2]}`,
+    });
+    expect(picked.statusCode).toBe(302);
+    await setDeliveryTime(app, cookie, {
+      hour: 8,
+      minute: 0,
+      timezone: 'Europe/London',
+    });
+  });
+
+  afterEach(async () => {
+    await app.close();
+  });
+
+  it('redirects a completed user away from the onboarding screen', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/onboarding/pick-topics',
+      headers: { cookie },
+    });
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toBe('/pick-topics');
+  });
+
+  it('adds a topic when the user is below the cap', async () => {
+    await removeFirstTopic(app, cookie);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/pick-topics',
+      headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      payload: `templateIds=${ids[3]}`,
+    });
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toBe('/topics');
+
+    const page = await app.inject({
+      method: 'GET',
+      url: '/pick-topics',
+      headers: { cookie },
+    });
+    expect(slugsOnPage(page.body)).toHaveLength(3);
+  });
+
+  it('refuses a fourth topic with the paywall', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/pick-topics',
+      headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      payload: `templateIds=${ids[3]}`,
+    });
+    expect(response.statusCode).toBe(402);
+    expect(response.body).toMatch(/free-topic limit/);
+  });
+
+  it('disables the checkboxes when a free user is at the cap', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/pick-topics',
+      headers: { cookie },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatch(/You are using all 3 free topics/);
+    expect(response.body).toMatch(/name="templateIds"[^>]*disabled/);
+    expect(response.body).toMatch(/<button type="submit" disabled>Add topics<\/button>/);
+  });
+
+  it('leaves the checkboxes enabled below the cap', async () => {
+    await removeFirstTopic(app, cookie);
+    const response = await app.inject({
+      method: 'GET',
+      url: '/pick-topics',
+      headers: { cookie },
+    });
+    expect(response.body).toMatch(/Pick up to 1 more topic/);
+    expect(response.body).not.toMatch(/name="templateIds"[^>]*disabled/);
+  });
+
+  it('offers a remove control for each of the user topics', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/pick-topics',
+      headers: { cookie },
+    });
+    expect(response.body).toMatch(/action="\/pick-topics\/remove"/);
+    expect(response.body).toMatch(/Its past briefs are kept/);
+  });
+
+  it('does not offer a remove control during onboarding', async () => {
+    const fresh = await signInFresh();
+    try {
+      const response = await fresh.app.inject({
+        method: 'GET',
+        url: '/onboarding/pick-topics',
+        headers: { cookie: fresh.cookie },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.body).not.toMatch(/action="\/pick-topics\/remove"/);
+    } finally {
+      await fresh.app.close();
+    }
+  });
+
+  it('frees a slot when a topic is removed, so a replacement can be added', async () => {
+    const slug = await firstSlug(app, cookie);
+    const remove = await app.inject({
+      method: 'POST',
+      url: '/pick-topics/remove',
+      headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      payload: `slug=${encodeURIComponent(slug)}`,
+    });
+    expect(remove.statusCode).toBe(302);
+    expect(remove.headers.location).toBe('/pick-topics');
+
+    const add = await app.inject({
+      method: 'POST',
+      url: '/pick-topics',
+      headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      payload: `templateIds=${ids[3]}`,
+    });
+    expect(add.statusCode).toBe(302);
+
+    const page = await app.inject({
+      method: 'GET',
+      url: '/pick-topics',
+      headers: { cookie },
+    });
+    expect(slugsOnPage(page.body)).toHaveLength(3);
+  });
+
+  it('will not remove a topic owned by another user', async () => {
+    // Same app, same database: a different account, not a different world.
+    const attackerCookie = await signInSecond(app, transport, 'mallory@example.com');
+    const ownerSlug = await firstSlug(app, cookie);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/pick-topics/remove',
+      headers: {
+        cookie: attackerCookie,
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      payload: `slug=${encodeURIComponent(ownerSlug)}`,
+    });
+    expect(response.statusCode).toBe(404);
+
+    // The owner still has all three.
+    const page = await app.inject({
+      method: 'GET',
+      url: '/pick-topics',
+      headers: { cookie },
+    });
+    expect(slugsOnPage(page.body)).toHaveLength(3);
+  });
+
+  it('will not let a second user spend the owner’s free slots', async () => {
+    const attackerCookie = await signInSecond(app, transport, 'mallory@example.com');
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/pick-topics',
+      headers: {
+        cookie: attackerCookie,
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      payload: `templateIds=${ids[3]}`,
+    });
+    // Mallory is a separate user with no topics, so she has all 3 slots.
+    expect(response.statusCode).toBe(302);
+
+    const page = await app.inject({
+      method: 'GET',
+      url: '/pick-topics',
+      headers: { cookie: attackerCookie },
+    });
+    expect(slugsOnPage(page.body)).toHaveLength(1);
+
+    // And the owner is unaffected.
+    const ownerPage = await app.inject({
+      method: 'GET',
+      url: '/pick-topics',
+      headers: { cookie },
+    });
+    expect(slugsOnPage(ownerPage.body)).toHaveLength(3);
+  });
+
+  it('re-adds a topic that was removed, without tripping the unique index', async () => {
+    // Template ids are their slugs, so removing a topic and picking the same
+    // template again must reuse a slug that no active topic holds.
+    const slug = ids[0]!;
+    const remove = await app.inject({
+      method: 'POST',
+      url: '/pick-topics/remove',
+      headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      payload: `slug=${encodeURIComponent(slug)}`,
+    });
+    expect(remove.statusCode).toBe(302);
+
+    const readd = await app.inject({
+      method: 'POST',
+      url: '/pick-topics',
+      headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      payload: `templateIds=${encodeURIComponent(slug)}`,
+    });
+    expect(readd.statusCode).toBe(302);
+
+    const page = await app.inject({
+      method: 'GET',
+      url: '/pick-topics',
+      headers: { cookie },
+    });
+    expect(page.statusCode).toBe(200);
+    const slugs = slugsOnPage(page.body);
+    expect(slugs).toHaveLength(3);
+    // The unique index still spans the removed row, so the re-added topic
+    // takes the next free slug rather than colliding.
+    expect(slugs).toContain(`${slug}-2`);
+  });
+
+  it('re-adds a removed freeform topic without tripping the unique index', async () => {
+    // Free a slot, then use it for a freeform topic.
+    await removeFirstTopic(app, cookie);
+    const added = await app.inject({
+      method: 'POST',
+      url: '/pick-topics',
+      headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      payload: 'freeformTitle=Fusion%20Energy',
+    });
+    expect(added.statusCode).toBe(302);
+
+    // Now remove that freeform topic and pick the same title again.
+    const remove = await app.inject({
+      method: 'POST',
+      url: '/pick-topics/remove',
+      headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      payload: 'slug=fusion-energy',
+    });
+    expect(remove.statusCode).toBe(302);
+
+    const readd = await app.inject({
+      method: 'POST',
+      url: '/pick-topics',
+      headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      payload: 'freeformTitle=Fusion%20Energy',
+    });
+    expect(readd.statusCode).toBe(302);
+
+    const page = await app.inject({
+      method: 'GET',
+      url: '/pick-topics',
+      headers: { cookie },
+    });
+    expect(page.statusCode).toBe(200);
+    expect(slugsOnPage(page.body)).toHaveLength(3);
+  });
+
+  it('rejects an empty selection on the manage form', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/pick-topics',
+      headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      payload: '',
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toMatch(/Pick at least one topic/);
+  });
+
+  it('redirects to /signup when not authenticated', async () => {
+    const response = await app.inject({ method: 'GET', url: '/pick-topics' });
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toBe('/signup');
   });
 });

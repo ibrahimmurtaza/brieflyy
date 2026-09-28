@@ -219,6 +219,9 @@ export const topics = sqliteTable(
     createdAt: integer('created_at', { mode: 'timestamp_ms' })
       .notNull()
       .default(sql`(unixepoch() * 1000)`),
+    // Soft delete. A removed topic stops counting toward the free-tier cap and
+    // disappears from listings, but its brief history stays intact.
+    removedAt: integer('removed_at', { mode: 'timestamp_ms' }),
   },
   (t) => ({
     userSlugUnique: uniqueIndex('topics_user_slug_unique').on(

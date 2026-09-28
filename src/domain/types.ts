@@ -115,6 +115,7 @@ export interface Topic {
   readonly sourceIds: readonly SourceId[];
   readonly cadence: Cadence;
   readonly createdAt: Date;
+  readonly removedAt: Date | null;
 }
 
 export interface DeliveryTime {

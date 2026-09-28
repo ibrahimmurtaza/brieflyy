@@ -322,3 +322,160 @@ describe('OnboardingService.selectTopics', () => {
     expect(user!.onboardingState).toBe('not_started');
   });
 });
+
+describe('OnboardingService.addTopics', () => {
+  beforeEach(() => {
+    resetDeterministic();
+  });
+
+  it('fills the slots a user has left rather than demanding three', async () => {
+    const { service, signedInUser } = await makeHarness();
+    const { userId } = await signedInUser('iris@example.com');
+    const templates = await service.listTemplates();
+
+    const first = await service.addTopics({
+      userId,
+      templateIds: [templates[0]!.id],
+    });
+    expect(first.status).toBe('ok');
+    expect(await service.listTopics(userId)).toHaveLength(1);
+
+    const second = await service.addTopics({
+      userId,
+      templateIds: [templates[1]!.id],
+    });
+    expect(second.status).toBe('ok');
+    expect(await service.listTopics(userId)).toHaveLength(2);
+  });
+
+  it('refuses to go past the free cap for a user who already has three', async () => {
+    const { service, signedInUser } = await makeHarness();
+    const { userId } = await signedInUser('iris@example.com');
+    const templates = await service.listTemplates();
+
+    const outcome = await service.addTopics({
+      userId,
+      templateIds: [templates[0]!.id, templates[1]!.id, templates[2]!.id],
+    });
+    expect(outcome.status).toBe('ok');
+
+    const overCap = await service.addTopics({
+      userId,
+      templateIds: [templates[3]!.id],
+    });
+    expect(overCap.status).toBe('invalid');
+    if (overCap.status === 'invalid') {
+      expect(overCap.reason).toBe('paywall_tier_limit');
+    }
+    expect(await service.listTopics(userId)).toHaveLength(3);
+  });
+
+  it('refuses a batch larger than the slots remaining', async () => {
+    const { service, signedInUser } = await makeHarness();
+    const { userId } = await signedInUser('iris@example.com');
+    const templates = await service.listTemplates();
+
+    await service.addTopics({ userId, templateIds: [templates[0]!.id] });
+
+    // Two slots left, so a batch of three cannot fit.
+    const outcome = await service.addTopics({
+      userId,
+      templateIds: [templates[1]!.id, templates[2]!.id, templates[3]!.id],
+    });
+    expect(outcome.status).toBe('invalid');
+    if (outcome.status === 'invalid') {
+      expect(outcome.reason).toBe('paywall_tier_limit');
+    }
+    expect(await service.listTopics(userId)).toHaveLength(1);
+  });
+
+  it('rejects an empty selection', async () => {
+    const { service, signedInUser } = await makeHarness();
+    const { userId } = await signedInUser('iris@example.com');
+
+    const outcome = await service.addTopics({ userId, templateIds: [] });
+    expect(outcome.status).toBe('invalid');
+    if (outcome.status === 'invalid') expect(outcome.reason).toBe('wrong_count');
+  });
+
+  it('does not rewind a finished user back into onboarding', async () => {
+    const { service, signedInUser, userRepo } = await makeHarness();
+    const { userId } = await signedInUser('iris@example.com');
+    const templates = await service.listTemplates();
+    await userRepo.setOnboardingState(userId, 'completed');
+
+    await service.addTopics({ userId, templateIds: [templates[0]!.id] });
+
+    const user = await userRepo.getById(userId);
+    expect(user!.onboardingState).toBe('completed');
+  });
+});
+
+describe('OnboardingService.removeTopic', () => {
+  beforeEach(() => {
+    resetDeterministic();
+  });
+
+  it('removes one of the user’s own topics and frees the slot', async () => {
+    const { service, signedInUser } = await makeHarness();
+    const { userId } = await signedInUser('iris@example.com');
+    const templates = await service.listTemplates();
+    await service.addTopics({
+      userId,
+      templateIds: [templates[0]!.id, templates[1]!.id, templates[2]!.id],
+    });
+    const [first] = await service.listTopics(userId);
+
+    const outcome = await service.removeTopic(userId, first!.slug);
+    expect(outcome.status).toBe('ok');
+
+    expect(await service.listTopics(userId)).toHaveLength(2);
+
+    // The freed slot can be filled again, which is the whole swap flow.
+    const replacement = await service.addTopics({
+      userId,
+      templateIds: [templates[3]!.id],
+    });
+    expect(replacement.status).toBe('ok');
+    expect(await service.listTopics(userId)).toHaveLength(3);
+  });
+
+  it('keeps the brief history of a removed topic by not deleting the row', async () => {
+    const { service, signedInUser, topicRepo } = await makeHarness();
+    const { userId } = await signedInUser('iris@example.com');
+    const templates = await service.listTemplates();
+    await service.addTopics({ userId, templateIds: [templates[0]!.id] });
+    const [first] = await service.listTopics(userId);
+
+    await service.removeTopic(userId, first!.slug);
+
+    expect(await service.listTopics(userId)).toHaveLength(0);
+    // Gone from every read path the app uses...
+    expect(await topicRepo.getById(first!.id)).toBeNull();
+    expect(await topicRepo.listAll()).toHaveLength(0);
+  });
+
+  it('will not remove a topic belonging to someone else', async () => {
+    const { service, signedInUser } = await makeHarness();
+    const { userId: ownerId } = await signedInUser('owner@example.com');
+    const { userId: attackerId } = await signedInUser('attacker@example.com');
+    const templates = await service.listTemplates();
+    await service.addTopics({ userId: ownerId, templateIds: [templates[0]!.id] });
+    const [ownerTopic] = await service.listTopics(ownerId);
+
+    const outcome = await service.removeTopic(attackerId, ownerTopic!.slug);
+
+    expect(outcome.status).toBe('not_found');
+    // The owner's topic is untouched.
+    expect(await service.listTopics(ownerId)).toHaveLength(1);
+  });
+
+  it('reports a slug the user does not have as not found', async () => {
+    const { service, signedInUser } = await makeHarness();
+    const { userId } = await signedInUser('iris@example.com');
+
+    const outcome = await service.removeTopic(userId, 'no-such-topic');
+
+    expect(outcome.status).toBe('not_found');
+  });
+});

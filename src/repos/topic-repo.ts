@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull } from 'drizzle-orm';
 
 import type { Db } from '../db/client.js';
 import {
@@ -32,6 +32,7 @@ function rowToTopic(row: TopicRow, sourceIds: readonly string[]): Topic {
     sourceIds,
     cadence: (row.cadence ?? 'daily') as Cadence,
     createdAt: row.createdAt,
+    removedAt: row.removedAt ?? null,
   };
 }
 
@@ -63,6 +64,18 @@ export interface TopicRepo {
     sourceId: string,
     position: number,
   ): Promise<void>;
+  /**
+   * Soft delete. The row stays so its brief plans and snapshots remain
+   * readable, but the topic stops resolving for listings and for the ingest and
+   * cluster pipelines, and it stops counting toward the free-tier cap.
+   */
+  remove(id: TopicId, removedAt: Date): Promise<void>;
+  /**
+   * Every slug the user has ever held, including removed ones. The unique
+   * index on (user_id, slug) still spans soft-deleted rows, so slug allocation
+   * has to see them or re-adding a removed topic raises a constraint error.
+   */
+  listSlugsByUser(userId: UserId): Promise<readonly string[]>;
 }
 
 export class DrizzleTopicRepo implements TopicRepo {
@@ -82,6 +95,7 @@ export class DrizzleTopicRepo implements TopicRepo {
       originTemplateId,
       cadence: topic.cadence ?? 'daily',
       createdAt: topic.createdAt,
+      removedAt: topic.removedAt,
     });
   }
 
@@ -89,7 +103,7 @@ export class DrizzleTopicRepo implements TopicRepo {
     const tplRows = (await this.db
       .select()
       .from(topics)
-      .where(eq(topics.userId, userId))
+      .where(and(eq(topics.userId, userId), isNull(topics.removedAt)))
       .orderBy(asc(topics.createdAt))) as readonly TopicRow[];
     if (tplRows.length === 0) return [];
     const ids = tplRows.map((r) => r.id);
@@ -110,6 +124,7 @@ export class DrizzleTopicRepo implements TopicRepo {
     const tplRows = (await this.db
       .select()
       .from(topics)
+      .where(isNull(topics.removedAt))
       .orderBy(asc(topics.createdAt))) as readonly TopicRow[];
     if (tplRows.length === 0) return [];
     const ids = tplRows.map((r) => r.id);
@@ -128,7 +143,7 @@ export class DrizzleTopicRepo implements TopicRepo {
     const tplRows = (await this.db
       .select()
       .from(topics)
-      .where(eq(topics.id, id))) as readonly TopicRow[];
+      .where(and(eq(topics.id, id), isNull(topics.removedAt)))) as readonly TopicRow[];
     const row = tplRows[0];
     if (!row) return null;
     const linkRows = (await this.db
@@ -150,5 +165,20 @@ export class DrizzleTopicRepo implements TopicRepo {
       sourceId,
       position,
     });
+  }
+
+  async remove(id: TopicId, removedAt: Date): Promise<void> {
+    await this.db
+      .update(topics)
+      .set({ removedAt })
+      .where(and(eq(topics.id, id), isNull(topics.removedAt)));
+  }
+
+  async listSlugsByUser(userId: UserId): Promise<readonly string[]> {
+    const rows = (await this.db
+      .select({ slug: topics.slug })
+      .from(topics)
+      .where(eq(topics.userId, userId))) as readonly { slug: string }[];
+    return rows.map((r) => r.slug);
   }
 }

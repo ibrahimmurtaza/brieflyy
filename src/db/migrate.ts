@@ -105,7 +105,8 @@ CREATE TABLE IF NOT EXISTS topics (
   origin_kind TEXT NOT NULL,
   origin_template_id TEXT REFERENCES topic_templates(id) ON DELETE SET NULL,
   cadence TEXT NOT NULL DEFAULT 'daily',
-  created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+  created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+  removed_at INTEGER
 );
 CREATE UNIQUE INDEX IF NOT EXISTS topics_user_slug_unique ON topics (user_id, slug);
 CREATE INDEX IF NOT EXISTS topics_user_idx ON topics (user_id);
@@ -491,6 +492,11 @@ const COLUMN_MIGRATIONS: readonly ColumnMigration[] = [
     table: 'topics',
     column: 'cadence',
     ddl: `ALTER TABLE topics ADD COLUMN cadence TEXT NOT NULL DEFAULT 'daily'`,
+  },
+  {
+    table: 'topics',
+    column: 'removed_at',
+    ddl: `ALTER TABLE topics ADD COLUMN removed_at INTEGER`,
   },
 ];
 

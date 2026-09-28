@@ -121,7 +121,7 @@ export class OnboardingService {
     }
 
     const existing = await this.topicRepo.listByUser(input.userId);
-    const takenSlugs = new Set(existing.map((t) => t.slug));
+    const takenSlugs = new Set(await this.topicRepo.listSlugsByUser(input.userId));
     if (existing.length + total > FREE_TIER_TOPIC_CAP) {
       return { status: 'invalid', reason: 'paywall_tier_limit' };
     }
@@ -135,11 +135,117 @@ export class OnboardingService {
       templates.push(t);
     }
 
+    const created = await this.insertTopics({
+      userId: input.userId,
+      templates,
+      freeformTitle,
+      takenSlugs,
+    });
+
+    if (created.length > 0) {
+      await this.userRepo.setOnboardingState(input.userId, 'topics_picked');
+    }
+
+    return { status: 'ok', topics: created };
+  }
+
+  /**
+   * Add topics to a user who has already onboarded, rather than picking their
+   * initial three. A free user may hold at most FREE_TIER_TOPIC_CAP topics in
+   * total, so this fills the slots they have left and is refused once they are
+   * full; removing a topic frees a slot to fill again.
+   */
+  async addTopics(input: SelectTopicsInput): Promise<SelectTopicsOutcome> {
+    for (const id of input.templateIds) {
+      const parsed = templateIdSchema.safeParse(id);
+      if (!parsed.success) {
+        return { status: 'invalid', reason: 'unknown_template' };
+      }
+    }
+
+    const rawFreeform = input.freeformTitle?.trim() ?? '';
+    let freeformTitle: string | null = null;
+    if (rawFreeform.length > 0) {
+      const parsedFreeform = freeformTitleSchema.safeParse(rawFreeform);
+      if (!parsedFreeform.success) {
+        return { status: 'invalid', reason: 'wrong_count' };
+      }
+      if (slugify(parsedFreeform.data).length === 0) {
+        return { status: 'invalid', reason: 'wrong_count' };
+      }
+      freeformTitle = parsedFreeform.data;
+    }
+
+    const total = input.templateIds.length + (freeformTitle ? 1 : 0);
+    if (total < 1) {
+      return { status: 'invalid', reason: 'wrong_count' };
+    }
+
+    const seen = new Set<string>();
+    for (const id of input.templateIds) {
+      if (seen.has(id)) {
+        return { status: 'invalid', reason: 'duplicate_template' };
+      }
+      seen.add(id);
+    }
+
+    const existing = await this.topicRepo.listByUser(input.userId);
+    const remaining = FREE_TIER_TOPIC_CAP - existing.length;
+    if (total > remaining) {
+      return { status: 'invalid', reason: 'paywall_tier_limit' };
+    }
+
+    const takenSlugs = new Set(await this.topicRepo.listSlugsByUser(input.userId));
+
+    const templates: TopicTemplate[] = [];
+    for (const id of input.templateIds) {
+      const t = await this.topicTemplateRepo.getById(id);
+      if (!t) {
+        return { status: 'invalid', reason: 'unknown_template' };
+      }
+      templates.push(t);
+    }
+
+    const created = await this.insertTopics({
+      userId: input.userId,
+      templates,
+      freeformTitle,
+      takenSlugs,
+    });
+
+    return { status: 'ok', topics: created };
+  }
+
+  /**
+   * Soft delete one of a user's topics. Scoped by userId so a slug belonging to
+   * someone else is reported as missing rather than removed. The topic's brief
+   * history is kept; it just stops counting toward the cap and stops being
+   * ingested and clustered.
+   */
+  async removeTopic(
+    userId: UserId,
+    slug: string,
+  ): Promise<{ status: 'ok' } | { status: 'not_found' }> {
+    const existing = await this.topicRepo.listByUser(userId);
+    const match = existing.find((t) => t.slug === slug);
+    if (!match) {
+      return { status: 'not_found' };
+    }
+    await this.topicRepo.remove(match.id, this.clock.now());
+    return { status: 'ok' };
+  }
+
+  private async insertTopics(input: {
+    readonly userId: UserId;
+    readonly templates: readonly TopicTemplate[];
+    readonly freeformTitle: string | null;
+    readonly takenSlugs: Set<string>;
+  }): Promise<Topic[]> {
     const now = this.clock.now();
     const created: Topic[] = [];
 
-    for (const t of templates) {
-      const slug = this.allocateUniqueSlug(t.slug, takenSlugs);
+    for (const t of input.templates) {
+      const slug = this.allocateUniqueSlug(t.slug, input.takenSlugs);
       const topic: Topic = {
         id: this.random.uuid() as TopicId,
         userId: input.userId,
@@ -154,6 +260,7 @@ export class OnboardingService {
         sourceIds: [...t.defaultSourceIds],
         cadence: 'daily',
         createdAt: now,
+        removedAt: null,
       };
       await this.topicRepo.insert(topic);
       for (let i = 0; i < t.defaultSourceIds.length; i++) {
@@ -166,30 +273,27 @@ export class OnboardingService {
       created.push(topic);
     }
 
-    if (freeformTitle) {
-      const baseSlug = slugify(freeformTitle);
-      const slug = this.allocateUniqueSlug(baseSlug, takenSlugs);
+    if (input.freeformTitle) {
+      const baseSlug = slugify(input.freeformTitle);
+      const slug = this.allocateUniqueSlug(baseSlug, input.takenSlugs);
       const topic: Topic = {
         id: this.random.uuid() as TopicId,
         userId: input.userId,
         slug,
-        title: freeformTitle,
+        title: input.freeformTitle,
         blurb: '',
         category: 'unspecified',
         origin: { kind: 'freeform' },
         sourceIds: [],
         cadence: 'daily',
         createdAt: now,
+        removedAt: null,
       };
       await this.topicRepo.insert(topic);
       created.push(topic);
     }
 
-    if (created.length > 0) {
-      await this.userRepo.setOnboardingState(input.userId, 'topics_picked');
-    }
-
-    return { status: 'ok', topics: created };
+    return created;
   }
 
   private allocateUniqueSlug(base: string, taken: Set<string>): string {
