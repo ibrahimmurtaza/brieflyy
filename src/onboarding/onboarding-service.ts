@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { Clock } from '../domain/clock.js';
 import { DEFAULT_CLUSTER_WINDOW_DAYS } from '../domain/cluster-window.js';
 import type { RandomSource } from '../domain/crypto.js';
-import { slugify } from '../domain/slug.js';
+import { slugify, titleKey } from '../domain/slug.js';
 import { computeFirstBriefAt, isValidIanaTimezone, isValidDeliveryHour, isValidDeliveryMinute, type DeliveryTime } from '../domain/timezone.js';
 import { DEFAULT_TIER, resolveTier, topicCapFor } from '../domain/tier.js';
 import type {
@@ -60,6 +60,13 @@ export type SelectTopicsOutcome =
         | 'wrong_count'
         | 'unknown_template'
         | 'duplicate_template'
+        /**
+         * A Topic the User already holds. Distinct from `duplicate_template`,
+         * which is the same entry twice in one submission: the two need
+         * different sentences, and only this one can be fixed by removing
+         * something rather than by ticking differently.
+         */
+        | 'already_held'
         | 'duplicate_freeform_slug'
         | 'paywall_tier_limit';
     };
@@ -226,6 +233,43 @@ export class OnboardingService {
       templates.push(t);
     }
 
+    // A Topic the User already holds cannot be added a second time.
+    //
+    // The within-batch `seen` check above only catches the same box ticked twice
+    // in one submission. It said nothing about a Topic the User already had, and
+    // `allocateUniqueSlug` then cheerfully handed back `world-news-2`: two rows
+    // in "Your topics" with the same title, blurb, category and Sources, both
+    // counting against the cap and both of them ingested and emailed.
+    //
+    // Matched on the title as well as the template id, because the same idea can
+    // arrive either way: a free-form "Fusion energy" and the Directory template
+    // of the same name are the same Topic as far as the list on screen is
+    // concerned.
+    const held = await this.heldTopicKeys(input.userId);
+    for (const t of templates) {
+      if (held.heldTemplateIds.has(t.id) || held.heldTitleKeys.has(titleKey(t.title))) {
+        return { status: 'invalid', reason: 'already_held' };
+      }
+    }
+    if (freeformTitle && held.heldTitleKeys.has(titleKey(freeformTitle))) {
+      return { status: 'invalid', reason: 'already_held' };
+    }
+    // And two entries in the same batch that are the same idea.
+    const batchTitles = new Set<string>();
+    for (const t of templates) {
+      const key = titleKey(t.title);
+      if (batchTitles.has(key)) {
+        return { status: 'invalid', reason: 'duplicate_template' };
+      }
+      batchTitles.add(key);
+    }
+    if (freeformTitle) {
+      const key = titleKey(freeformTitle);
+      if (batchTitles.has(key)) {
+        return { status: 'invalid', reason: 'duplicate_freeform_slug' };
+      }
+    }
+
     const created = await this.insertTopics({
       userId: input.userId,
       templates,
@@ -318,8 +362,26 @@ export class OnboardingService {
     return created;
   }
 
-  private allocateUniqueSlug(base: string, taken: Set<string>): string {
-    if (!taken.has(base)) {
+  /**
+   * The Directory template ids and normalised titles a User already holds.
+   *
+   * Read once per submission rather than per template, because the list is the
+   * same for every entry in a batch.
+   */
+  private async heldTopicKeys(userId: UserId): Promise<{
+    readonly heldTemplateIds: Set<string>;
+    readonly heldTitleKeys: Set<string>;
+  }> {
+    const heldTemplateIds = new Set<string>();
+    const heldTitleKeys = new Set<string>();
+    for (const t of await this.topicRepo.listByUser(userId)) {
+      heldTitleKeys.add(titleKey(t.title));
+      if (t.origin.kind === 'template') heldTemplateIds.add(t.origin.templateId);
+    }
+    return { heldTemplateIds, heldTitleKeys };
+  }
+
+  private allocateUniqueSlug(base: string, taken: Set<string>): string {    if (!taken.has(base)) {
       taken.add(base);
       return base;
     }

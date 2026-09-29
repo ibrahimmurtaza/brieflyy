@@ -344,6 +344,11 @@ function humanReason(
         : 'You picked the same topic more than once. Please pick different ones.';
     case 'duplicate_freeform_slug':
       return 'You already have a topic with that name.';
+    case 'already_held':
+      // Distinct from `duplicate_template`: the User did not tick the same box
+      // twice, they already have the Topic, so the only way forward is to remove
+      // it first.
+      return 'You already have one of those topics. Remove it first if you want to swap it.';
     case 'paywall_tier_limit':
       return 'Free Brieflyy is limited to 3 topics. Upgrade to add more.';
   }

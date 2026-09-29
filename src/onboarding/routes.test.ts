@@ -122,6 +122,37 @@ async function removeFirstTopic(
   expect(response.statusCode).toBe(302);
 }
 
+/**
+ * The Directory template ids the User already holds, worked out by asking the
+ * picker which cards it marks as added.
+ *
+ * Read from the page rather than from the database so the helper cannot disagree
+ * with the rendering the assertions are about.
+ */
+async function templateIdsAlreadyHeld(
+  app: FastifyInstance,
+  cookie: string,
+): Promise<string[]> {
+  const page = await app.inject({
+    method: 'GET',
+    url: '/pick-topics',
+    headers: { cookie },
+  });
+  expect(page.statusCode).toBe(200);
+  return [...page.body.matchAll(/name="templateIds" value="([^"]+)"[^>]*disabled/g)].map(
+    (m) => m[1]!,
+  );
+}
+
+/** The slugs the User currently holds, from "Your topics" on the picker. */
+async function slugsHeld(app: FastifyInstance, cookie: string): Promise<string[]> {
+  return slugsOnPage(
+    (
+      await app.inject({ method: 'GET', url: '/pick-topics', headers: { cookie } })
+    ).body,
+  );
+}
+
 async function setDeliveryTime(
   app: FastifyInstance,
   cookie: string,
@@ -832,7 +863,7 @@ describe('HTTP: /pick-topics (managing topics after onboarding)', () => {
     expect(response.body).toMatch(/<button type="submit" disabled>Add topics<\/button>/);
   });
 
-  it('leaves the checkboxes enabled below the cap', async () => {
+  it('leaves the checkboxes enabled below the cap, except for topics already held', async () => {
     await removeFirstTopic(app, cookie);
     const response = await app.inject({
       method: 'GET',
@@ -840,7 +871,52 @@ describe('HTTP: /pick-topics (managing topics after onboarding)', () => {
       headers: { cookie },
     });
     expect(response.body).toMatch(/Pick up to 1 more topic/);
-    expect(response.body).not.toMatch(/name="templateIds"[^>]*disabled/);
+    // Two reasons a box can be disabled, and the page needs to tell them apart:
+    // the User is at the cap, or they already hold that Topic. The second is
+    // shown rather than hidden, so "Already added" is the only thing that
+    // should carry a disabled box here.
+    const disabled = [...response.body.matchAll(/name="templateIds" value="([^"]+)"[^>]*disabled/g)]
+      .map((m) => m[1]);
+    const held = new Set(await templateIdsAlreadyHeld(app, cookie));
+    expect(disabled.sort()).toEqual([...held].sort());
+    expect(response.body).toMatch(/Already added/);
+  });
+
+  it('does not offer a topic the user already holds, and says which ones', async () => {
+    // The reported defect: ticking a Directory topic the User already had added
+    // a second copy of it, suffixed so the two rows could coexist. Below the cap
+    // first, so the only reason a box is disabled is that it is already held.
+    await removeFirstTopic(app, cookie);
+    const response = await app.inject({
+      method: 'GET',
+      url: '/pick-topics',
+      headers: { cookie },
+    });
+    const held = await templateIdsAlreadyHeld(app, cookie);
+    expect(held.length).toBe(2);
+    expect((response.body.match(/Already added/g) ?? []).length).toBe(2);
+    // And the other eight are still on offer.
+    const offered = [...response.body.matchAll(/name="templateIds" value="([^"]+)"/g)]
+      .map((m) => m[1]!)
+      .filter((id) => !held.includes(id));
+    expect(offered.length).toBeGreaterThanOrEqual(8);
+  });
+
+  it('refuses a posted topic the user already holds, rather than adding a second copy', async () => {
+    await removeFirstTopic(app, cookie);
+    const held = await templateIdsAlreadyHeld(app, cookie);
+    const before = await slugsHeld(app, cookie);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/pick-topics',
+      headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      payload: `templateIds=${held[0]}`,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toMatch(/already have one of those topics/);
+    expect(await slugsHeld(app, cookie)).toEqual(before);
   });
 
   it('offers a remove control for each of the user topics', async () => {

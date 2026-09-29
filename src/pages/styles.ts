@@ -414,6 +414,22 @@ section > h2 { font-size: var(--text-sm); text-transform: uppercase; letter-spac
 .card input { grid-row: 1 / span 2; align-self: start; margin-top: 0.2rem; }
 .card .title { font-weight: 600; }
 .card .blurb { color: var(--color-text-muted); font-size: var(--text-sm); }
+/* An entry the User already holds: still shown, because the Directory is a
+   catalogue, but visibly not available and saying why. */
+.card--held {
+  cursor: default;
+  background: var(--color-surface);
+  box-shadow: none;
+  border-style: dashed;
+}
+.card--held .title { color: var(--color-text-subtle); }
+.card__note {
+  grid-column: 2;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--color-text-muted);
+}
 
 .freeform { margin-top: var(--space-5); }
 .existing { list-style: none; padding: 0; margin: 0 0 var(--space-4); }

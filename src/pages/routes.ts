@@ -424,6 +424,11 @@ function pickTopicsPage(input: {
   // A free user at the cap may not tick anything: no add, no swap. The only way
   // to change a topic is to delete one first, or upgrade.
   const locked = input.atCap;
+  // The Directory template ids the User already holds, so those entries can be
+  // shown as already added rather than offered a second time.
+  const heldTemplateIds = new Set(
+    input.existing.flatMap((t) => (t.origin.kind === 'template' ? [t.origin.templateId] : [])),
+  );
   const grouped = new Map<TopicTemplate['category'], TopicTemplate[]>();
   for (const t of input.templates) {
     const list = grouped.get(t.category) ?? [];
@@ -444,10 +449,16 @@ function pickTopicsPage(input: {
         .map((t) => {
           const safeTitle = escapeHtml(t.title);
           const safeBlurb = escapeHtml(t.blurb);
-          return `<label class="card">
-            <input type="checkbox" name="templateIds" value="${escapeHtml(t.id)}"${locked ? ' disabled' : ''}>
+          // A Topic already held is shown but not offered. Omitting the card
+          // would hide that the Directory contains it; leaving it tickable would
+          // offer the User a second copy of something they already have.
+          const alreadyHeld = heldTemplateIds.has(t.id);
+          const disabled = locked || alreadyHeld;
+          return `<label class="card${alreadyHeld ? ' card--held' : ''}">
+            <input type="checkbox" name="templateIds" value="${escapeHtml(t.id)}"${disabled ? ' disabled' : ''}>
             <span class="title">${safeTitle}</span>
             <span class="blurb">${safeBlurb}</span>
+            ${alreadyHeld ? '<span class="card__note">Already added</span>' : ''}
           </label>`;
         })
         .join('\n        ');

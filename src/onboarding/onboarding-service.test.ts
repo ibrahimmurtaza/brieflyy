@@ -411,6 +411,99 @@ describe('OnboardingService.addTopics', () => {
     const user = await userRepo.getById(userId);
     expect(user!.onboardingState).toBe('completed');
   });
+
+  it('refuses a Directory topic the user already holds, rather than a second copy of it', async () => {
+    const { service, signedInUser } = await makeHarness();
+    const { userId } = await signedInUser('iris@example.com');
+    const templates = await service.listTemplates();
+
+    await service.addTopics({ userId, templateIds: [templates[0]!.id] });
+    const [held] = await service.listTopics(userId);
+
+    const outcome = await service.addTopics({
+      userId,
+      templateIds: [templates[0]!.id],
+    });
+
+    // Before this was refused, `allocateUniqueSlug` handed back
+    // `world-news-2` and the user ended up with two topics of the same name,
+    // same blurb, same category and same Sources, counting twice against the
+    // cap and both of them ingested.
+    expect(outcome.status).toBe('invalid');
+    if (outcome.status === 'invalid') {
+      expect(outcome.reason).toBe('already_held');
+    }
+    const after = await service.listTopics(userId);
+    expect(after).toHaveLength(1);
+    expect(after[0]!.id).toBe(held!.id);
+    expect(after[0]!.slug).toBe(held!.slug);
+  });
+
+  it('refuses a free-form title the user already holds, rather than a slug-suffixed copy', async () => {
+    const { service, signedInUser } = await makeHarness();
+    const { userId } = await signedInUser('iris@example.com');
+
+    const first = await service.addTopics({
+      userId,
+      templateIds: [],
+      freeformTitle: 'Fusion energy',
+    });
+    expect(first.status).toBe('ok');
+
+    // The same idea typed again. The suffix allocation exists for two *different*
+    // ideas that happen to slugify the same, not for the same one twice.
+    const outcome = await service.addTopics({
+      userId,
+      templateIds: [],
+      freeformTitle: 'fusion energy',
+    });
+
+    expect(outcome.status).toBe('invalid');
+    if (outcome.status === 'invalid') {
+      expect(outcome.reason).toBe('already_held');
+    }
+    expect(await service.listTopics(userId)).toHaveLength(1);
+  });
+
+  it('refuses a Directory topic the user already holds as free-form, because the list would show two of the same', async () => {
+    const { service, signedInUser, topicTemplateRepo } = await makeHarness();
+    const { userId } = await signedInUser('iris@example.com');
+    const templates = await service.listTemplates();
+    const template = templates[0]!;
+    const held = await topicTemplateRepo.getById(template.id);
+    expect(held, 'the fixture Directory is empty').not.toBeNull();
+
+    // The same idea, typed rather than ticked.
+    await service.addTopics({ userId, templateIds: [], freeformTitle: template.title });
+
+    const outcome = await service.addTopics({ userId, templateIds: [template.id] });
+
+    expect(outcome.status).toBe('invalid');
+    if (outcome.status === 'invalid') {
+      expect(outcome.reason).toBe('already_held');
+    }
+    expect(await service.listTopics(userId)).toHaveLength(1);
+  });
+
+  it('refuses a batch that names the same idea twice, once ticked and once typed', async () => {
+    const { service, signedInUser } = await makeHarness();
+    const { userId } = await signedInUser('iris@example.com');
+    const templates = await service.listTemplates();
+
+    const outcome = await service.addTopics({
+      userId,
+      templateIds: [templates[0]!.id, templates[1]!.id],
+      freeformTitle: templates[0]!.title,
+    });
+
+    expect(outcome.status).toBe('invalid');
+    if (outcome.status === 'invalid') {
+      // Nothing is held yet, so this is a collision inside the batch rather than
+      // a Topic the User already has.
+      expect(outcome.reason).toBe('duplicate_freeform_slug');
+    }
+    expect(await service.listTopics(userId)).toHaveLength(0);
+  });
 });
 
 describe('OnboardingService.removeTopic', () => {
