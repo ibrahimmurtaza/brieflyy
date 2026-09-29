@@ -1,5 +1,6 @@
 import type { Clock } from '../domain/clock.js';
-import { extractEntities, extractSignature } from '../domain/extract.js';
+import { extractSignature } from '../domain/extract.js';
+import { extractEntities } from '../domain/entity-extraction.js';
 import { safeExternalUrl } from '../domain/url.js';
 import {
   bestStoryMatch,
@@ -209,16 +210,15 @@ export class IngestService {
     title: string,
     body: string,
   ): Promise<readonly Entity[]> {
-    const text = `${title}\n${body}`;
-    const names = extractEntities(text);
     const out: Entity[] = [];
-    for (const name of names) {
+    for (const extracted of extractEntities(`${title}\n${body}`)) {
       const id = this.random.uuid() as EntityId;
-      const e = await this.entityRepo.upsertByName({
-        canonicalName: name,
-        id,
-      });
-      out.push(e);
+      out.push(
+        await this.entityRepo.upsertByKey({
+          entity: extracted,
+          id,
+        }),
+      );
     }
     return out;
   }

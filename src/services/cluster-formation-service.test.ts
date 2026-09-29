@@ -10,6 +10,7 @@ import { DrizzleStoryRepo } from '../repos/story-repo.js';
 import { DrizzleTopicRepo } from '../repos/topic-repo.js';
 import { DrizzleUserRepo } from '../repos/user-repo.js';
 import { EMPTY_SIGNATURE } from '../domain/story-signature.js';
+import { canonicalEntityKey } from '../domain/entity-extraction.js';
 import { CLUSTER_ACTIVE_VELOCITY_THRESHOLD } from './cluster-formation-service.js';
 import { ClusterFormationService } from './cluster-formation-service.js';
 import type { Clock } from '../domain/clock.js';
@@ -136,8 +137,14 @@ async function givenStory(
   const seenAt = new Date(NOW.getTime() - input.hoursAgo * HOUR);
   const entityIds: EntityId[] = [];
   for (const name of input.entities) {
-    const entity = await h.entityRepo.upsertByName({
-      canonicalName: ENTITY_NAMES[name],
+    const entity = await h.entityRepo.upsertByKey({
+      entity: {
+        name: ENTITY_NAMES[name],
+        key: canonicalEntityKey(ENTITY_NAMES[name]),
+        // Grouping is decided on which Entities two Stories share, never on what
+        // kind they are, so there is nothing to read into the kind here.
+        kind: 'concept',
+      },
       id: `ent-${name}` as EntityId,
     });
     entityIds.push(entity.id);

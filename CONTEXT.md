@@ -32,7 +32,7 @@ _Avoid_: outlet, publisher, feed (when meaning a Source, not an RSS document)
 **Article**: A single ingested document from a Source. The atomic input to the pipeline.
 _Avoid_: post, item, document
 
-**Entity**: A named thing (person, organization, place, product, or concept) extracted from an Article by named-entity recognition. The key used for Cluster overlap and the unit of Trends.
+**Entity**: A named thing (person, organization, place, product, or concept) extracted from an Article by named-entity recognition. The key used for Cluster overlap and the unit of Trends. One Entity however many ways outlets write its name: a spelling is not the identity.
 _Avoid_: tag, keyword, named entity
 
 **Story**: A deduped event — a group of near-duplicate Articles published within a 48–72h window of each other. The working unit of the pipeline; the user never sees a Story directly.

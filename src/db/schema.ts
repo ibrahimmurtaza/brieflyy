@@ -308,12 +308,21 @@ export const entities = sqliteTable(
   {
     id: text('id').primaryKey(),
     canonicalName: text('canonical_name').notNull(),
+    /**
+     * What the Entity's identity is decided on: the name with its capitalisation,
+     * punctuation and legal form folded away. Two outlets write one name several
+     * ways, and the spelling a User reads is not what decides whether they are
+     * talking about the same thing. A row whose name folds to nothing at all
+     * carries its own id here — see `backfillEntityKeys` in `migrate.ts`.
+     */
+    canonicalKey: text('canonical_key').notNull(),
     kind: text('kind', {
       enum: ['person', 'org', 'place', 'product', 'concept'],
     }).notNull(),
   },
   (t) => ({
     nameUnique: uniqueIndex('entities_canonical_name_unique').on(t.canonicalName),
+    keyUnique: uniqueIndex('entities_canonical_key_unique').on(t.canonicalKey),
   }),
 );
 
