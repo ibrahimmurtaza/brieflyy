@@ -1,0 +1,75 @@
+/**
+ * The English function words.
+ *
+ * Shared by the two things that read Article text: the Story signature, which
+ * drops them so a signature carries content words, and Entity extraction, which
+ * drops them so a sentence's first "The" is not read as a name. It is a small,
+ * fixed list of words that carry no meaning of their own, so it belongs to
+ * neither of them alone.
+ */
+export const STOPWORDS: ReadonlySet<string> = new Set([
+  'a',
+  'an',
+  'the',
+  'and',
+  'or',
+  'but',
+  'is',
+  'are',
+  'was',
+  'were',
+  'be',
+  'been',
+  'being',
+  'has',
+  'have',
+  'had',
+  'do',
+  'does',
+  'did',
+  'will',
+  'would',
+  'should',
+  'could',
+  'may',
+  'might',
+  'must',
+  'shall',
+  'can',
+  'of',
+  'in',
+  'on',
+  'at',
+  'to',
+  'for',
+  'with',
+  'by',
+  'from',
+  'as',
+  'this',
+  'that',
+  'these',
+  'those',
+  'it',
+  'its',
+  'he',
+  'she',
+  'they',
+  'them',
+  'his',
+  'her',
+  'their',
+  'we',
+  'us',
+  'our',
+  'i',
+  'me',
+  'my',
+  'you',
+  'your',
+  'yours',
+]);
+
+export function isStopword(word: string): boolean {
+  return STOPWORDS.has(word.toLowerCase());
+}

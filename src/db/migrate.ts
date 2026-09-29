@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 
 import type { SqliteDriver } from './client.js';
 import { extractSignature } from '../domain/extract.js';
+import { canonicalEntityKey } from '../domain/entity-extraction.js';
 import {
   encodeSignature,
   normalizeSignature,
@@ -139,9 +140,11 @@ CREATE TABLE IF NOT EXISTS delivery_settings (
 CREATE TABLE IF NOT EXISTS entities (
   id TEXT PRIMARY KEY NOT NULL,
   canonical_name TEXT NOT NULL,
+  canonical_key TEXT NOT NULL,
   kind TEXT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS entities_canonical_name_unique ON entities (canonical_name);
+CREATE UNIQUE INDEX IF NOT EXISTS entities_canonical_key_unique ON entities (canonical_key);
 
 CREATE TABLE IF NOT EXISTS articles (
   id TEXT PRIMARY KEY NOT NULL,
@@ -578,6 +581,15 @@ const COLUMN_MIGRATIONS: readonly ColumnMigration[] = [
     column: 'last_published_at',
     ddl: `ALTER TABLE stories ADD COLUMN last_published_at INTEGER NOT NULL DEFAULT 0`,
   },
+  {
+    // What an Entity's identity is decided on. Rows written before it existed
+    // have no key until the backfill derives one from the name they already
+    // hold, so the default is a marker for "not yet keyed" rather than a value
+    // the code would ever write.
+    table: 'entities',
+    column: 'canonical_key',
+    ddl: `ALTER TABLE entities ADD COLUMN canonical_key TEXT NOT NULL DEFAULT ''`,
+  },
 ];
 
 /**
@@ -731,6 +743,57 @@ function backfillArticleSignatures(driver: SqliteDriver): void {
   }
 }
 
+/**
+ * Give Entities that predate the key column the key their name already says.
+ *
+ * The key is what two spellings of one name are matched on, and it is derived
+ * from the name rather than written by the outlet, so a row that has a name has
+ * everything its key needs. An older build could hold two rows for one thing —
+ * "Acme Corp" and "Acme" were different names to it, and both are the same key
+ * now — so the loser of such a pair is merged into the winner: its Articles are
+ * repointed and the row goes. Leaving both would fail the unique index, and
+ * leaving one un-keyed would mean the next mention of that name inserts a third.
+ *
+ * The key is derived with the same function the pipeline derives it with, so the
+ * two cannot disagree — and a later change to the fold therefore changes what a
+ * later boot writes into an older database, which is the one way this can write
+ * a value the build that wrote it would not have written. A row whose name folds
+ * to nothing at all takes its own id as its key: that keeps it addressable and
+ * keeps the index creatable, and an id is not a name, so nothing else can collide
+ * with it or be folded onto it.
+ *
+ * This runs before the DDL rather than with the other backfills, because the
+ * index the DDL creates is unique and a database holding two rows for one name
+ * cannot have it until the two are one row.
+ */
+function backfillEntityKeys(driver: SqliteDriver): void {
+  if (!tableExists(driver, 'entities')) return;
+  if (!hasColumn(driver, 'entities', 'canonical_key')) return;
+  const unkeyed = driver
+    .prepare(
+      `SELECT id, canonical_name FROM entities WHERE canonical_key = '' ORDER BY id`,
+    )
+    .all() as { id: string; canonical_name: string }[];
+  const keeperOf = new Map<string, string>();
+  const key = driver.prepare(`UPDATE entities SET canonical_key = ? WHERE id = ?`);
+  const repoint = driver.prepare(
+    `UPDATE OR IGNORE article_entities SET entity_id = ? WHERE entity_id = ?`,
+  );
+  const drop = driver.prepare(`DELETE FROM entities WHERE id = ?`);
+  for (const row of unkeyed) {
+    const name = canonicalEntityKey(row.canonical_name);
+    const derived = name.length > 0 ? name : row.id;
+    const keeper = keeperOf.get(derived);
+    if (!keeper) {
+      keeperOf.set(derived, row.id);
+      key.run(derived, row.id);
+      continue;
+    }
+    repoint.run(keeper, row.id);
+    drop.run(row.id);
+  }
+}
+
 export function applySchema(driver: SqliteDriver): void {
   // Tables and columns that changed shape are brought up to date first, so the
   // DDL below already matches what they became: an index on a column an older
@@ -738,6 +801,9 @@ export function applySchema(driver: SqliteDriver): void {
   applyTableRebuilds(driver);
   applyColumnMigrations(driver);
   applyRetiredColumns(driver);
+  // Ahead of the DDL, and unlike the backfills below, because the index the DDL
+  // creates is unique: it cannot be made while two rows are one Entity.
+  backfillEntityKeys(driver);
   driver.exec(SCHEMA_SQL);
   rebuildNonUniqueIndexes(driver);
   // Recreate any index the rebuilds dropped with their tables.

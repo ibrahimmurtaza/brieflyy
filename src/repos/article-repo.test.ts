@@ -5,6 +5,7 @@ import { DrizzleSourceRepo } from './source-repo.js';
 import { DrizzleArticleRepo } from './article-repo.js';
 import { DrizzleEntityRepo } from './entity-repo.js';
 import { extractSignature } from '../domain/extract.js';
+import { canonicalEntityKey } from '../domain/entity-extraction.js';
 import { normalizeSignature } from '../domain/story-signature.js';
 import type { Article, ArticleId, Source } from '../domain/types.js';
 import { WIRE_COPIES } from '../testing/story-fixtures.js';
@@ -82,8 +83,12 @@ describe('DrizzleArticleRepo', () => {
     const articleRepo = new DrizzleArticleRepo(db);
     const entityRepo = new DrizzleEntityRepo(db);
     const t = new Date('2026-05-01T12:00:00Z');
-    const entity1 = await entityRepo.upsertByName({
-      canonicalName: 'Acme Corp',
+    const entity1 = await entityRepo.upsertByKey({
+      entity: {
+        name: 'Acme Corp',
+        key: canonicalEntityKey('Acme Corp'),
+        kind: 'org',
+      },
       id: 'ent-acme',
     });
     await articleRepo.insert({

@@ -212,6 +212,47 @@ CREATE TABLE feedback_events (
 );
 `;
 
+/**
+ * A database from before an Entity carried the key its identity is decided on,
+ * with two rows for the one company: the older build matched Entities by name,
+ * and "Acme Corp" and "Acme" were two names to it.
+ */
+const PRE_ENTITY_KEY_SQL = `
+CREATE TABLE sources (
+  id TEXT PRIMARY KEY NOT NULL,
+  slug TEXT NOT NULL,
+  name TEXT NOT NULL,
+  homepage_url TEXT NOT NULL,
+  feed_url TEXT,
+  last_polled_at INTEGER,
+  last_success_at INTEGER
+);
+CREATE UNIQUE INDEX sources_slug_unique ON sources (slug);
+CREATE TABLE articles (
+  id TEXT PRIMARY KEY NOT NULL,
+  source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+  external_id TEXT NOT NULL,
+  url TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  published_at INTEGER NOT NULL,
+  ingested_at INTEGER NOT NULL,
+  signature TEXT NOT NULL DEFAULT '{}',
+  story_id TEXT
+);
+CREATE TABLE entities (
+  id TEXT PRIMARY KEY NOT NULL,
+  canonical_name TEXT NOT NULL,
+  kind TEXT NOT NULL
+);
+CREATE UNIQUE INDEX entities_canonical_name_unique ON entities (canonical_name);
+CREATE TABLE article_entities (
+  article_id TEXT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+  entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX article_entities_pk ON article_entities (article_id, entity_id);
+`;
+
 function foreignKeys(
   driver: Database.Database,
   table: string,
@@ -806,6 +847,29 @@ describe('applySchema', () => {
     });
   });
 
+  it('keys a row whose name folds to nothing by its own id, so the index can still be made', () => {
+    const driver = createInMemorySqliteDriver();
+    driver.exec(PRE_ENTITY_KEY_SQL);
+    driver
+      .prepare(`INSERT INTO entities (id, canonical_name, kind) VALUES (?, ?, ?)`)
+      .run('ent-1', '...', 'concept');
+    driver
+      .prepare(`INSERT INTO entities (id, canonical_name, kind) VALUES (?, ?, ?)`)
+      .run('ent-2', '&', 'concept');
+
+    // Two rows with no name to fold is exactly the case the unique index has no
+    // answer for, so the migration has to give each of them something of its own.
+    expect(() => applySchema(driver)).not.toThrow();
+
+    const rows = driver
+      .prepare(`SELECT id, canonical_key FROM entities ORDER BY id`)
+      .all() as { id: string; canonical_key: string }[];
+    expect(rows).toEqual([
+      { id: 'ent-1', canonical_key: 'ent-1' },
+      { id: 'ent-2', canonical_key: 'ent-2' },
+    ]);
+  });
+
   it('is a no-op when run twice', () => {
     const driver = createInMemorySqliteDriver();
     applySchema(driver);
@@ -865,6 +929,94 @@ describe('applySchema', () => {
       .prepare(`SELECT cluster_window_days FROM topics WHERE id = ?`)
       .get('topic-1') as { cluster_window_days: number } | undefined;
     expect(row?.cluster_window_days).toBe(7);
+  });
+
+  it('keys the Entities a database already held, from the names it already has', () => {
+    const driver = createInMemorySqliteDriver();
+    driver.exec(PRE_ENTITY_KEY_SQL);
+    driver
+      .prepare(`INSERT INTO sources (id, slug, name, homepage_url) VALUES (?, ?, ?, ?)`)
+      .run('src-1', 'outlet', 'Outlet', 'https://example.com');
+    driver
+      .prepare(
+        `INSERT INTO articles (id, source_id, external_id, url, title, body, published_at, ingested_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        'a-1',
+        'src-1',
+        'ext-1',
+        'https://example.com/1',
+        'Acme Corp launches Foo',
+        WIRE_COPIES[0]!.body,
+        1000,
+        1000,
+      );
+    driver
+      .prepare(`INSERT INTO entities (id, canonical_name, kind) VALUES (?, ?, ?)`)
+      .run('ent-1', 'Acme Corp', 'concept');
+    driver
+      .prepare(`INSERT INTO article_entities (article_id, entity_id) VALUES (?, ?)`)
+      .run('a-1', 'ent-1');
+
+    applySchema(driver);
+
+    const row = driver
+      .prepare(`SELECT canonical_name, canonical_key FROM entities WHERE id = ?`)
+      .get('ent-1') as { canonical_name: string; canonical_key: string };
+    // The name is unchanged, so nothing that reads it stops working, and the key
+    // is there for the next Article that writes the same company another way.
+    expect(row.canonical_name).toBe('Acme Corp');
+    expect(row.canonical_key).toBe('acme');
+  });
+
+  it('merges the two rows an older build wrote for one Entity, so the unique key can exist', () => {
+    const driver = createInMemorySqliteDriver();
+    driver.exec(PRE_ENTITY_KEY_SQL);
+    driver
+      .prepare(`INSERT INTO sources (id, slug, name, homepage_url) VALUES (?, ?, ?, ?)`)
+      .run('src-1', 'outlet', 'Outlet', 'https://example.com');
+    const insertArticle = (id: string, externalId: string): void => {
+      driver
+        .prepare(
+          `INSERT INTO articles (id, source_id, external_id, url, title, body, published_at, ingested_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(id, 'src-1', externalId, 'https://example.com/x', 'Headline', WIRE_COPIES[0]!.body, 1000, 1000);
+    };
+    insertArticle('a-1', 'ext-1');
+    insertArticle('a-2', 'ext-2');
+    driver
+      .prepare(`INSERT INTO entities (id, canonical_name, kind) VALUES (?, ?, ?)`)
+      .run('ent-1', 'Acme Corp', 'concept');
+    driver
+      .prepare(`INSERT INTO entities (id, canonical_name, kind) VALUES (?, ?, ?)`)
+      .run('ent-2', 'Acme', 'concept');
+    driver
+      .prepare(`INSERT INTO article_entities (article_id, entity_id) VALUES (?, ?)`)
+      .run('a-1', 'ent-1');
+    driver
+      .prepare(`INSERT INTO article_entities (article_id, entity_id) VALUES (?, ?)`)
+      .run('a-2', 'ent-2');
+
+    // Two rows for one name is what the unique index on the key cannot be made
+    // against, so the migration is where the two have to become one.
+    expect(() => applySchema(driver)).not.toThrow();
+
+    const rows = driver
+      .prepare(`SELECT id, canonical_key FROM entities ORDER BY id`)
+      .all() as { id: string; canonical_key: string }[];
+    expect(rows).toEqual([{ id: 'ent-1', canonical_key: 'acme' }]);
+    // And both Articles still reach it, so neither is left pointing at nothing.
+    const linked = driver
+      .prepare(
+        `SELECT article_id, entity_id FROM article_entities ORDER BY article_id`,
+      )
+      .all() as { article_id: string; entity_id: string }[];
+    expect(linked).toEqual([
+      { article_id: 'a-1', entity_id: 'ent-1' },
+      { article_id: 'a-2', entity_id: 'ent-1' },
+    ]);
   });
 
   it('widens velocity to a real number so a fractional rate survives', () => {
