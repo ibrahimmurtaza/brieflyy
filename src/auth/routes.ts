@@ -13,7 +13,8 @@ import { postSigninPath } from './post-signin.js';
 import { PUBLIC_ROUTE_CONFIG } from '../http/access.js';
 import type { FixedWindowRateLimiter } from '../http/rate-limit.js';
 import { hashOauthState } from '../domain/crypto.js';
-import { escapeHtml } from '../pages/html.js';
+import { escapeHtml } from '../domain/html.js';
+import { layout } from '../pages/layout.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -291,31 +292,25 @@ function humanOauthReason(
 }
 
 function oauthFailurePage(message: string): string {
-  const safe = escapeHtml(message);
-  return `<!doctype html>
-<html lang="en">
-<head><meta charset="utf-8"><title>Sign-in failed</title></head>
-<body>
-  <main style="font-family: system-ui, sans-serif; max-width: 480px; margin: 4rem auto; padding: 0 1rem;">
-    <h1>Sign-in failed</h1>
-    <p>${safe}</p>
-    <p><a href="/signup">Try again</a></p>
-  </main>
-</body>
-</html>`;
+  return layout({
+    title: 'Sign-in failed',
+    width: 'narrow',
+    body: `    <h1>Sign-in failed</h1>
+    <div class="error-summary" role="alert">
+      <p>${escapeHtml(message)}</p>
+    </div>
+    <p class="actions"><a class="button" href="/signup">Try again</a></p>`,
+  });
 }
 
 function invalidLinkPage(message: string): string {
-  const safe = escapeHtml(message);
-  return `<!doctype html>
-<html lang="en">
-<head><meta charset="utf-8"><title>Invalid link</title></head>
-<body>
-  <main style="font-family: system-ui, sans-serif; max-width: 480px; margin: 4rem auto; padding: 0 1rem;">
-    <h1>Invalid sign-in link</h1>
-    <p>${safe}</p>
-    <p><a href="/signup">Request a new link</a></p>
-  </main>
-</body>
-</html>`;
+  return layout({
+    title: 'Invalid link',
+    width: 'narrow',
+    body: `    <h1>Invalid sign-in link</h1>
+    <div class="error-summary" role="alert">
+      <p>${escapeHtml(message)}</p>
+    </div>
+    <p class="actions"><a class="button" href="/signup">Request a new link</a></p>`,
+  });
 }

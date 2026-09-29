@@ -1,7 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
-import { escapeHtml } from '../pages/html.js';
+import { escapeHtml } from '../domain/html.js';
+import { deliveryTimePage } from '../pages/routes.js';
+import { layout } from '../pages/layout.js';
 import {
   AUTHENTICATED_ROUTE_CONFIG,
   PUBLIC_ROUTE_CONFIG,
@@ -68,7 +70,7 @@ export async function registerOnboardingRoutes(
       return reply
         .code(400)
         .type('text/html')
-        .send(pickTopicsErrorPage('Please pick exactly 3 topics.'));
+        .send(pickTopicsErrorPage({ email: req.auth.account.email, message: 'Please pick exactly 3 topics.' }));
     }
     const outcome: SelectTopicsOutcome = await onboardingService.selectTopics({
       userId: req.auth.user.id,
@@ -81,12 +83,12 @@ export async function registerOnboardingRoutes(
       return reply.code(302).header('location', '/onboarding/delivery-time').send();
     }
     if (outcome.reason === 'paywall_tier_limit') {
-      return reply.code(402).type('text/html').send(paywallPage());
+      return reply.code(402).type('text/html').send(paywallPage(req.auth.account.email));
     }
     return reply
       .code(400)
       .type('text/html')
-      .send(pickTopicsErrorPage(humanReason(outcome.reason, 'onboarding')));
+      .send(pickTopicsErrorPage({ email: req.auth.account.email, message: humanReason(outcome.reason, 'onboarding') }));
   });
 
   fastify.post('/pick-topics', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
@@ -99,7 +101,7 @@ export async function registerOnboardingRoutes(
       return reply
         .code(400)
         .type('text/html')
-        .send(pickTopicsErrorPage('Pick at least one topic.', '/pick-topics'));
+        .send(pickTopicsErrorPage({ email: req.auth.account.email, message: 'Pick at least one topic.', backHref: '/pick-topics' }));
     }
     const outcome = await onboardingService.addTopics({
       userId: req.auth.user.id,
@@ -112,13 +114,13 @@ export async function registerOnboardingRoutes(
       return reply.code(302).header('location', '/topics').send();
     }
     if (outcome.reason === 'paywall_tier_limit') {
-      return reply.code(402).type('text/html').send(paywallPage());
+      return reply.code(402).type('text/html').send(paywallPage(req.auth.account.email));
     }
     return reply
       .code(400)
       .type('text/html')
       .send(
-        pickTopicsErrorPage(humanReason(outcome.reason, 'manage'), '/pick-topics'),
+        pickTopicsErrorPage({ email: req.auth.account.email, message: humanReason(outcome.reason, 'manage'), backHref: '/pick-topics' }),
       );
   });
 
@@ -144,6 +146,7 @@ export async function registerOnboardingRoutes(
         .type('text/html')
         .send(
           notFoundHtml(
+            req.auth.account.email,
             'That topic is not yours, or no longer exists.',
           ),
         );
@@ -153,6 +156,7 @@ export async function registerOnboardingRoutes(
   fastify.post('/onboarding/delivery-time', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
     if (!requireAuthPage(req, reply)) return reply;
     const body = (req.body ?? {}) as Record<string, unknown>;
+    const submitted = readSubmittedDeliveryTime(body);
     const hour = parseHour(body.hour);
     const minute = parseMinute(body.minute);
     const timezone = typeof body.timezone === 'string' ? body.timezone : '';
@@ -160,7 +164,14 @@ export async function registerOnboardingRoutes(
       return reply
         .code(400)
         .type('text/html')
-        .send(deliveryTimeErrorPage(req.auth.account.email, 'Please pick a valid time and timezone.'));
+        .send(
+          deliveryTimeErrorPage({
+            email: req.auth.account.email,
+            message: 'Please pick a valid time and timezone.',
+            submitted,
+            mode: 'onboarding',
+          }),
+        );
     }
     const userId = req.auth.user.id;
     // This screen exists to finish onboarding, so a valid submission always
@@ -180,16 +191,19 @@ export async function registerOnboardingRoutes(
       .code(400)
       .type('text/html')
       .send(
-        deliveryTimeErrorPage(
-          req.auth.account.email,
-          humanDeliveryTimeReason(outcome.reason),
-        ),
+        deliveryTimeErrorPage({
+          email: req.auth.account.email,
+          message: humanDeliveryTimeReason(outcome.reason),
+          submitted,
+          mode: 'onboarding',
+        }),
       );
   });
 
   fastify.post('/settings/delivery', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
     if (!requireAuthPage(req, reply)) return reply;
     const body = (req.body ?? {}) as Record<string, unknown>;
+    const submitted = readSubmittedDeliveryTime(body);
     const hour = parseHour(body.hour);
     const minute = parseMinute(body.minute);
     const timezone = typeof body.timezone === 'string' ? body.timezone : '';
@@ -197,7 +211,14 @@ export async function registerOnboardingRoutes(
       return reply
         .code(400)
         .type('text/html')
-        .send(settingsDeliveryErrorPage('Please pick a valid time and timezone.'));
+        .send(
+          deliveryTimeErrorPage({
+            email: req.auth.account.email,
+            message: 'Please pick a valid time and timezone.',
+            submitted,
+            mode: 'settings',
+          }),
+        );
     }
     const outcome = await onboardingService.setDeliveryTime({
       userId: req.auth.user.id,
@@ -211,8 +232,35 @@ export async function registerOnboardingRoutes(
     return reply
       .code(400)
       .type('text/html')
-      .send(settingsDeliveryErrorPage(humanDeliveryTimeReason(outcome.reason)));
+      .send(
+        deliveryTimeErrorPage({
+          email: req.auth.account.email,
+          message: humanDeliveryTimeReason(outcome.reason),
+          submitted,
+          mode: 'settings',
+        }),
+      );
   });
+}
+
+/**
+ * What the User actually sent, as strings.
+ *
+ * Read before validation so a rejected submission can be re-rendered with the
+ * values in place. A field that was not a string is passed through as empty,
+ * which the re-render then shows as the default rather than as a half-typed
+ * number.
+ */
+function readSubmittedDeliveryTime(body: Record<string, unknown>): {
+  hour: string;
+  minute: string;
+  timezone: string;
+} {
+  return {
+    hour: typeof body.hour === 'string' ? body.hour : '',
+    minute: typeof body.minute === 'string' ? body.minute : '',
+    timezone: typeof body.timezone === 'string' ? body.timezone : '',
+  };
 }
 
 function parseHour(value: unknown): number | null {
@@ -234,58 +282,47 @@ function humanDeliveryTimeReason(
 ): string {
   switch (reason) {
     case 'invalid_input':
-      return 'Please pick a valid time (00:00–23:59) and a timezone.';
+      // The en dash is written as an escape so this line stays ASCII. A literal
+      // one was stored double-encoded once, and it rendered as two stray
+      // characters inside the range on the delivery-time error page.
+      return 'Please pick a valid time (00:00\u201323:59) and a timezone.';
     case 'no_user':
       return 'Your account could not be found. Please sign in again.';
   }
 }
 
-function deliveryTimeErrorPage(email: string, message: string): string {
-  const safe = escapeHtml(message);
-  const safeEmail = escapeHtml(email);
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>Pick your delivery time · Brieflyy</title>
-  <style>
-    body { font-family: system-ui, sans-serif; max-width: 480px; margin: 4rem auto; padding: 0 1rem; }
-    h1 { font-size: 1.4rem; margin: 0 0 0.5rem; }
-    p { color: #b00020; }
-  </style>
-</head>
-<body>
-  <main>
-    <h1>Pick your delivery time</h1>
-    <p>Signed in as ${safeEmail}.</p>
-    <p>${safe}</p>
-    <p><a href="/onboarding/delivery-time">Try again</a></p>
-  </main>
-</body>
-</html>`;
+/**
+ * A rejected delivery time comes back as the delivery-time screen again, with
+ * what was typed still in the fields and the reason announced at the top.
+ *
+ * It used to answer with a bare page carrying one red sentence, which threw
+ * away the hour, minute and timezone the User had chosen and told a screen
+ * reader nothing. The status code is still 400; only the document changed.
+ */
+function deliveryTimeErrorPage(input: {
+  email: string;
+  message: string;
+  submitted: { hour: string; minute: string; timezone: string };
+  mode: 'onboarding' | 'settings';
+}): string {
+  return deliveryTimePage({
+    email: input.email,
+    mode: input.mode,
+    isSet: input.mode === 'settings',
+    firstBriefAt: null,
+    message: input.message,
+    saved: false,
+    existing: {
+      hour: toInt(input.submitted.hour, 8),
+      minute: toInt(input.submitted.minute, 0),
+      timezone: input.submitted.timezone,
+    },
+  });
 }
 
-function settingsDeliveryErrorPage(message: string): string {
-  const safe = escapeHtml(message);
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>Delivery time · Brieflyy</title>
-  <style>
-    body { font-family: system-ui, sans-serif; max-width: 480px; margin: 4rem auto; padding: 0 1rem; }
-    h1 { font-size: 1.4rem; margin: 0 0 0.5rem; }
-    p { color: #b00020; }
-  </style>
-</head>
-<body>
-  <main>
-    <h1>Delivery time</h1>
-    <p>${safe}</p>
-    <p><a href="/settings/delivery">Try again</a></p>
-  </main>
-</body>
-</html>`;
+function toInt(value: string, fallback: number): number {
+  const n = parseInt(value, 10);
+  return Number.isInteger(n) ? n : fallback;
 }
 
 function humanReason(
@@ -312,80 +349,51 @@ function humanReason(
   }
 }
 
-function paywallPage(): string {
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>Upgrade to add more topics</title>
-  <style>
-    body { font-family: system-ui, sans-serif; max-width: 480px; margin: 4rem auto; padding: 0 1rem; }
-    h1 { font-size: 1.5rem; margin: 0 0 0.5rem; }
-    p { color: #444; }
-    .actions { margin-top: 1.5rem; display: flex; gap: 0.75rem; }
-    a, button { font-size: 1rem; padding: 0.6rem 0.9rem; border-radius: 6px; cursor: pointer; }
-    .primary { background: #1f6feb; color: white; border: 0; }
-    .secondary { background: white; color: inherit; border: 1px solid #ccc; }
-  </style>
-</head>
-<body>
-  <main>
-    <h1>You have reached the free-topic limit</h1>
+function paywallPage(email: string): string {
+  // Reached from a refused submission, so the User is known. Passing the account
+  // puts the same navigation every other signed-in page has around it, instead
+  // of stranding them on a page with two buttons.
+  return layout({
+    title: 'Upgrade to add more topics',
+    width: 'narrow',
+    account: email,
+    body: `    <h1>You have reached the free-topic limit</h1>
     <p>Free Brieflyy supports up to 3 topics. Upgrade to add unlimited topics, indefinite archive retention, and the full trends view.</p>
     <p><strong>$15 / month</strong></p>
     <div class="actions">
-      <a class="primary" href="/upgrade">Upgrade to paid</a>
-      <a class="secondary" href="/pick-topics">Back to topic selection</a>
+      <a class="button" href="/upgrade">Upgrade to paid</a>
+      <a class="button secondary" href="/pick-topics">Back to topic selection</a>
+    </div>`,
+  });
+}
+
+function notFoundHtml(email: string, message: string): string {
+  return layout({
+    title: 'Topic not found',
+    width: 'narrow',
+    account: email,
+    body: `    <h1>Topic not found</h1>
+    <div class="error-summary" role="alert">
+      <p>${escapeHtml(message)}</p>
     </div>
-  </main>
-</body>
-</html>`;
+    <p class="actions"><a class="button" href="/pick-topics">Back to your topics</a></p>`,
+  });
 }
 
-function notFoundHtml(message: string): string {
-  const safe = escapeHtml(message);
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>Topic not found · Brieflyy</title>
-  <style>
-    body { font-family: system-ui, sans-serif; max-width: 480px; margin: 4rem auto; padding: 0 1rem; }
-    h1 { font-size: 1.4rem; margin: 0 0 0.5rem; }
-    p { color: #444; }
-    a { color: #1f6feb; }
-  </style>
-</head>
-<body>
-  <main>
-    <h1>Topic not found</h1>
-    <p>${safe}</p>
-    <p><a href="/pick-topics">Back to your topics</a></p>
-  </main>
-</body>
-</html>`;
-}
-
-function pickTopicsErrorPage(message: string, backHref = '/onboarding/pick-topics'): string {
-  const safe = escapeHtml(message);
-  const safeHref = escapeHtml(backHref);
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>Topic selection</title>
-  <style>
-    body { font-family: system-ui, sans-serif; max-width: 480px; margin: 4rem auto; padding: 0 1rem; }
-    h1 { font-size: 1.4rem; margin: 0 0 0.5rem; }
-    p { color: #b00020; }
-  </style>
-</head>
-<body>
-  <main>
-    <h1>Topic selection</h1>
-    <p>${safe}</p>
-    <p><a href="${safeHref}">Try again</a></p>
-  </main>
-</body>
-</html>`;
+function pickTopicsErrorPage(input: {
+  email: string;
+  message: string;
+  backHref?: string;
+}): string {
+  const backHref = input.backHref ?? '/onboarding/pick-topics';
+  return layout({
+    title: 'Topic selection',
+    width: 'narrow',
+    account: input.email,
+    body: `    <h1>Topic selection</h1>
+    <div class="error-summary" role="alert">
+      <p>${escapeHtml(input.message)}</p>
+    </div>
+    <p class="actions"><a class="button" href="${escapeHtml(backHref)}">Try again</a></p>`,
+  });
 }

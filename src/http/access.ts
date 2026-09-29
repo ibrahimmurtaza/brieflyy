@@ -6,7 +6,7 @@ import type {
   RouteShorthandOptions,
 } from 'fastify';
 
-import { escapeHtml } from '../pages/html.js';
+import { layout } from '../pages/layout.js';
 import type { CurrentAuth } from '../auth/auth-service.js';
 
 /**
@@ -84,17 +84,13 @@ export function requireAuthPage(
 }
 
 function signInRequiredPage(): string {
-  return `<!doctype html>
-<html lang="en">
-<head><meta charset="utf-8"><title>Sign in required</title></head>
-<body>
-  <main style="font-family: system-ui, sans-serif; max-width: 480px; margin: 4rem auto; padding: 0 1rem;">
-    <h1>Sign in required</h1>
-    <p>${escapeHtml('This page is only available to a signed-in user.')}</p>
-    <p><a href="/signup">Sign in</a></p>
-  </main>
-</body>
-</html>`;
+  return layout({
+    title: 'Sign in required',
+    width: 'narrow',
+    body: `    <h1>Sign in required</h1>
+    <p>This page is only available to a signed-in user.</p>
+    <p class="actions"><a class="button" href="/signup">Sign in</a></p>`,
+  });
 }
 
 export interface RegisteredRoute {

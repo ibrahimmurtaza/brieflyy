@@ -6,14 +6,15 @@ import {
   MIN_CLUSTER_WINDOW_DAYS,
 } from '../domain/cluster-window.js';
 import { resolveTier, topicCapFor } from '../domain/tier.js';
-import { isValidIanaTimezone, partsInTz } from '../domain/timezone.js';
+import { partsInTz } from '../domain/timezone.js';
+import { escapeHtml } from '../domain/html.js';
 import { INITIAL_TOPIC_COUNT } from '../onboarding/onboarding-service.js';
 import type { OnboardingService } from '../onboarding/onboarding-service.js';
 import type { ClusterRepo } from '../repos/cluster-repo.js';
 import type { SourceRepo } from '../repos/source-repo.js';
 import type { TopicRepo } from '../repos/topic-repo.js';
 import type { FeedbackRepo } from '../repos/feedback-repo.js';
-import { escapeHtml } from './html.js';
+import { layout } from './layout.js';
 import {
   AUTHENTICATED_ROUTE_CONFIG,
   PUBLIC_ROUTE_CONFIG,
@@ -27,38 +28,6 @@ export interface PageRoutesOptions {
   readonly topicRepo: TopicRepo;
   readonly sourceRepo: SourceRepo;
   readonly feedbackRepo?: FeedbackRepo;
-}
-
-const COMMON_TIMEZONES: readonly string[] = [
-  'Pacific/Honolulu',
-  'America/Anchorage',
-  'America/Los_Angeles',
-  'America/Denver',
-  'America/Chicago',
-  'America/New_York',
-  'America/Sao_Paulo',
-  'Europe/London',
-  'Europe/Berlin',
-  'Europe/Athens',
-  'Africa/Lagos',
-  'Asia/Dubai',
-  'Asia/Kolkata',
-  'Asia/Bangkok',
-  'Asia/Shanghai',
-  'Asia/Tokyo',
-  'Australia/Sydney',
-  'Pacific/Auckland',
-  'UTC',
-];
-
-function detectServerTimezone(): string {
-  try {
-    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    if (isValidIanaTimezone(tz)) return tz;
-  } catch {
-    // fall through
-  }
-  return 'UTC';
 }
 
 export async function registerPageRoutes(
@@ -132,8 +101,7 @@ export async function registerPageRoutes(
     return reply.type('text/html').send(
       deliveryTimePage({
         email: req.auth.account.email,
-        suggestedTimezone: detectServerTimezone(),
-        existing: existing ?? { hour: 8, minute: 0, timezone: detectServerTimezone() },
+        existing: existing ?? DEFAULT_DELIVERY_TIME,
         firstBriefAt: first,
         // A prefilled suggestion is not a saved time, so the page must not
         // pretend there is one to keep or change.
@@ -178,7 +146,6 @@ export async function registerPageRoutes(
       return reply.type('text/html').send(
         deliveryTimePage({
           email: req.auth.account.email,
-          suggestedTimezone: detectServerTimezone(),
           existing,
           isSet: true,
           firstBriefAt: null,
@@ -208,10 +175,9 @@ export async function registerPageRoutes(
 
   fastify.get('/archive/search', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
     if (!requireAuthPage(req, reply)) return reply;
-    // Minimal archive search page for full vertical slice (#14)
-    return reply.type('text/html').send(`<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Archive search Â· Brieflyy</title></head>
-<body><h1>Archive search</h1><p>Search results will appear here.</p></body></html>`);
+    return reply
+      .type('text/html')
+      .send(archiveSearchPage({ email: req.auth.account.email }));
   });
 
   fastify.get('/', PUBLIC_ROUTE_CONFIG, async (_req, reply) => {
@@ -269,7 +235,7 @@ export async function registerPageRoutes(
         return reply
           .code(404)
           .type('text/html')
-          .send(notFoundPage(req.auth.account.email, `Topic "${req.params.slug}" not found`));
+          .send(notFoundPage(req.auth.account.email));
       }
       // Parsed rather than trusted: a value the User typed that is not a number
       // becomes NaN and falls back to the default, and one outside the range
@@ -296,7 +262,7 @@ export async function registerPageRoutes(
         return reply
           .code(404)
           .type('text/html')
-          .send(notFoundPage(req.auth.account.email, `Topic "${req.params.slug}" not found`));
+          .send(notFoundPage(req.auth.account.email));
       }
       const clusters = await opts.clusterRepo.listByTopicId(topic.id);
       // The Active set before any filter is applied. A filter that happens to
@@ -320,6 +286,7 @@ export async function registerPageRoutes(
           .filter((s) => s.length > 0),
       );
       const feedbackHiddenIds = new Set<string>();
+      const verdicts = new Map<string, 'thumbs_up' | 'thumbs_down'>();
       if (opts.feedbackRepo) {
         const userEvents = await opts.feedbackRepo.listByUser(req.auth.user.id);
         const hideEvents = userEvents.filter((e) => e.feedbackType === 'hide_source');
@@ -327,6 +294,14 @@ export async function registerPageRoutes(
           if (ev.scope === 'global' || (ev.scope === 'this_topic' && ev.clusterId)) {
             feedbackHiddenIds.add(ev.clusterId);
           }
+        }
+        // The latest verdict per Cluster, so a thumb that was changed to a
+        // thumb down shows the change rather than leaving both buttons lit.
+        // `listByUser` is ordered newest first, so the first one seen wins.
+        for (const ev of userEvents) {
+          if (ev.feedbackType !== 'thumbs_up' && ev.feedbackType !== 'thumbs_down') continue;
+          if (verdicts.has(ev.clusterId)) continue;
+          verdicts.set(ev.clusterId, ev.feedbackType);
         }
       }
       activeClusters = activeClusters.filter(
@@ -363,6 +338,7 @@ export async function registerPageRoutes(
           sourcesById,
           visibleSourceIds: visibleSources,
           clusterArticles,
+          verdicts,
         }),
       );
     },
@@ -370,32 +346,10 @@ export async function registerPageRoutes(
 }
 
 function signupPage(): string {
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>Sign in to Brieflyy</title>
-  <style>
-    :root { color-scheme: light dark; }
-    body { font-family: system-ui, sans-serif; max-width: 420px; margin: 4rem auto; padding: 0 1rem; }
-    h1 { font-size: 1.6rem; margin: 0 0 0.5rem; }
-    p.lede { color: #555; margin-top: 0; }
-    form { display: grid; gap: 0.75rem; margin-top: 1.5rem; }
-    label { font-size: 0.9rem; color: #444; }
-    input[type=email] { font-size: 1rem; padding: 0.6rem 0.7rem; border: 1px solid #ccc; border-radius: 6px; }
-    button { font-size: 1rem; padding: 0.7rem 0.9rem; border: 0; border-radius: 6px; background: #1f6feb; color: white; cursor: pointer; }
-    button:disabled { opacity: 0.6; cursor: progress; }
-    .status { min-height: 1.5rem; font-size: 0.9rem; }
-    .status.error { color: #b00020; }
-    .status.ok { color: #1a7f37; }
-    .divider { display: flex; align-items: center; gap: 0.75rem; margin: 1.5rem 0 0.75rem; color: #888; font-size: 0.85rem; }
-    .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: #ddd; }
-    a.google { display: block; text-align: center; padding: 0.7rem 0.9rem; border: 1px solid #ccc; border-radius: 6px; color: inherit; text-decoration: none; background: white; }
-  </style>
-</head>
-<body>
-  <main>
-    <h1>Sign in to Brieflyy</h1>
+  return layout({
+    title: 'Sign in',
+    width: 'narrow',
+    body: `    <h1>Sign in to Brieflyy</h1>
     <p class="lede">Enter your email and we'll send you a magic link.</p>
     <form id="signup" novalidate>
       <label for="email">Email</label>
@@ -404,9 +358,8 @@ function signupPage(): string {
       <div id="status" class="status" role="status" aria-live="polite"></div>
     </form>
     <div class="divider"><span>or</span></div>
-    <a class="google" href="/auth/google/start">Sign in with Google</a>
-  </main>
-  <script>
+    <a class="button secondary" href="/auth/google/start">Sign in with Google</a>`,
+    afterMain: `  <script>
     (function () {
       var form = document.getElementById('signup');
       var status = document.getElementById('status');
@@ -451,9 +404,8 @@ function signupPage(): string {
         });
       });
     })();
-  </script>
-</body>
-</html>`;
+  </script>`,
+  });
 }
 
 function pickTopicsPage(input: {
@@ -464,7 +416,6 @@ function pickTopicsPage(input: {
   cap: number;
   mode: 'onboarding' | 'manage';
 }): string {
-  const safeEmail = escapeHtml(input.email);
   const onboarding = input.mode === 'onboarding';
   const cap = input.cap;
   // An uncapped tier has no slots to count down, so the wording that talks
@@ -499,8 +450,8 @@ function pickTopicsPage(input: {
             <span class="blurb">${safeBlurb}</span>
           </label>`;
         })
-        .join('\n');
-      return `<section>
+        .join('\n        ');
+      return `      <section>
         <h2>${escapeHtml(category)}</h2>
         <div class="grid">${items}</div>
       </section>`;
@@ -508,7 +459,7 @@ function pickTopicsPage(input: {
     .join('\n');
 
   const existingHtml = input.existing.length
-    ? `<h2>Your topics</h2>
+    ? `    <h2>Your topics</h2>
       <ul class="existing">${input.existing
         .map(
           (t) => `<li>
@@ -517,9 +468,9 @@ function pickTopicsPage(input: {
               onboarding
                 ? ''
                 : `<form class="remove" method="POST" action="/pick-topics/remove">
-                     <input type="hidden" name="slug" value="${escapeHtml(t.slug)}">
-                     <button type="submit">Remove</button>
-                   </form>`
+                      <input type="hidden" name="slug" value="${escapeHtml(t.slug)}">
+                      <button class="secondary" type="submit">Remove</button>
+                    </form>`
             }
           </li>`,
         )
@@ -540,52 +491,24 @@ function pickTopicsPage(input: {
         : `Pick up to ${remaining} more topic${remaining === 1 ? '' : 's'} — from the Directory below, your own free-form idea, or a mix.`;
 
   const paywallHtml = locked
-    ? `<div class="paywall">You have reached the free-topic limit (${cap}). <a href="/upgrade">Upgrade</a> to add more, or remove a topic to swap it.</div>`
+    ? `    <div class="callout callout--paywall">You have reached the free-topic limit (${cap}). <a href="/upgrade">Upgrade</a> to add more, or remove a topic to swap it.</div>`
     : '';
 
   const actionHref = onboarding ? '/onboarding/pick-topics' : '/pick-topics';
 
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>${onboarding ? 'Pick your topics' : 'Your topics'} Â· Brieflyy</title>
-  <style>
-    :root { color-scheme: light dark; }
-    body { font-family: system-ui, sans-serif; max-width: 800px; margin: 2.5rem auto; padding: 0 1rem; }
-    h1 { font-size: 1.6rem; margin: 0 0 0.25rem; }
-    p.lede { color: #555; margin-top: 0; }
-    h2 { font-size: 1rem; text-transform: uppercase; letter-spacing: 0.04em; color: #888; margin-top: 2rem; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.75rem; }
-    .card { display: grid; gap: 0.25rem; padding: 0.75rem 1rem; border: 1px solid #ccc; border-radius: 8px; cursor: pointer; }
-    .card .title { font-weight: 600; }
-    .card .blurb { color: #666; font-size: 0.9rem; }
-    .card input { margin-right: 0.5rem; }
-    .freeform { margin-top: 1.5rem; }
-    .freeform input { width: 100%; font-size: 1rem; padding: 0.5rem 0.7rem; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; }
-    .actions { display: flex; gap: 0.75rem; margin-top: 1.5rem; align-items: center; }
-    .actions button { font-size: 1rem; padding: 0.6rem 1rem; border: 0; border-radius: 6px; background: #1f6feb; color: white; cursor: pointer; }
-    .actions button:disabled { opacity: 0.6; cursor: progress; }
-    .status { min-height: 1.2rem; font-size: 0.9rem; color: #b00020; }
-    .existing { list-style: none; padding: 0; }
-    .existing li { padding: 0.4rem 0; border-bottom: 1px solid #eee; display: flex; align-items: center; gap: 0.75rem; }
-    .existing li span { flex: 1; }
-    form.remove { display: inline; }
-    form.remove button { font-size: 0.85rem; padding: 0.25rem 0.5rem; border: 1px solid #ccc; border-radius: 6px; background: white; color: inherit; cursor: pointer; }
-    .hint { color: #666; font-size: 0.9rem; }
-    .paywall { background: #fff5d6; border: 1px solid #e0c66b; padding: 0.75rem 1rem; border-radius: 6px; margin: 1rem 0; }
-    form.logout { display: inline; }
-    form.logout button { background: none; color: inherit; border: 0; padding: 0; cursor: pointer; text-decoration: underline; }
-  </style>
-</head>
-<body>
-  <main>
-    <h1>${onboarding ? 'Pick your topics' : 'Your topics'}</h1>
-    <p class="lede">Signed in as ${safeEmail}. ${escapeHtml(lede)}</p>
-    ${paywallHtml}
-    ${existingHtml}
+  return layout({
+    title: onboarding ? 'Pick your topics' : 'Your topics',
+    width: 'reading',
+    account: input.email,
+    // Only the management screen is "Manage topics". In onboarding the same
+    // page is "Pick your topics", and following the nav link there redirects
+    // back to it, so marking it current would be a small lie.
+    activeHref: onboarding ? null : '/pick-topics',
+    body: `    <h1>${onboarding ? 'Pick your topics' : 'Your topics'}</h1>
+    <p class="lede">${escapeHtml(lede)}</p>
+${paywallHtml}${existingHtml}
     <form id="pick" method="POST" action="${actionHref}">
-      ${sectionsHtml}
+${sectionsHtml}
       <div class="freeform">
         <label for="freeformTitle"><strong>Or add your own</strong> (optional${
           remaining === null
@@ -598,12 +521,8 @@ function pickTopicsPage(input: {
         <button type="submit" ${locked ? 'disabled' : ''}>${onboarding ? 'Save topics' : 'Add topics'}</button>
         <span id="status" class="status" role="status" aria-live="polite"></span>
       </div>
-    </form>
-    <form class="logout" method="POST" action="/auth/logout">
-      <button type="submit">Sign out</button>
-    </form>
-  </main>
-  <script>
+    </form>`,
+    afterMain: `  <script>
     (function () {
       var form = document.getElementById('pick');
       if (!form) return;
@@ -644,12 +563,24 @@ function pickTopicsPage(input: {
       if (freeform) freeform.addEventListener('input', validate);
       validate();
     })();
-  </script>
-</body>
-</html>`;
+  </script>`,
+  });
 }
 
 type DeliveryTimeValue = { hour: number; minute: number; timezone: string };
+
+/**
+ * What the form opens on when nothing has been saved yet.
+ *
+ * The time used to be the *server's* timezone, presented to the User as their
+ * own detected one, which is wrong for everyone not sitting in the same zone as
+ * the process. UTC is the one value that is never a claim about the reader.
+ */
+const DEFAULT_DELIVERY_TIME: DeliveryTimeValue = {
+  hour: 8,
+  minute: 0,
+  timezone: 'UTC',
+};
 
 function formatClockTime(t: DeliveryTimeValue): string {
   return `${pad2(t.hour)}:${pad2(t.minute)}`;
@@ -660,10 +591,12 @@ function formatClockTime(t: DeliveryTimeValue): string {
  * form posts and what the button says, so they share this: when a time is
  * already set the page states it and offers an explicit "Change" control
  * rather than presenting a form that has to be re-submitted to be believed.
+ *
+ * Values passed in are what the User submitted, so a rejected submission comes
+ * back with their hour, minute and timezone still filled in.
  */
-function deliveryTimePage(input: {
+export function deliveryTimePage(input: {
   email: string;
-  suggestedTimezone: string;
   existing: DeliveryTimeValue;
   isSet: boolean;
   firstBriefAt: Date | null;
@@ -671,37 +604,34 @@ function deliveryTimePage(input: {
   message: string | null;
   saved: boolean;
 }): string {
-  const safeEmail = escapeHtml(input.email);
   const isOnboarding = input.mode === 'onboarding';
   const action = isOnboarding ? '/onboarding/delivery-time' : '/settings/delivery';
   const submitLabel = isOnboarding ? 'Save and continue' : 'Save time';
-  const tzOptions = COMMON_TIMEZONES.map((tz) => {
-    const selected = tz === input.existing.timezone ? ' selected' : '';
-    return `<option value="${escapeHtml(tz)}"${selected}>${escapeHtml(tz)}</option>`;
-  }).join('');
-  const hint = input.existing.timezone === input.suggestedTimezone
-    ? ''
-    : `<p class="hint">Detected: ${escapeHtml(input.suggestedTimezone)}</p>`;
-  const errorHtml = input.message && input.message !== 'saved'
-    ? `<p class="error">${escapeHtml(input.message)}</p>`
+  // A validation failure is not a reason to keep the form folded away: the User
+  // is sent back here to correct something, so the fields have to be on screen.
+  const hasError = input.message !== null && input.message !== 'saved';
+  const errorHtml = hasError
+    ? `    <div class="error-summary" role="alert" tabindex="-1">
+      <p>${escapeHtml(input.message ?? '')}</p>
+    </div>`
     : '';
   const savedHtml = input.saved
-    ? `<p class="ok" role="status">Time saved.</p>`
+    ? `    <div class="callout callout--success" role="status"><p>Time saved.</p></div>`
     : '';
   const upcoming = input.firstBriefAt
-    ? `<p class="upcoming">First brief will arrive at ${escapeHtml(
+    ? `    <div class="callout"><p>First brief will arrive at ${escapeHtml(
         formatHumanTime(input.firstBriefAt, input.existing.timezone),
-      )} (${escapeHtml(input.existing.timezone)}).</p>`
+      )} (${escapeHtml(input.existing.timezone)}).</p></div>`
     : '';
   const currentHtml = input.isSet
-    ? `<div class="current">
-         <p>Your brief arrives daily at <strong>${escapeHtml(
-           formatClockTime(input.existing),
-         )}</strong> (${escapeHtml(input.existing.timezone)}).</p>
-       </div>`
+    ? `    <div class="callout">
+      <p>Your brief arrives daily at <strong>${escapeHtml(
+        formatClockTime(input.existing),
+      )}</strong> (${escapeHtml(input.existing.timezone)}).</p>
+    </div>`
     : '';
 
-  const formHtml = `<form id="delivery-form" method="POST" action="${escapeHtml(
+  const formHtml = `    <form id="delivery-form" method="POST" action="${escapeHtml(
     action,
   )}">
       <div class="row">
@@ -712,9 +642,10 @@ function deliveryTimePage(input: {
           <input id="minute" name="minute" type="number" min="0" max="59" value="${input.existing.minute}" required>
         </label>
         <label for="timezone">Timezone
-          <select id="timezone" name="timezone" required>${tzOptions}</select>
+          <select id="timezone" name="timezone" required>${timeZoneOptions(input.existing.timezone)}</select>
         </label>
       </div>
+      <p class="hint">The timezone decides when the brief lands, so pick the one you keep your hours in.</p>
       <button type="submit" id="delivery-submit">${escapeHtml(
         submitLabel,
       )}</button>
@@ -722,69 +653,124 @@ function deliveryTimePage(input: {
 
   // Nothing saved yet, so there is nothing to change: show the form outright.
   // Once a time exists, state it and let the user open the form deliberately.
-  // <details> keeps that working without JavaScript.
-  const body = input.isSet
-    ? `<details class="change" id="change-delivery">
-         <summary>Change delivery time</summary>
-         ${hint}
-         ${formHtml}
-       </details>`
-    : `${hint}${formHtml}`;
+  // <details> keeps that working without JavaScript, which is also why this page
+  // must never grow one: the test suite asserts it has no <script> at all.
+  const body = input.isSet && !hasError
+    ? `    <details class="change" id="change-delivery">
+      <summary>Change delivery time</summary>
+${formHtml}
+    </details>`
+    : formHtml;
 
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>${isOnboarding ? 'Pick your delivery time' : 'Delivery time'} Â· Brieflyy</title>
-  <style>
-    :root { color-scheme: light dark; }
-    body { font-family: system-ui, sans-serif; max-width: 520px; margin: 3rem auto; padding: 0 1rem; }
-    h1 { font-size: 1.6rem; margin: 0 0 0.25rem; }
-    p.lede { color: #555; margin-top: 0; }
-    form { display: grid; gap: 1rem; margin-top: 1.5rem; }
-    label { font-size: 0.9rem; color: #444; display: grid; gap: 0.25rem; }
-    input, select { font-size: 1rem; padding: 0.5rem 0.7rem; border: 1px solid #ccc; border-radius: 6px; background: white; color: inherit; }
-    .row { display: grid; grid-template-columns: 1fr 1fr 2fr; gap: 0.75rem; }
-    button { font-size: 1rem; padding: 0.7rem 0.9rem; border: 0; border-radius: 6px; background: #1f6feb; color: white; cursor: pointer; }
-    .hint { color: #888; font-size: 0.85rem; }
-    .upcoming { background: #eef5ff; border: 1px solid #c2d6f2; padding: 0.75rem 1rem; border-radius: 6px; }
-    .current { background: #eef5ff; border: 1px solid #c2d6f2; padding: 0.75rem 1rem; border-radius: 6px; }
-    .current p { margin: 0; }
-    .ok { background: #e6f4ea; border: 1px solid #a3d4a8; padding: 0.5rem 0.75rem; border-radius: 6px; }
-    .error { color: #b00020; }
-    details.change { margin-top: 1.5rem; }
-    details.change summary { cursor: pointer; color: #1f6feb; font-size: 1rem; }
-    details.change[open] summary { margin-bottom: 0.5rem; }
-    nav a { color: #1f6feb; }
-    form.logout { display: inline; margin-top: 2rem; }
-    form.logout button { background: none; color: inherit; border: 0; padding: 0; cursor: pointer; text-decoration: underline; }
-  </style>
-</head>
-<body>
-  <main>
-    <h1>${isOnboarding ? 'Pick your delivery time' : 'Delivery time'}</h1>
-    <p class="lede">Signed in as ${safeEmail}.</p>
-    ${
+  return layout({
+    title: isOnboarding ? 'Pick your delivery time' : 'Delivery time',
+    width: 'form',
+    account: input.email,
+    activeHref: '/settings/delivery',
+    body: `    <h1>${isOnboarding ? 'Pick your delivery time' : 'Delivery time'}</h1>
+    <p class="lede">${
       isOnboarding
-        ? '<p class="lede">All of your topics share one delivery time.</p>'
-        : ''
-    }
-    ${currentHtml}
-    ${upcoming}
-    ${savedHtml}
-    ${errorHtml}
-    ${body}
-    <form class="logout" method="POST" action="/auth/logout">
-      <button type="submit">Sign out</button>
-    </form>
-    ${
-      isOnboarding
-        ? ''
-        : '<p><a href="/pick-topics">Manage topics</a></p>'
-    }
-  </main>
-</body>
-</html>`;
+        ? 'All of your topics share one delivery time.'
+        : 'Every brief you get arrives at the time set here.'
+    }</p>
+${currentHtml}
+${upcoming}
+${savedHtml}
+${errorHtml}
+${body}`,
+  });
+}
+
+/**
+ * The zones the delivery-time form offers, grouped by region.
+ *
+ * `Intl.supportedValuesOf('timeZone')` is the platform's own list, so somebody
+ * in `America/Bogota` or `Asia/Karachi` can pick their own zone instead of being
+ * offered nineteen that mostly belong to someone else. A runtime without it
+ * falls back to the curated list, and a zone already stored for the account is
+ * always offered even when the platform list has dropped it: a select that
+ * cannot show the stored value would report a time the User never asked for.
+ */
+const FALLBACK_TIMEZONES: readonly string[] = [
+  'Pacific/Honolulu',
+  'America/Anchorage',
+  'America/Los_Angeles',
+  'America/Denver',
+  'America/Chicago',
+  'America/New_York',
+  'America/Sao_Paulo',
+  'Europe/London',
+  'Europe/Berlin',
+  'Europe/Athens',
+  'Africa/Lagos',
+  'Asia/Dubai',
+  'Asia/Kolkata',
+  'Asia/Bangkok',
+  'Asia/Shanghai',
+  'Asia/Tokyo',
+  'Australia/Sydney',
+  'Pacific/Auckland',
+];
+
+const REGION_BUCKETS: Readonly<Record<string, string>> = {
+  UTC: 'UTC',
+  America: 'Americas',
+  Europe: 'Europe',
+  Africa: 'Africa',
+  Asia: 'Asia',
+  Australia: 'Australia and Pacific',
+  Pacific: 'Australia and Pacific',
+  Indian: 'Indian Ocean',
+  Atlantic: 'Atlantic',
+};
+
+const BUCKET_ORDER: readonly string[] = [
+  'UTC',
+  'Americas',
+  'Europe',
+  'Africa',
+  'Asia',
+  'Australia and Pacific',
+  'Indian Ocean',
+  'Atlantic',
+  'Other',
+];
+
+function platformTimeZones(): readonly string[] {
+  const fromPlatform =
+    typeof Intl.supportedValuesOf === 'function'
+      ? Intl.supportedValuesOf('timeZone')
+      : [];
+  // The platform list deliberately omits UTC, which is the one zone that is
+  // always a valid answer to this question.
+  const zones = fromPlatform.length > 0 ? fromPlatform : FALLBACK_TIMEZONES;
+  return ['UTC', ...zones.filter((z) => z !== 'UTC')].sort((a, b) => a.localeCompare(b));
+}
+
+function timeZoneOptions(selected: string): string {
+  const zones = [...platformTimeZones()];
+  if (!zones.includes(selected)) zones.unshift(selected);
+
+  const buckets = new Map<string, string[]>();
+  for (const zone of zones) {
+    const region = zone.includes('/') ? zone.slice(0, zone.indexOf('/')) : 'UTC';
+    const bucket = REGION_BUCKETS[region] ?? 'Other';
+    const list = buckets.get(bucket) ?? [];
+    list.push(zone);
+    buckets.set(bucket, list);
+  }
+
+  return BUCKET_ORDER.filter((bucket) => (buckets.get(bucket) ?? []).length > 0)
+    .map((bucket) => {
+      const options = (buckets.get(bucket) ?? [])
+        .map((zone) => {
+          const isSelected = zone === selected ? ' selected' : '';
+          return `<option value="${escapeHtml(zone)}"${isSelected}>${escapeHtml(zone)}</option>`;
+        })
+        .join('');
+      return `<optgroup label="${escapeHtml(bucket)}">${options}</optgroup>`;
+    })
+    .join('');
 }
 
 function welcomePage(input: {
@@ -792,49 +778,27 @@ function welcomePage(input: {
   deliveryTime: { hour: number; minute: number; timezone: string };
   firstBriefAt: Date | null;
 }): string {
-  const safeEmail = escapeHtml(input.email);
   const tz = escapeHtml(input.deliveryTime.timezone);
   const time = `${pad2(input.deliveryTime.hour)}:${pad2(input.deliveryTime.minute)}`;
   const when = input.firstBriefAt
     ? formatHumanTime(input.firstBriefAt, input.deliveryTime.timezone)
     : `${time} (${input.deliveryTime.timezone})`;
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>Welcome to Brieflyy</title>
-  <style>
-    :root { color-scheme: light dark; }
-    body { font-family: system-ui, sans-serif; max-width: 520px; margin: 4rem auto; padding: 0 1rem; }
-    h1 { font-size: 1.6rem; margin: 0 0 0.5rem; }
-    p { color: #444; line-height: 1.5; }
-    .arrival { background: #eef5ff; border: 1px solid #c2d6f2; padding: 1rem 1.25rem; border-radius: 8px; margin: 1.5rem 0; }
-    .arrival strong { font-size: 1.1rem; }
-    a { color: #1f6feb; }
-    form.logout { display: inline; margin-top: 2rem; }
-    form.logout button { background: none; color: inherit; border: 0; padding: 0; cursor: pointer; text-decoration: underline; }
-  </style>
-</head>
-<body>
-  <main>
-    <h1>You're set up</h1>
-    <p>Welcome, ${safeEmail}.</p>
-    <div class="arrival">
-      <strong>Your first brief arrives ${escapeHtml(when)}</strong>
+  return layout({
+    title: "You're set up",
+    width: 'form',
+    account: input.email,
+    body: `    <h1>You're set up</h1>
+    <p class="lede">Welcome, ${escapeHtml(input.email)}.</p>
+    <div class="callout">
+      <p><strong>Your first brief arrives ${escapeHtml(when)}</strong></p>
       <p>(${tz}, daily at ${time}).</p>
     </div>
     <p>We just sent a welcome email so you can confirm everything is working.</p>
-    <p><a href="/settings/delivery">Change delivery time</a> Â· <a href="/pick-topics">Manage topics</a></p>
-    <form class="logout" method="POST" action="/auth/logout">
-      <button type="submit">Sign out</button>
-    </form>
-  </main>
-</body>
-</html>`;
+    <p><a href="/settings/delivery">Change delivery time</a> &middot; <a href="/pick-topics">Manage topics</a></p>`,
+  });
 }
 
 function upgradePage(input: { email: string; topicCount: number; tier: Tier }): string {
-  const safeEmail = escapeHtml(input.email);
   const used = input.topicCount === 1 ? '1 topic' : `${input.topicCount} topics`;
   // A paid user reaching this page already has what it is selling, so say that
   // rather than pitching them a plan they are on.
@@ -845,38 +809,45 @@ function upgradePage(input: { email: string; topicCount: number; tier: Tier }): 
   const priceHtml = alreadyPaid
     ? '<p class="price"><strong>Paid &middot; $15 / month</strong></p>'
     : '<p class="price"><strong>$15 / month</strong></p>';
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>Upgrade to paid &middot; Brieflyy</title>
-  <style>
-    :root { color-scheme: light dark; }
-    body { font-family: system-ui, sans-serif; max-width: 520px; margin: 3rem auto; padding: 0 1rem; }
-    h1 { font-size: 1.6rem; margin: 0 0 0.25rem; }
-    p.lede { color: #555; margin-top: 0; }
-    p { line-height: 1.5; }
-    .price { font-size: 1.1rem; }
-    .perks { color: #444; }
-    .not-yet { background: #fff5d6; border: 1px solid #e0c66b; padding: 0.85rem 1rem; border-radius: 6px; margin: 1.25rem 0; }
-    .not-yet p { margin: 0.4rem 0 0; color: #444; }
-    a { color: #1f6feb; }
-  </style>
-</head>
-<body>
-  <main>
-    <h1>${headline}</h1>
-    <p class="lede">Signed in as ${safeEmail}.</p>
+  // Deliberately no form: nothing on this page can be submitted, because there
+  // is no checkout to submit it to. The sign-out control lives in the header,
+  // which is the only form this document contains.
+  return layout({
+    title: 'Upgrade to paid',
+    width: 'form',
+    account: input.email,
+    body: `    <h1>${headline}</h1>
     ${priceHtml}
-    <p class="perks">Paid Brieflyy includes unlimited topics, indefinite archive retention, and the full trends view.</p>
-    <div class="not-yet">
-      <strong>Billing isn't connected yet.</strong>
+    <p>Paid Brieflyy includes unlimited topics, indefinite archive retention, and the full trends view.</p>
+    <div class="callout callout--paywall">
+      <p><strong>Billing isn't connected yet.</strong></p>
       <p>There is nothing to pay with on this page today, so it is not a checkout. It will become one when payments are wired up. Until then free Brieflyy covers 3 topics, and you are using ${used}.</p>
     </div>
-    <p><a href="/topics">Back to your topics</a></p>
-  </main>
-</body>
-</html>`;
+    <p class="actions"><a class="button" href="/topics">Back to your topics</a></p>`,
+  });
+}
+
+/**
+ * `/archive/search` is a route with nothing behind it yet: `ArchiveRepo` is an
+ * interface with no implementation, so there is nothing to search. It used to
+ * render a bare heading with no navigation, which left a signed-in User on a
+ * page with no way out of the application. It is now an honest, styled
+ * placeholder that says so and can be left.
+ */
+function archiveSearchPage(input: { email: string }): string {
+  return layout({
+    title: 'Archive search',
+    width: 'form',
+    account: input.email,
+    activeHref: '/archive/search',
+    body: `    <h1>Archive search</h1>
+    <p class="lede">Search everything Brieflyy has delivered to you, by word or topic.</p>
+    <div class="callout">
+      <p><strong>Search is not switched on yet.</strong></p>
+      <p>Every brief you have been sent is already kept, so this is a matter of putting a search box in front of it. Until then, your topics and their living briefs are where everything lives.</p>
+    </div>
+    <p class="actions"><a class="button" href="/topics">Back to your topics</a></p>`,
+  });
 }
 
 function pad2(n: number): string {
@@ -914,7 +885,6 @@ function homePage(input: {
   tier: Tier;
   atCap: boolean;
 }): string {
-  const safeEmail = escapeHtml(input.email);
   const cap = topicCapFor(input.tier);
   const plan = Number.isFinite(cap)
     ? `Free plan &middot; ${input.topics.length} of ${cap} topics`
@@ -922,59 +892,40 @@ function homePage(input: {
   // A user who cannot add another topic is told so on the page they land on,
   // not only on the picker they have to go and find.
   const atCapHtml = input.atCap
-    ? `<div class="paywall">You are using all ${cap} free topics. <a href="/upgrade">Upgrade</a> to add more, or remove one to pick a replacement.</div>`
+    ? `    <div class="callout callout--paywall">You are using all ${cap} free topics. <a href="/upgrade">Upgrade</a> to add more, or remove one to pick a replacement.</div>`
     : '';
   const rows = input.topics
-    .map(
-      (t) => `<li>
-        <a href="/topics/${escapeHtml(t.slug)}">${escapeHtml(t.title)}</a>
-        <span class="muted"> Â· ${escapeHtml(t.category)}</span>
-      </li>`,
-    )
+    .map((t) => {
+      // A free-form Topic is stored with the `unspecified` category, which is
+      // what the Directory does not know about it. Rendering the sentinel told
+      // the User their own idea was broken data, so it is left out.
+      const category = t.category === 'unspecified'
+        ? ''
+        : `<span class="muted"> &middot; ${escapeHtml(t.category)}</span>`;
+      return `      <li>
+        <a href="/topics/${escapeHtml(t.slug)}">${escapeHtml(t.title)}</a>${category}
+      </li>`;
+    })
     .join('\n');
   const emptyState = input.topics.length === 0
-    ? `<p class="muted">You haven't picked any topics yet. <a href="/pick-topics">Pick your topics to get started</a>.</p>`
+    ? `    <div class="empty-state">
+      <p class="muted">You haven't picked any topics yet. <a href="/pick-topics">Pick your topics to get started</a>.</p>
+    </div>`
     : '';
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Your topics Â· Brieflyy</title>
-  <style>
-    :root { color-scheme: light dark; }
-    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 3rem auto; padding: 0 1rem; }
-    h1 { font-size: 1.6rem; margin: 0 0 0.25rem; }
-    p.lede { color: #555; margin-top: 0; }
-    p.plan { color: #888; font-size: 0.85rem; margin-top: -0.5rem; }
-    ul.topics { list-style: none; padding: 0; margin: 1rem 0; }
-    ul.topics li { padding: 0.75rem 0; border-bottom: 1px solid #eee; }
-    a { color: #1f6feb; text-decoration: none; }
-    a:hover { text-decoration: underline; }
-    .muted { color: #888; }
-    .nav { margin-top: 2rem; }
-    .nav a { margin-right: 1rem; }
-    .paywall { background: #fff5d6; border: 1px solid #e0c66b; padding: 0.75rem 1rem; border-radius: 6px; margin: 1rem 0; }
-    form.logout { display: inline; }
-    form.logout button { background: none; color: inherit; border: 0; padding: 0; cursor: pointer; text-decoration: underline; }
-  </style>
-</head>
-<body>
-  <main>
-    <h1>Your topics</h1>
-    <p class="lede">Signed in as ${safeEmail}. Pick a topic to open its living brief.</p>
+  return layout({
+    title: 'Your topics',
+    width: 'default',
+    account: input.email,
+    activeHref: '/topics',
+    body: `    <h1>Your topics</h1>
+    <p class="lede">Pick a topic to open its living brief.</p>
     <p class="plan">${plan}</p>
-    ${atCapHtml}
-    ${emptyState}
-    <ul class="topics">${rows}</ul>
-    <div class="nav">
-      <a href="/pick-topics">Manage topics</a>
-      <a href="/settings/delivery">Delivery time</a>
-      <form class="logout" method="POST" action="/auth/logout"><button type="submit">Sign out</button></form>
-    </div>
-  </main>
-</body>
-</html>`;
+${atCapHtml}
+${emptyState}
+    <ul class="topics">
+${rows}
+    </ul>`,
+  });
 }
 
 function topicPage(input: {
@@ -1005,30 +956,47 @@ function topicPage(input: {
   sourcesById: Map<string, { id: string; name: string }>;
   visibleSourceIds: Set<string>;
   clusterArticles?: Map<string, readonly import('../domain/types.js').Article[]>;
+  /** The User's latest thumbs verdict per Cluster, so a control can show it. */
+  verdicts: Map<string, 'thumbs_up' | 'thumbs_down'>;
 }): string {
-  const safeEmail = escapeHtml(input.email);
   const safeTitle = escapeHtml(input.topic.title);
+  const action = `/topics/${escapeHtml(input.topicSlug)}/feedback`;
   const rows = input.clusters
     .map((c) => {
-      const bullets = c.bulletPoints
-        .map((b) => `<li>${escapeHtml(b)}</li>`)
+      const bulletPoints = c.bulletPoints
+        .map((b) => `          <li>${escapeHtml(b)}</li>`)
         .join('\n');
+      const bullets = bulletPoints
+        ? `<ul>
+${bulletPoints}
+        </ul>`
+        : '';
       const articles = input.clusterArticles?.get(c.id) ?? [];
       // An Article whose link the feed gave us in an unusable scheme is stored
       // with no URL at all. Rendering that as `href=""` would be a link to the
       // page the User is already on, so the title is shown without one.
+      // Each link carries the outlet it came from: in a reading product the
+      // attribution is half of what the link is for, and a comma-joined list of
+      // titles could not say it.
       const articleLinks = articles
         .filter((a) => a.url.length > 0)
-        .map((a) => `<a href="${escapeHtml(a.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(a.title || 'Source article')}</a>`)
-        .join(', ');
-      const hideLink = `<a href="?hide=${encodeURIComponent(String(c.id))}" class="hide-btn">Hide</a>`;
-      const feedbackButtons = `<form method="POST" action="/topics/${escapeHtml(input.topicSlug)}/feedback" style="display:inline;margin-right:0.5rem;">
+        .map((a) => {
+          const outlet = input.sourcesById.get(a.sourceId)?.name ?? a.sourceId;
+          return `<li><span class="outlet">${escapeHtml(outlet)}:</span> <a href="${escapeHtml(a.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(a.title || 'Source article')}</a></li>`;
+        })
+        .join('\n        ');
+      const verdict = input.verdicts.get(c.id) ?? null;
+      // Two controls that look alike behave differently: this one is undone by
+      // dropping the query string, the Feedback one is stored. Labelling them
+      // the same meant a User picked the irreversible one without knowing.
+      const hideLink = `<a href="?hide=${encodeURIComponent(String(c.id))}" class="hide-btn">Dismiss</a>`;
+      const feedbackButtons = `<form class="feedback" method="POST" action="${action}">
         <input type="hidden" name="clusterId" value="${escapeHtml(c.id)}">
-        <button type="submit" name="type" value="thumbs_up" style="font-size:0.75rem;padding:0.1rem 0.4rem;border-radius:4px;background:#e6f4ea;border:1px solid #a3d4a8;cursor:pointer;">👍</button>
-        <button type="submit" name="type" value="thumbs_down" style="font-size:0.75rem;padding:0.1rem 0.4rem;border-radius:4px;background:#fff5f5;border:1px solid #f0baba;cursor:pointer;">👎</button>
-        <button type="submit" name="type" value="more_like_this" style="font-size:0.75rem;padding:0.1rem 0.4rem;border-radius:4px;background:#eef5ff;border:1px solid #c2d6f2;cursor:pointer;">More</button>
-        <button type="submit" name="type" value="less_like_this" style="font-size:0.75rem;padding:0.1rem 0.4rem;border-radius:4px;background:#fff8e6;border:1px solid #e0c66b;cursor:pointer;">Less</button>
-        <button type="submit" name="type" value="hide_source" style="font-size:0.75rem;padding:0.1rem 0.4rem;border-radius:4px;background:#f5f0ee;border:1px solid #ccc;cursor:pointer;">Hide source</button>
+        <button type="submit" name="type" value="thumbs_up" aria-label="More like this" aria-pressed="${verdict === 'thumbs_up'}">&#128077;</button>
+        <button type="submit" name="type" value="thumbs_down" aria-label="Less like this" aria-pressed="${verdict === 'thumbs_down'}">&#128078;</button>
+        <button class="secondary" type="submit" name="type" value="more_like_this">More like this</button>
+        <button class="secondary" type="submit" name="type" value="less_like_this">Less like this</button>
+        <button class="secondary" type="submit" name="type" value="hide_source">Hide this source</button>
       </form>`;
       const sources = c.sourceIds
         .filter((sid) => input.visibleSourceIds.has(sid))
@@ -1037,69 +1005,39 @@ function topicPage(input: {
           const filterHref = `?source=${encodeURIComponent(sid)}`;
           return `<a href="${escapeHtml(filterHref)}" class="source">${escapeHtml(name)}</a>`;
         })
-        .join(' ');
-      return `<article class="cluster">
+        .join('\n        ');
+      return `      <article class="cluster">
         <h2>${escapeHtml(c.summary || c.title)}</h2>
         <div class="hide-row">${feedbackButtons}${hideLink}</div>
-        ${bullets ? `<ul>${bullets}</ul>` : ''}
+        ${bullets}
         <p class="sources">${sources || '<span class="muted">No sources</span>'}</p>
-        ${articleLinks ? `<p class="article-links">${articleLinks}</p>` : ''}
+        ${articleLinks ? `<ul class="articles">
+        ${articleLinks}
+        </ul>` : ''}
       </article>`;
     })
     .join('\n');
   const emptyState = emptyStateBlock(input);
   const sourceFilterBar = sourceFilterBarHtml(input);
   const windowForm = clusterWindowForm(input);
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${safeTitle} · Brieflyy</title>
-  <style>
-    :root { color-scheme: light dark; }
-    body { font-family: system-ui, sans-serif; max-width: 760px; margin: 3rem auto; padding: 0 1rem; }
-    h1 { font-size: 1.6rem; margin: 0 0 0.25rem; }
-    p.lede { color: #555; margin-top: 0; }
-    .cluster { padding: 1rem 0; border-top: 1px solid #eee; }
-    .cluster h2 { font-size: 1.05rem; margin: 0 0 0.5rem; }
-    .cluster ul { margin: 0 0 0.5rem; padding-left: 1.2rem; }
-    .sources { color: #555; font-size: 0.9rem; }
-    .source { display: inline-block; margin-right: 0.5rem; background: #eef; padding: 0.1rem 0.4rem; border-radius: 4px; }
-    .muted { color: #888; }
-    .hide-row { margin: -0.5rem 0 0.5rem 0; }
-    .hide-btn { font-size: 0.8rem; color: #888; text-decoration: none; border: 1px solid #ccc; padding: 0.1rem 0.3rem; border-radius: 4px; }
-    .hide-btn:hover { color: #b00020; border-color: #b00020; }
-    .article-links { margin-top: 0.5rem; font-size: 0.85rem; color: #555; }
-    .article-links a { color: #1f6feb; text-decoration: none; }
-    .article-links a:hover { text-decoration: underline; }
-    .filter-bar, .window-form { margin: 1rem 0; font-size: 0.85rem; color: #555; }
-    .filter-bar a { color: #1f6feb; margin-right: 0.75rem; }
-    .window-form label { margin-right: 0.4rem; }
-    .window-form input { width: 4rem; padding: 0.2rem; }
-    .window-form button { padding: 0.2rem 0.6rem; }
-    .nav { margin-top: 2rem; }
-    .nav a { margin-right: 1rem; }
-    form.logout { display: inline; }
-    form.logout button { background: none; color: inherit; border: 0; padding: 0; cursor: pointer; text-decoration: underline; }
-  </style>
-</head>
-<body>
-  <main>
-    <h1>${safeTitle}</h1>
-    <p class="lede">Signed in as ${safeEmail} · ${escapeHtml(input.topic.category)} · ${input.clusters.length} active cluster${input.clusters.length === 1 ? '' : 's'}</p>
-    ${sourceFilterBar}
-    ${emptyState}
-    ${rows}
-    ${windowForm}
-    <div class="nav">
-      <a href="/topics">All topics</a>
-      <a href="/pick-topics">Manage topics</a>
-      <form class="logout" method="POST" action="/auth/logout"><button type="submit">Sign out</button></form>
-    </div>
-  </main>
-</body>
-</html>`;
+  // The account's email moved to the header. It used to open the lede on seven
+  // pages, where it outranked the reason the page existed.
+  const category = input.topic.category === 'unspecified'
+    ? ''
+    : `${escapeHtml(input.topic.category)} &middot; `;
+  const count = `${input.clusters.length} active cluster${input.clusters.length === 1 ? '' : 's'}`;
+  return layout({
+    title: input.topic.title,
+    width: 'reading',
+    account: input.email,
+    activeHref: '/topics',
+    body: `    <h1>${safeTitle}</h1>
+    <p class="lede">${category}${count}</p>
+${sourceFilterBar}
+${emptyState}
+${rows}
+${windowForm}`,
+  });
 }
 
 /**
@@ -1111,6 +1049,10 @@ function topicPage(input: {
  * Clusters a Source filter or a Hide has removed still has Clusters — saying
  * "no stories yet" there would tell them their ingest is broken when it is
  * working exactly as asked.
+ *
+ * Each of them also says what to do next. Describing an empty screen without
+ * offering a way out of it leaves the User with nothing to act on, which is the
+ * state they are least able to work out for themselves.
  *
  * Nothing is said when there are Clusters on the page. A brief that is showing
  * Clusters is not filtered to nothing, whatever the query string says.
@@ -1124,17 +1066,28 @@ function emptyStateBlock(input: {
 }): string {
   if (input.clusters.length > 0) return '';
   if (input.revealableClusterCount > 0) {
-    return `<p class="muted">No clusters match the current filter. <a href="/topics/${escapeHtml(input.topicSlug)}">Show all ${input.revealableClusterCount} active cluster${input.revealableClusterCount === 1 ? '' : 's'}</a></p>`;
+    return `    <div class="empty-state">
+      <p class="muted">No clusters match the current filter. <a href="/topics/${escapeHtml(input.topicSlug)}">Show all ${input.revealableClusterCount} active cluster${input.revealableClusterCount === 1 ? '' : 's'}</a></p>
+    </div>`;
   }
   // Everything still Active is hidden by stored Feedback, which no link on this
   // page can undo. Saying "show all 0 clusters" here would be a dead end.
   if (input.activeClusterCount > 0) {
-    return `<p class="muted">Nothing is showing because you hid all ${input.activeClusterCount} active cluster${input.activeClusterCount === 1 ? '' : 's'} on this topic.</p>`;
+    return `    <div class="empty-state">
+      <p class="muted">Nothing is showing because you hid all ${input.activeClusterCount} active cluster${input.activeClusterCount === 1 ? '' : 's'} on this topic.</p>
+      <p class="empty-state__actions"><a href="/topics">All your topics</a></p>
+    </div>`;
   }
   if (input.clusterCount > 0) {
-    return `<p class="muted">Nothing is active on this topic right now. Its ${input.clusterCount} cluster${input.clusterCount === 1 ? ' has' : 's have'} been archived, and a Cluster becomes active again as its stories are covered.</p>`;
+    return `    <div class="empty-state">
+      <p class="muted">Nothing is active on this topic right now. Its ${input.clusterCount} cluster${input.clusterCount === 1 ? ' has' : 's have'} been archived, and a Cluster becomes active again as its stories are covered.</p>
+      <p class="empty-state__actions"><a href="/pick-topics">Manage topics</a></p>
+    </div>`;
   }
-  return `<p class="muted">No stories yet for this topic. Check back after the next ingest.</p>`;
+  return `    <div class="empty-state">
+      <p class="muted">No stories yet for this topic. Check back after the next ingest.</p>
+      <p class="empty-state__actions"><a href="/settings/delivery">Delivery time</a> <a href="/pick-topics">Manage topics</a></p>
+    </div>`;
 }
 
 /**
@@ -1143,7 +1096,9 @@ function emptyStateBlock(input: {
  *
  * Offered from the Sources the unfiltered Clusters carry, so every link is one
  * that can still show something, and the Source currently being filtered to
- * links back to everything rather than to itself.
+ * links back to everything rather than to itself. The active one is marked with
+ * `aria-current` as well as a class: the class had no rule in any stylesheet,
+ * so the page could not say which filter was live.
  */
 function sourceFilterBarHtml(input: {
   readonly sourceFilter: string | null;
@@ -1159,9 +1114,13 @@ function sourceFilterBarHtml(input: {
     const href = selected
       ? `/topics/${encodeURIComponent(input.topicSlug)}`
       : `/topics/${encodeURIComponent(input.topicSlug)}?source=${encodeURIComponent(sid)}`;
-    return `<a href="${escapeHtml(href)}"${selected ? ' class="selected"' : ''}>${escapeHtml(name)}</a>`;
+    const current = selected ? ' class="selected" aria-current="true"' : '';
+    return `<a href="${escapeHtml(href)}"${current}>${escapeHtml(name)}</a>`;
   });
-  return `<p class="filter-bar">Sources: ${links.join(' ')}</p>`;
+  return `    <p class="filter-bar">
+      <span class="filter-bar__label">Sources:</span>
+      ${links.join('\n      ')}
+    </p>`;
 }
 
 function clusterWindowForm(input: {
@@ -1171,35 +1130,24 @@ function clusterWindowForm(input: {
   const action = `/topics/${escapeHtml(input.topicSlug)}/cluster-window`;
   const min = MIN_CLUSTER_WINDOW_DAYS;
   const max = MAX_CLUSTER_WINDOW_DAYS;
-  return `<form class="window-form" method="POST" action="${action}">
+  return `    <form class="window-form" method="POST" action="${action}">
       <label for="windowDays">Cluster window</label>
       <input type="number" id="windowDays" name="windowDays" min="${min}" max="${max}" value="${input.topic.clusterWindowDays}">
       <span>days (${min}-${max})</span>
-      <button type="submit">Save</button>
+      <button class="secondary" type="submit">Save</button>
     </form>`;
 }
 
-function notFoundPage(email: string, message: string): string {
-  const safeEmail = escapeHtml(email);
-  const safe = escapeHtml(message);
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>Not found Â· Brieflyy</title>
-  <style>
-    body { font-family: system-ui, sans-serif; max-width: 480px; margin: 4rem auto; padding: 0 1rem; }
-    h1 { font-size: 1.4rem; }
-    p { color: #444; }
-    a { color: #1f6feb; }
-  </style>
-</head>
-<body>
-  <main>
-    <h1>Not found</h1>
-    <p>${safe}</p>
-    <p><a href="/topics">Back to your topics</a></p>
-  </main>
-</body>
-</html>`;
+function notFoundPage(email: string): string {
+  // The slug the User asked for used to be reflected back into the page. It is
+  // escaped, so it was never a vulnerability, but it is a URL path echoed for
+  // no product reason, and the copy below says the same thing without it.
+  return layout({
+    title: 'Not found',
+    width: 'form',
+    account: email,
+    body: `    <h1>Not found</h1>
+    <p>That topic does not exist, or it is not one of yours.</p>
+    <p class="actions"><a class="button" href="/topics">Back to your topics</a></p>`,
+  });
 }
