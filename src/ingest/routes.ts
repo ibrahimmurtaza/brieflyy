@@ -1,7 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 
 import { AUTHENTICATED_ROUTE_CONFIG, requireAuth } from '../http/access.js';
-import { escapeHtml } from '../pages/html.js';
+import { escapeHtml } from '../domain/html.js';
+import { layout } from '../pages/layout.js';
 import type { IngestScheduler } from './ingest-scheduler.js';
 
 export interface IngestRoutesOptions {
@@ -94,36 +95,31 @@ function renderDashboard(status: Awaited<ReturnType<IngestScheduler['statusHydra
   const nextDue = status.nextDueAt
     ? escapeHtml(status.nextDueAt.toISOString())
     : '<em>n/a</em>';
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <title>Brieflyy · Ingest dashboard</title>
-</head>
-<body>
-  <h1>Ingest scheduler</h1>
-  <dl>
-    <dt>Running</dt><dd>${status.running}</dd>
-    <dt>Last cycle</dt><dd>${lastCycle}</dd>
-    <dt>Last cycle id</dt><dd>${escapeHtml(status.lastCycleId ?? '')}</dd>
-    <dt>Next due</dt><dd>${nextDue}</dd>
-  </dl>
-  <h2>Sources</h2>
-  <table>
-    <thead>
-      <tr>
-        <th>Source</th>
-        <th>Last polled</th>
-        <th>Last success</th>
-        <th>Failures</th>
-        <th>Next attempt</th>
-        <th>Last error</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${rows}
-    </tbody>
-  </table>
-</body>
-</html>`;
+  return layout({
+    title: 'Ingest dashboard',
+    width: 'reading',
+    body: `    <h1>Ingest scheduler</h1>
+    <dl>
+      <dt>Running</dt><dd>${status.running}</dd>
+      <dt>Last cycle</dt><dd>${lastCycle}</dd>
+      <dt>Last cycle id</dt><dd>${escapeHtml(status.lastCycleId ?? '')}</dd>
+      <dt>Next due</dt><dd>${nextDue}</dd>
+    </dl>
+    <h2>Sources</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Source</th>
+          <th>Last polled</th>
+          <th>Last success</th>
+          <th>Failures</th>
+          <th>Next attempt</th>
+          <th>Last error</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows}
+      </tbody>
+    </table>`,
+  });
 }
