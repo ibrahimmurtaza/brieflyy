@@ -14,6 +14,8 @@ import type { ClusterRepo } from '../repos/cluster-repo.js';
 import type { SourceRepo } from '../repos/source-repo.js';
 import type { TopicRepo } from '../repos/topic-repo.js';
 import type { FeedbackRepo } from '../repos/feedback-repo.js';
+import type { BriefSnapshotRepo } from '../repos/brief-snapshot-repo.js';
+import type { BriefPlanService } from '../services/brief-plan-service.js';
 import { layout } from './layout.js';
 import {
   AUTHENTICATED_ROUTE_CONFIG,
@@ -28,6 +30,13 @@ export interface PageRoutesOptions {
   readonly topicRepo: TopicRepo;
   readonly sourceRepo: SourceRepo;
   readonly feedbackRepo?: FeedbackRepo;
+  /**
+   * How a User asks for a brief of one of their Topics right now, and where the
+   * brief that was sent is served from. Optional only so a caller that has
+   * neither can still mount the rest of the pages; the application passes both.
+   */
+  readonly briefPlanService?: BriefPlanService;
+  readonly briefSnapshotRepo?: BriefSnapshotRepo;
 }
 
 export async function registerPageRoutes(
@@ -249,7 +258,61 @@ export async function registerPageRoutes(
     },
   );
 
-  fastify.get<{ Params: { slug: string }; Querystring: { source?: string; hide?: string } }>(
+  fastify.post<{ Params: { slug: string } }>(
+    '/topics/:slug/send-brief',
+    AUTHENTICATED_ROUTE_CONFIG,
+    async (req, reply) => {
+      if (!opts.briefPlanService || !requireAuthPage(req, reply)) return reply;
+      const topic = await opts.topicRepo.findBySlug(
+        req.auth.user.id,
+        req.params.slug,
+      );
+      if (!topic) {
+        return reply
+          .code(404)
+          .type('text/html')
+          .send(notFoundPage(req.auth.account.email));
+      }
+      // The address is the session's, never one the form supplied: a User can
+      // only ever be sent their own brief, so there is nothing here to choose.
+      await opts.briefPlanService.sendBrief({
+        topicId: topic.id,
+        userId: req.auth.user.id,
+        to: req.auth.account.email,
+      });
+      return reply
+        .code(302)
+        .header('location', `/topics/${req.params.slug}?brief=sent`)
+        .send();
+    },
+  );
+
+  fastify.get<{ Params: { id: string } }>(
+    '/briefs/:id',
+    AUTHENTICATED_ROUTE_CONFIG,
+    async (req, reply) => {
+      if (!opts.briefSnapshotRepo || !requireAuthPage(req, reply)) return reply;
+      // Scoped to the signed-in User inside the lookup, so a brief id from
+      // another User's URL is simply not found rather than briefly displayed.
+      const snapshot = await opts.briefSnapshotRepo.findByIdForUser(
+        req.auth.user.id,
+        req.params.id,
+      );
+      if (!snapshot) {
+        return reply
+          .code(404)
+          .type('text/html')
+          .send(notFoundPage(req.auth.account.email, 'That brief'));
+      }
+      // The stored document, served as stored. A BriefSnapshot is what was
+      // emailed, so rendering it again from today's Clusters would show a
+      // different brief from the one the User received — and the one the call to
+      // action in the email points at.
+      return reply.type('text/html').send(snapshot.html);
+    },
+  );
+
+  fastify.get<{ Params: { slug: string }; Querystring: { source?: string; hide?: string; brief?: string } }>(
     '/topics/:slug',
     AUTHENTICATED_ROUTE_CONFIG,
     async (req, reply) => {
@@ -325,6 +388,14 @@ export async function registerPageRoutes(
       for (const c of active) {
         for (const sid of c.sourceIds) visibleSources.add(sid);
       }
+      // The BriefSnapshots of this Topic that have been emailed, newest first.
+      // The LivingBrief regenerates, so this list is the only way back to the
+      // exact document a User was sent.
+      const snapshots = opts.briefSnapshotRepo
+        ? newestFirst(
+            await opts.briefSnapshotRepo.listByTopicAndUser(req.auth.user.id, topic.id),
+          ).slice(0, SNAPSHOTS_ON_TOPIC_PAGE)
+        : [];
       return reply.type('text/html').send(
         topicPage({
           email: req.auth.account.email,
@@ -339,6 +410,8 @@ export async function registerPageRoutes(
           visibleSourceIds: visibleSources,
           clusterArticles,
           verdicts,
+          snapshots,
+          briefJustSent: req.query.brief === 'sent',
         }),
       );
     },
@@ -969,6 +1042,10 @@ function topicPage(input: {
   clusterArticles?: Map<string, readonly import('../domain/types.js').Article[]>;
   /** The User's latest thumbs verdict per Cluster, so a control can show it. */
   verdicts: Map<string, 'thumbs_up' | 'thumbs_down'>;
+  /** The BriefSnapshots of this Topic already emailed, newest first. */
+  readonly snapshots?: readonly import('../domain/types.js').BriefSnapshot[];
+  /** Set when the User has just asked for one and it was sent. */
+  readonly briefJustSent?: boolean;
 }): string {
   const safeTitle = escapeHtml(input.topic.title);
   const action = `/topics/${escapeHtml(input.topicSlug)}/feedback`;
@@ -1031,6 +1108,7 @@ ${bulletPoints}
   const emptyState = emptyStateBlock(input);
   const sourceFilterBar = sourceFilterBarHtml(input);
   const windowForm = clusterWindowForm(input);
+  const briefActions = sendBriefSection(input);
   // The account's email moved to the header. It used to open the lede on seven
   // pages, where it outranked the reason the page existed.
   const category = input.topic.category === 'unspecified'
@@ -1044,11 +1122,65 @@ ${bulletPoints}
     activeHref: '/topics',
     body: `    <h1>${safeTitle}</h1>
     <p class="lede">${category}${count}</p>
+${briefActions}
 ${sourceFilterBar}
 ${emptyState}
 ${rows}
 ${windowForm}`,
   });
+}
+
+/** How many emailed BriefSnapshots the LivingBrief offers a way back to. */
+const SNAPSHOTS_ON_TOPIC_PAGE = 5;
+
+/**
+ * Newest first, so the list reads as recency rather than as whatever order the
+ * repository returned rows in.
+ */
+function newestFirst(
+  snapshots: readonly import('../domain/types.js').BriefSnapshot[],
+): readonly import('../domain/types.js').BriefSnapshot[] {
+  return [...snapshots].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+}
+
+/**
+ * Asking for a brief now, and the BriefSnapshots already emailed.
+ *
+ * A User who wants a brief today should not have to wait for the clock. The form
+ * posts to a route that plans the Topic, renders it and emails it, and the page
+ * comes back saying so — an email that arrives with nothing said about it is
+ * indistinguishable from the scheduler being broken.
+ */
+function sendBriefSection(input: {
+  email: string;
+  topicSlug: string;
+  snapshots?: readonly import('../domain/types.js').BriefSnapshot[];
+  briefJustSent?: boolean;
+}): string {
+  // A link back to a brief is a link out of the LivingBrief and into the exact
+  // document that was sent, which is the only reason this list is here at all:
+  // the LivingBrief itself regenerates, so without it a sent brief is reachable
+  // only from the inbox. The time is labelled UTC because this page has no
+  // timezone to show it in, and a bare clock time is a claim without a frame.
+  const sent = (input.snapshots ?? []).map(
+    (b) =>
+      `      <li><a href="/briefs/${encodeURIComponent(b.id)}">${escapeHtml(formatHumanTime(b.createdAt, 'UTC'))} UTC</a></li>`,
+  );
+  const list = sent.length > 0
+    ? `    <section>
+      <h2>Briefs you have been sent</h2>
+      <ul class="topics">
+${sent.join('\n')}
+      </ul>
+    </section>`
+    : '';
+  const notice = input.briefJustSent
+    ? `    <div class="callout callout--success" role="status">Your brief has been sent to ${escapeHtml(input.email)}.</div>`
+    : '';
+  return `${notice}    <form method="POST" action="/topics/${escapeHtml(input.topicSlug)}/send-brief">
+      <button type="submit">Email me this brief now</button>
+    </form>
+${list}`;
 }
 
 /**
@@ -1149,7 +1281,7 @@ function clusterWindowForm(input: {
     </form>`;
 }
 
-function notFoundPage(email: string): string {
+function notFoundPage(email: string, what = 'That topic'): string {
   // The slug the User asked for used to be reflected back into the page. It is
   // escaped, so it was never a vulnerability, but it is a URL path echoed for
   // no product reason, and the copy below says the same thing without it.
@@ -1158,7 +1290,7 @@ function notFoundPage(email: string): string {
     width: 'form',
     account: email,
     body: `    <h1>Not found</h1>
-    <p>That topic does not exist, or it is not one of yours.</p>
+    <p>${escapeHtml(what)} does not exist, or it is not one of yours.</p>
     <p class="actions"><a class="button" href="/topics">Back to your topics</a></p>`,
   });
 }

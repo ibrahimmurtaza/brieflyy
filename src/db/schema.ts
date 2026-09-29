@@ -541,6 +541,13 @@ export const briefSnapshots = sqliteTable(
       .references(() => topics.id, { onDelete: 'cascade' }),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     html: text('html').notNull(),
+    /**
+     * The plain-text alternative to `html`, stored rather than derived. A
+     * snapshot is what was sent, so both halves of the message are kept: a
+     * client that was shown the text half is not served a different brief later
+     * because the Clusters moved on.
+     */
+    text: text('text').notNull().default(''),
     unsubscribeToken: text('unsubscribe_token').notNull(),
     globalUnsubscribeToken: text('global_unsubscribe_token').notNull(),
   },

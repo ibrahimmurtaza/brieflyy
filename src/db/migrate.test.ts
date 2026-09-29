@@ -323,6 +323,45 @@ CREATE UNIQUE INDEX magic_links_token_hash_unique ON magic_links (token_hash);
 CREATE INDEX magic_links_account_idx ON magic_links (account_id);
 `;
 
+/** A database from before a BriefSnapshot carried a plain-text alternative. */
+const NO_SNAPSHOT_TEXT_SCHEMA_SQL = `
+CREATE TABLE users (
+  id TEXT PRIMARY KEY NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+  onboarding_state TEXT NOT NULL DEFAULT 'not_started'
+);
+CREATE TABLE topics (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  slug TEXT NOT NULL,
+  title TEXT NOT NULL,
+  blurb TEXT NOT NULL,
+  category TEXT NOT NULL,
+  origin_kind TEXT NOT NULL,
+  origin_template_id TEXT,
+  cadence TEXT NOT NULL DEFAULT 'daily',
+  created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+);
+CREATE TABLE brief_plans (
+  id TEXT PRIMARY KEY NOT NULL,
+  topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  cluster_ids TEXT NOT NULL DEFAULT ''
+);
+CREATE UNIQUE INDEX brief_plans_topic_user_idx ON brief_plans (topic_id, user_id, created_at);
+CREATE TABLE brief_snapshots (
+  id TEXT PRIMARY KEY NOT NULL,
+  brief_plan_id TEXT NOT NULL REFERENCES brief_plans(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  html TEXT NOT NULL,
+  unsubscribe_token TEXT NOT NULL,
+  global_unsubscribe_token TEXT NOT NULL
+);
+`;
+
 describe('applySchema', () => {
   it('adds topics.cadence to a database created before the column existed', async () => {
     const driver = createInMemorySqliteDriver();
@@ -433,6 +472,41 @@ describe('applySchema', () => {
         { from: 'topic_id', table: 'topics' },
       ]),
     );
+  });
+
+  it('adds brief_snapshots.text to a database created before the column existed', () => {
+    // `EmailMessage.text` is required, so a snapshot that stored only HTML could
+    // not be sent at all. The column arrives empty on the snapshots written
+    // before it, which is the truth about them: they have no text alternative.
+    const driver = createInMemorySqliteDriver();
+    driver.exec(NO_SNAPSHOT_TEXT_SCHEMA_SQL);
+    driver.prepare(`INSERT INTO users (id) VALUES (?)`).run('user-1');
+    driver
+      .prepare(
+        `INSERT INTO topics (id, user_id, slug, title, blurb, category, origin_kind, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run('topic-1', 'user-1', 'ai', 'AI', 'AI news', 'technology', 'freeform', 1);
+    driver
+      .prepare(
+        `INSERT INTO brief_plans (id, topic_id, user_id, created_at, cluster_ids) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run('plan-1', 'topic-1', 'user-1', 1, 'cluster-1');
+    driver
+      .prepare(
+        `INSERT INTO brief_snapshots (id, brief_plan_id, user_id, topic_id, created_at, html, unsubscribe_token, global_unsubscribe_token)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run('snap-1', 'plan-1', 'user-1', 'topic-1', 1, '<p>sent</p>', 'u1', 'g1');
+
+    applySchema(driver);
+
+    const row = driver
+      .prepare(`SELECT html, text FROM brief_snapshots WHERE id = ?`)
+      .get('snap-1') as { html: string; text: string } | undefined;
+    // The brief that was sent is still there, and it says it has no text part.
+    expect(row?.html).toBe('<p>sent</p>');
+    expect(row?.text).toBe('');
   });
 
   it('keeps the rows of a table it rebuilds', () => {

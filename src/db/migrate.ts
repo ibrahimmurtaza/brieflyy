@@ -231,6 +231,7 @@ CREATE TABLE IF NOT EXISTS brief_snapshots (
   topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
   created_at INTEGER NOT NULL,
   html TEXT NOT NULL,
+  text TEXT NOT NULL DEFAULT '',
   unsubscribe_token TEXT NOT NULL,
   global_unsubscribe_token TEXT NOT NULL
 );
@@ -441,6 +442,7 @@ const TABLE_REBUILDS: readonly TableRebuild[] = [
       'topic_id',
       'created_at',
       'html',
+      'text',
       'unsubscribe_token',
       'global_unsubscribe_token',
     ],
@@ -451,6 +453,7 @@ const TABLE_REBUILDS: readonly TableRebuild[] = [
   topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
   created_at INTEGER NOT NULL,
   html TEXT NOT NULL,
+  text TEXT NOT NULL DEFAULT '',
   unsubscribe_token TEXT NOT NULL,
   global_unsubscribe_token TEXT NOT NULL
 )`,
@@ -589,6 +592,15 @@ const COLUMN_MIGRATIONS: readonly ColumnMigration[] = [
     table: 'entities',
     column: 'canonical_key',
     ddl: `ALTER TABLE entities ADD COLUMN canonical_key TEXT NOT NULL DEFAULT ''`,
+  },
+  {
+    // The plain-text half of a BriefSnapshot. `EmailMessage.text` is required,
+    // so a snapshot holding only HTML could not be sent at all — which is part
+    // of why nothing had ever sent one. The default says the truth about the
+    // rows written before the column existed: they have no text alternative.
+    table: 'brief_snapshots',
+    column: 'text',
+    ddl: `ALTER TABLE brief_snapshots ADD COLUMN text TEXT NOT NULL DEFAULT ''`,
   },
 ];
 

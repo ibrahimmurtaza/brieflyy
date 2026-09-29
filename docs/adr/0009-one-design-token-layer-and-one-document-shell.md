@@ -20,6 +20,16 @@ asserted to contain no form, and a sign-out form in the header is not a checkout
 The BriefSnapshot email is styled separately, with inline styles and a single
 600px table, because email clients strip a `<style>` block in the head.
 
+`GET /briefs/:id` is the one page served without `layout()`, and the exception is
+the same one seen from the other side. A BriefSnapshot is by definition the
+document that was emailed, so the route serves the stored bytes rather than
+re-wrapping them in the application shell — a brief re-rendered through
+`layout()` would be a different document from the one the User received, which is
+the property the snapshot exists to keep. The consequence the shell normally
+prevents is covered by a test instead: the stored document must carry its own
+links back into the application, so a User who lands on it is not stranded on a
+page with no navigation.
+
 ## Why one shell rather than a framework
 
 There is no bundler, no build step for assets, and no bundler to add one

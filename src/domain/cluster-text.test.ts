@@ -1,25 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import type { Article } from './types.js';
-import { bulletsFrom, extractSentences, oneLinerFrom } from './cluster-text.js';
-import { EMPTY_SIGNATURE } from './story-signature.js';
-
-
-function makeArticle(overrides: Partial<Article> & { readonly id: string }): Article {
-  return {
-    sourceId: 'src-a',
-    externalId: overrides.id,
-    url: `https://example.com/${overrides.id}`,
-    title: 'A headline',
-    body: '',
-    publishedAt: new Date('2026-09-02T10:00:00Z'),
-    ingestedAt: new Date('2026-09-02T10:00:00Z'),
-    entities: [],
-    signature: EMPTY_SIGNATURE,
-    storyId: 'story-1',
-    ...overrides,
-  };
-}
+import {
+  articleUrlForStatement,
+  bulletsFrom,
+  extractSentences,
+  oneLinerFrom,
+} from './cluster-text.js';
+import { makeArticle } from '../testing/fixtures.js';
 
 describe('extractSentences', () => {
   it('splits a body into its sentences', () => {
@@ -250,5 +237,68 @@ describe('bulletsFrom', () => {
 
   it('returns nothing when there are no Articles to draw from', () => {
     expect(bulletsFrom([], 3)).toEqual([]);
+  });
+});
+
+describe('articleUrlForStatement', () => {
+  it('finds the Article a bullet was quoted from', () => {
+    const articles = [
+      makeArticle({ id: 'a-1', body: 'Acme Corp unveiled Foo today.' }),
+      makeArticle({
+        id: 'a-2',
+        body: 'BrandX Inc acquired TinyCo for two billion dollars.',
+      }),
+    ];
+    const [first, second] = bulletsFrom(articles, 3);
+
+    expect(articleUrlForStatement(first!, articles)).toBe('https://example.com/a-1');
+    expect(articleUrlForStatement(second!, articles)).toBe('https://example.com/a-2');
+  });
+
+  it('matches on the statement rather than the whole Article, so one Article can answer twice', () => {
+    const articles = [
+      makeArticle({
+        id: 'a-1',
+        body: 'Acme Corp unveiled Foo today. Analysts were surprised by the launch.',
+      }),
+    ];
+
+    expect(
+      articleUrlForStatement('Analysts were surprised by the launch.', articles),
+    ).toBe('https://example.com/a-1');
+  });
+
+  it('answers with an Article that printed it when several did', () => {
+    // A wire story carried under several bylines, which is what a Cluster of
+    // one Story normally looks like. Which one led it was decided when the
+    // bullets were drawn, from inputs this lookup does not have, so the answer
+    // is a Source that printed the sentence — never one that did not.
+    const wire = 'Acme Corp unveiled Foo today.';
+    const articles = [
+      makeArticle({ id: 'a-1', body: wire }),
+      makeArticle({ id: 'a-2', body: wire }),
+    ];
+
+    expect(articleUrlForStatement(wire, articles)).toBe('https://example.com/a-1');
+    expect(articles.some((a) => a.url === articleUrlForStatement(wire, articles))).toBe(true);
+  });
+
+  it('answers null for a statement no Article here says', () => {
+    // A Cluster's bullets are written by an earlier build, or by hand in a test.
+    // Guessing an Article for a sentence none of them contains would attribute
+    // a quote to an outlet that did not print it.
+    expect(
+      articleUrlForStatement('Nobody wrote this sentence.', [
+        makeArticle({ id: 'a-1', body: 'Acme Corp unveiled Foo today.' }),
+      ]),
+    ).toBeNull();
+  });
+
+  it('answers null for an Article whose feed gave it no usable link', () => {
+    expect(
+      articleUrlForStatement('Acme Corp unveiled Foo today.', [
+        makeArticle({ id: 'a-1', url: '', body: 'Acme Corp unveiled Foo today.' }),
+      ]),
+    ).toBeNull();
   });
 });

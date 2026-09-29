@@ -1,0 +1,233 @@
+import { beforeEach, describe, expect, it } from 'vitest';
+
+import { BriefPlanService } from './brief-plan-service.js';
+import { BriefSnapshotRenderer } from './brief-snapshot-renderer.js';
+import { DrizzleBriefPlanRepo } from '../repos/brief-plan-repo.js';
+import { DrizzleBriefSnapshotRepo } from '../repos/brief-snapshot-repo.js';
+import { DrizzleClusterRepo } from '../repos/cluster-repo.js';
+import { DrizzleEmailDeliveryRepo } from '../repos/email-delivery-repo.js';
+import { DrizzleTopicRepo } from '../repos/topic-repo.js';
+import { DrizzleUserRepo } from '../repos/user-repo.js';
+import { ConsoleEmailTransport } from '../email/console-transport.js';
+import type { EmailTransport } from '../email/transport.js';
+import { createTestDb } from '../testing/test-db.js';
+import { countRows } from '../testing/db.js';
+import { makeCluster, makeTopic, makeUser } from '../testing/fixtures.js';
+import {
+  deterministicRandom,
+  makeTestClock,
+  resetDeterministic,
+  type TestClock,
+} from '../testing/test-clocks.js';
+import type { TopicId, UserId } from '../domain/types.js';
+
+const NOW = new Date('2026-09-02T12:00:00Z');
+const APP_BASE_URL = 'https://app.brieflyy.test';
+
+interface Harness {
+  /** The service under test, wired to the console transport. */
+  readonly service: BriefPlanService;
+  readonly transport: ConsoleEmailTransport;
+  readonly planRepo: DrizzleBriefPlanRepo;
+  readonly snapshotRepo: DrizzleBriefSnapshotRepo;
+  readonly deliveryRepo: DrizzleEmailDeliveryRepo;
+  readonly clusterRepo: DrizzleClusterRepo;
+  readonly clock: TestClock;
+  /** Row counts, for the things a test asserts were or were not written. */
+  count(table: string): number;
+  /** The same service against a different transport, for the failure path. */
+  serviceWith(transport: EmailTransport): BriefPlanService;
+}
+
+let harness: Harness;
+
+beforeEach(() => {
+  resetDeterministic();
+  const { db, driver } = createTestDb();
+  const clock = makeTestClock(NOW);
+  const transport = new ConsoleEmailTransport({ logger: () => {} });
+  const clusterRepo = new DrizzleClusterRepo(db);
+  const topicRepo = new DrizzleTopicRepo(db);
+  const planRepo = new DrizzleBriefPlanRepo(db);
+  const snapshotRepo = new DrizzleBriefSnapshotRepo(db);
+  const deliveryRepo = new DrizzleEmailDeliveryRepo(db);
+
+  void new DrizzleUserRepo(db).insert(makeUser({ id: 'user-1' }));
+  void topicRepo.insert(makeTopic({ id: 'topic-1', userId: 'user-1', title: 'World news' }));
+
+  const serviceWith = (over: EmailTransport): BriefPlanService =>
+    new BriefPlanService({
+      clusterRepo,
+      briefPlanRepo: planRepo,
+      briefSnapshotRepo: snapshotRepo,
+      emailDeliveryRepo: deliveryRepo,
+      renderer: new BriefSnapshotRenderer({ clusterRepo, topicRepo }),
+      emailTransport: over,
+      appBaseUrl: APP_BASE_URL,
+      clock: clock.clock,
+      random: deterministicRandom,
+    });
+
+  harness = {
+    service: serviceWith(transport),
+    transport,
+    planRepo,
+    snapshotRepo,
+    deliveryRepo,
+    clusterRepo,
+    clock,
+    count: (table: string): number => countRows(driver, table),
+    serviceWith,
+  };
+});
+
+/** Seed a Topic's Clusters directly, since forming them is another test's job. */
+async function seedClusters(): Promise<void> {
+  await harness.clusterRepo.insert(
+    makeCluster({
+      id: 'c-slow',
+      topicId: 'topic-1',
+      title: 'Slow story',
+      summary: 'The slow one is still moving.',
+      bulletPoints: ['The slow one is still moving.'],
+      velocity: 1,
+      lastSeenAt: new Date('2026-09-01T00:00:00Z'),
+    }),
+  );
+  await harness.clusterRepo.insert(
+    makeCluster({
+      id: 'c-fast',
+      topicId: 'topic-1',
+      title: 'Fast story',
+      summary: 'The fast one broke this morning.',
+      bulletPoints: ['The fast one broke this morning.'],
+      velocity: 9,
+      lastSeenAt: new Date('2026-09-02T00:00:00Z'),
+    }),
+  );
+  await harness.clusterRepo.insert(
+    makeCluster({ id: 'c-archived', topicId: 'topic-1', title: 'Old story', state: 'archive' }),
+  );
+}
+
+const SEND = { topicId: 'topic-1' as TopicId, userId: 'user-1' as UserId, to: 'iris@example.com' };
+
+describe('BriefPlanService.createPlan', () => {
+  it('persists the selection and the ordering it chose', async () => {
+    await seedClusters();
+
+    const plan = await harness.service.createPlan(SEND);
+
+    // The fastest Cluster first, and an Archived one not at all. The order is
+    // part of what a plan is, so it has to survive the write: the brief is sent
+    // from the stored plan, not from a fresh sort of the same table.
+    expect(plan.clusterIds).toEqual(['c-fast', 'c-slow']);
+
+    const stored = await harness.planRepo.findLatestByTopicId('topic-1');
+    expect(stored?.id).toBe(plan.id);
+    expect(stored?.clusterIds).toEqual(['c-fast', 'c-slow']);
+    expect(stored?.createdAt).toEqual(NOW);
+  });
+
+  it('takes at most the Clusters a brief can hold', async () => {
+    await seedClusters();
+
+    const plan = await harness.service.createPlan({ ...SEND, maxClusters: 1 });
+
+    expect(plan.clusterIds).toEqual(['c-fast']);
+  });
+});
+
+describe('BriefPlanService.sendBrief', () => {
+  it('sends the brief through the transport it was given', async () => {
+    await seedClusters();
+
+    await harness.service.sendBrief(SEND);
+
+    const sent = harness.transport.snapshot();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.to).toBe('iris@example.com');
+    expect(sent[0]?.subject).toBe('World news - Brieflyy');
+    expect(sent[0]?.html).toContain('World news');
+    expect(sent[0]?.text).toContain('World news');
+  });
+
+  it('quotes the Clusters the plan chose, in the order it chose them', async () => {
+    await seedClusters();
+
+    await harness.service.sendBrief(SEND);
+
+    const { text = '' } = harness.transport.snapshot()[0]!;
+    expect(text.indexOf('Fast story')).toBeLessThan(text.indexOf('Slow story'));
+    expect(text).not.toContain('Old story');
+  });
+
+  it('stores the rendered brief rather than re-deriving it on view', async () => {
+    await seedClusters();
+
+    const { snapshot } = await harness.service.sendBrief(SEND);
+    const sent = harness.transport.snapshot()[0]!;
+
+    // Byte for byte what went down the wire, in both halves. A snapshot that
+    // stored something else and rendered this later would be a different brief
+    // from the one the User actually received.
+    expect(snapshot.html).toBe(sent.html);
+    expect(snapshot.text).toBe(sent.text);
+    expect(snapshot.briefPlanId).toBe((await harness.planRepo.findLatestByTopicId('topic-1'))?.id);
+    expect((await harness.snapshotRepo.findByIdForUser('user-1', snapshot.id))?.html).toBe(sent.html);
+  });
+
+  it('records a delivery carrying the snapshot own unsubscribe tokens', async () => {
+    await seedClusters();
+
+    const { snapshot, delivery } = await harness.service.sendBrief(SEND);
+
+    // A delivery is a separate record from the snapshot so one can be re-sent
+    // or unsubscribed from, and it is where the unsubscribe state lives — so
+    // the tokens travel with it rather than being minted twice and disagreeing.
+    expect(delivery.briefSnapshotId).toBe(snapshot.id);
+    expect(delivery.topicId).toBe(snapshot.topicId);
+    expect(delivery.sentAt).toEqual(NOW);
+    expect(delivery.unsubscribeToken).toBe(snapshot.unsubscribeToken);
+    expect(delivery.globalUnsubscribeToken).toBe(snapshot.globalUnsubscribeToken);
+
+    const stored = await harness.deliveryRepo.findBySnapshotId(snapshot.id);
+    expect(stored).toHaveLength(1);
+    expect(stored[0]?.unsubscribeToken).toBe(snapshot.unsubscribeToken);
+  });
+
+  it('mints tokens that are not the same for two sends', async () => {
+    await seedClusters();
+
+    const first = await harness.service.sendBrief(SEND);
+    harness.clock.advance(1000);
+    const second = await harness.service.sendBrief(SEND);
+
+    // Unsubscribing from one delivery must not unsubscribe from the other, so
+    // a shared token would be a token that stops working halfway through.
+    expect(second.snapshot.unsubscribeToken).not.toBe(first.snapshot.unsubscribeToken);
+    expect(second.snapshot.globalUnsubscribeToken).not.toBe(
+      first.snapshot.globalUnsubscribeToken,
+    );
+  });
+
+  it('writes no delivery when the transport refuses the message', async () => {
+    await seedClusters();
+    const refusing: EmailTransport = {
+      providerName: 'refusing',
+      send: async () => {
+        throw new Error('provider down');
+      },
+    };
+
+    await expect(harness.serviceWith(refusing).sendBrief(SEND)).rejects.toThrow('provider down');
+
+    // A delivery is the record that a brief reached a User. Writing one for a
+    // send that failed would report a delivery that never happened, and the
+    // unsubscribe state on it would be state about nothing. The snapshot
+    // survives, because it is what was rendered and there is no point throwing
+    // a rendered brief away over a provider that was briefly down.
+    expect(harness.count('email_deliveries')).toBe(0);
+    expect(harness.count('brief_snapshots')).toBe(1);
+  });
+});
