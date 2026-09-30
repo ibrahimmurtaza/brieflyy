@@ -93,6 +93,12 @@ describe('route access guard', () => {
     );
   });
 
+  it('registers the brief status routes in the manifest', () => {
+    expect(declared().map(label)).toEqual(
+      expect.arrayContaining(['GET /api/briefs/status', 'GET /admin/briefs']),
+    );
+  });
+
   it('declares an access level for every route', () => {
     expect(routes.filter((r) => r.access === null).map(label)).toEqual([]);
   });
@@ -111,10 +117,16 @@ describe('route access guard', () => {
   });
 
   it('declares the admin surface as authenticated, not public', () => {
+    // The observability surfaces of the two background jobs. Both are the same
+    // kind of thing — a status a signed-in User reads — and neither is anything a
+    // visitor without a session may see.
     const admin = declared().filter(
-      (r) => r.url.startsWith('/admin') || r.url.startsWith('/api/ingest'),
+      (r) =>
+        r.url.startsWith('/admin') ||
+        r.url.startsWith('/api/ingest') ||
+        r.url.startsWith('/api/briefs'),
     );
-    expect(admin.length).toBe(3);
+    expect(admin.length).toBe(5);
     expect(admin.every((r) => r.access === 'authenticated')).toBe(true);
   });
 

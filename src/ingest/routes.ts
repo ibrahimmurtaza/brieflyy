@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 
 import { AUTHENTICATED_ROUTE_CONFIG, requireAuth } from '../http/access.js';
 import { escapeHtml } from '../domain/html.js';
-import { layout } from '../pages/layout.js';
+import { factValue, renderStatusDashboard } from '../pages/status-dashboard.js';
 import type { IngestScheduler } from './ingest-scheduler.js';
 
 export interface IngestRoutesOptions {
@@ -67,59 +67,35 @@ export async function registerIngestRoutes(
 }
 
 function renderDashboard(status: Awaited<ReturnType<IngestScheduler['statusHydrated']>>): string {
-  const rows = status.sources
-    .map((s) => {
-      const lastSuccess = s.lastSuccessAt
-        ? escapeHtml(s.lastSuccessAt.toISOString())
-        : '<em>never</em>';
-      const lastPolled = s.lastPolledAt
-        ? escapeHtml(s.lastPolledAt.toISOString())
-        : '<em>never</em>';
-      const next = escapeHtml(s.nextAttemptAt.toISOString());
-      const err = s.lastError
-        ? `<code>${escapeHtml(s.lastError)}</code>`
-        : '';
-      return `<tr>
-        <td>${escapeHtml(s.sourceId)}</td>
-        <td>${lastPolled}</td>
-        <td>${lastSuccess}</td>
-        <td>${s.consecutiveFailures}</td>
-        <td>${next}</td>
-        <td>${err}</td>
-      </tr>`;
-    })
-    .join('\n');
-  const lastCycle = status.lastCycleAt
-    ? escapeHtml(status.lastCycleAt.toISOString())
-    : '<em>never</em>';
-  const nextDue = status.nextDueAt
-    ? escapeHtml(status.nextDueAt.toISOString())
-    : '<em>n/a</em>';
-  return layout({
-    title: 'Ingest dashboard',
-    width: 'reading',
-    body: `    <h1>Ingest scheduler</h1>
-    <dl>
-      <dt>Running</dt><dd>${status.running}</dd>
-      <dt>Last cycle</dt><dd>${lastCycle}</dd>
-      <dt>Last cycle id</dt><dd>${escapeHtml(status.lastCycleId ?? '')}</dd>
-      <dt>Next due</dt><dd>${nextDue}</dd>
-    </dl>
-    <h2>Sources</h2>
-    <table>
-      <thead>
-        <tr>
-          <th>Source</th>
-          <th>Last polled</th>
-          <th>Last success</th>
-          <th>Failures</th>
-          <th>Next attempt</th>
-          <th>Last error</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${rows}
-      </tbody>
-    </table>`,
+  return renderStatusDashboard({
+    title: 'Ingest scheduler',
+    facts: [
+      { label: 'Running', value: factValue(status.running) },
+      {
+        label: 'Last cycle',
+        value: factValue(status.lastCycleAt?.toISOString() ?? null),
+      },
+      { label: 'Last cycle id', value: factValue(status.lastCycleId) },
+      { label: 'Next due', value: factValue(status.nextDueAt?.toISOString() ?? null) },
+    ],
+    table: {
+      heading: 'Sources',
+      headings: [
+        'Source',
+        'Last polled',
+        'Last success',
+        'Failures',
+        'Next attempt',
+        'Last error',
+      ],
+      rows: status.sources.map((s) => [
+        escapeHtml(s.sourceId),
+        factValue(s.lastPolledAt?.toISOString() ?? null),
+        factValue(s.lastSuccessAt?.toISOString() ?? null),
+        factValue(s.consecutiveFailures),
+        factValue(s.nextAttemptAt.toISOString()),
+        s.lastError === null ? '' : `<code>${escapeHtml(s.lastError)}</code>`,
+      ]),
+    },
   });
 }

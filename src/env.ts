@@ -111,6 +111,14 @@ export interface ServerConfig {
   readonly ingestBackoffBaseMs: number;
   /** The ceiling on the doubling. */
   readonly ingestBackoffMaxMs: number;
+  /** Whether the daily brief job runs while the process is up. */
+  readonly briefsEnabled: boolean;
+  /**
+   * How long to wait between passes of the brief job. Every User has a different
+   * DeliveryTime in a different timezone, so there is no one time of day for it to
+   * run at; this is how soon after a reading arrives the brief goes out.
+   */
+  readonly briefsIntervalMs: number;
   readonly cookieSecure: boolean;
   /**
    * Whether to register the development-only routes, such as the switch that
@@ -159,6 +167,8 @@ export function loadServerConfig(env: EnvSource): ServerConfig {
     ingestIntervalMs: readInt(env, 'INGEST_INTERVAL_MS', 30 * 60 * 1000),
     ingestBackoffBaseMs: readInt(env, 'INGEST_BACKOFF_BASE_MS', 60 * 1000),
     ingestBackoffMaxMs: readInt(env, 'INGEST_BACKOFF_MAX_MS', 30 * 60 * 1000),
+    briefsEnabled: readBool(env, 'BRIEFS_ENABLED', true),
+    briefsIntervalMs: readInt(env, 'BRIEFS_INTERVAL_MS', 60 * 1000),
     devToolsEnabled: readBool(env, 'DEV_TOOLS_ENABLED', !isProduction(env)),
     cookieSecure: readBool(env, 'COOKIE_SECURE', isProduction(env)),
     trustProxy: readBool(env, 'TRUST_PROXY', false),

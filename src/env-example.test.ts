@@ -66,6 +66,8 @@ describe('configuration surface', () => {
   it('finds the variables the application reads', () => {
     expect(readVariables).toEqual([
       'APP_BASE_URL',
+      'BRIEFS_ENABLED',
+      'BRIEFS_INTERVAL_MS',
       'COOKIE_SECURE',
       'DATABASE_URL',
       'DEV_TOOLS_ENABLED',

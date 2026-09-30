@@ -17,6 +17,12 @@ function rowToSettings(row: DeliverySettingsRow): DeliverySettings {
 
 export interface DeliverySettingsRepo {
   getByUserId(userId: UserId): Promise<DeliverySettings | null>;
+  /**
+   * Every User who has recorded a DeliveryTime. This is the daily job's whole
+   * population: a User with no row has no DeliveryTime, so there is no instant
+   * to decide whether they are due.
+   */
+  list(): Promise<readonly DeliverySettings[]>;
   upsert(settings: DeliverySettings): Promise<void>;
 }
 
@@ -32,9 +38,25 @@ export class DrizzleDeliverySettingsRepo implements DeliverySettingsRepo {
     return row ? rowToSettings(row) : null;
   }
 
+  async list(): Promise<readonly DeliverySettings[]> {
+    const rows = (await this.db
+      .select()
+      .from(deliverySettings)) as readonly DeliverySettingsRow[];
+    return rows.map(rowToSettings);
+  }
+
   async upsert(settings: DeliverySettings): Promise<void> {
     const existing = await this.getByUserId(settings.userId);
     if (existing) {
+      // `updatedAt` is when this reading was recorded, and only a different reading
+      // records a new one. Moving it on a save that changes nothing would drop every
+      // DeliverySlot between the two saves, so a User who opened the delivery-time
+      // screen and saved the same time would silently lose the periods the job had
+      // not yet got to.
+      const sameReading =
+        existing.hour === settings.hour &&
+        existing.minute === settings.minute &&
+        existing.timezone === settings.timezone;
       await this.db
         .update(deliverySettings)
         .set({
@@ -42,7 +64,7 @@ export class DrizzleDeliverySettingsRepo implements DeliverySettingsRepo {
           minute: settings.minute,
           timezone: settings.timezone,
           welcomeSentAt: settings.welcomeSentAt,
-          updatedAt: settings.updatedAt,
+          updatedAt: sameReading ? existing.updatedAt : settings.updatedAt,
         })
         .where(eq(deliverySettings.userId, settings.userId));
     } else {

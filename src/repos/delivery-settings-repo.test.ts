@@ -94,4 +94,60 @@ describe('DrizzleDeliverySettingsRepo', () => {
     const got = await repo.getByUserId(userId);
     expect(got?.welcomeSentAt).toEqual(sent);
   });
+
+  it('keeps the recorded moment when the same reading is saved again', async () => {
+    const { repo, userId } = await makeHarness();
+    const recorded = new Date('2026-01-01T00:00:00Z');
+    await repo.upsert({
+      userId,
+      hour: 8,
+      minute: 0,
+      timezone: 'UTC',
+      welcomeSentAt: null,
+      updatedAt: recorded,
+    });
+
+    // The daily job reads `updatedAt` to decide which DeliverySlots a User can be owed, so
+    // a save that changes nothing must not move it: that is what stops a User
+    // re-saving their delivery time from losing the DeliverySlots the job had not sent yet.
+    await repo.upsert({
+      userId,
+      hour: 8,
+      minute: 0,
+      timezone: 'UTC',
+      welcomeSentAt: new Date('2026-03-03T00:00:00Z'),
+      updatedAt: new Date('2026-03-03T00:00:00Z'),
+    });
+
+    const got = await repo.getByUserId(userId);
+    expect(got?.updatedAt).toEqual(recorded);
+    expect(got?.welcomeSentAt).toEqual(new Date('2026-03-03T00:00:00Z'));
+  });
+
+  it('records a new moment when the reading changes', async () => {
+    const { repo, userId } = await makeHarness();
+    await repo.upsert({
+      userId,
+      hour: 8,
+      minute: 0,
+      timezone: 'UTC',
+      welcomeSentAt: null,
+      updatedAt: new Date('2026-01-01T00:00:00Z'),
+    });
+    await repo.upsert({
+      userId,
+      hour: 9,
+      minute: 0,
+      timezone: 'UTC',
+      welcomeSentAt: null,
+      updatedAt: new Date('2026-03-03T00:00:00Z'),
+    });
+
+    // A different reading is a new one, and the User is owed nothing for the DeliverySlots
+    // in between.
+    expect((await repo.getByUserId(userId))?.updatedAt).toEqual(
+      new Date('2026-03-03T00:00:00Z'),
+    );
+  });
 });
+

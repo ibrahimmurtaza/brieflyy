@@ -12,6 +12,5 @@ export const DEFERRED_SERVICES: Readonly<Record<string, string>> = {
   DiscoverService: '#47',
   FeedbackService: '#45',
   OpenAILLMSummaryService: '#44',
-  ScheduledBriefService: '#42',
   TrendsService: '#48',
 };

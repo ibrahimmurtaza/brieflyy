@@ -1,6 +1,7 @@
 import type { Clock } from '../domain/clock.js';
 import type { Source, SourceId } from '../domain/types.js';
 import type { SourceRepo } from '../repos/source-repo.js';
+import { IntervalLoop } from '../scheduling/interval-loop.js';
 import type { RegistryIngestCycleReport, RegistryIngestService } from './registry-ingest-service.js';
 
 export interface IngestSourceStatus {
@@ -37,7 +38,6 @@ export interface IngestSchedulerDeps {
   readonly sourceRepo: SourceRepo;
   readonly clock: Clock;
   readonly config?: IngestSchedulerConfig;
-  readonly sleep?: (ms: number) => Promise<void>;
   /**
    * Runs at the end of a cycle, once the Stories it wrote have settled.
    *
@@ -61,17 +61,17 @@ export class IngestScheduler {
   private readonly clock: Clock;
   private readonly config: IngestSchedulerConfig;
   private readonly afterCycle: ((report: RegistryIngestCycleReport) => Promise<void>) | undefined;
-  private sleepFn: (ms: number) => Promise<void>;
+  /**
+   * The loop this scheduler rides on. It owns the waiting between cycles, the
+   * wake-up on stop, and the wait for a cycle in flight, so this class is only
+   * about ingest: when a Source is due, and what a cycle did to it.
+   */
+  private readonly loop: IntervalLoop;
 
   private readonly backoffs = new Map<SourceId, SourceBackoff>();
-  private running = false;
   private lastCycleAt: Date | null = null;
   private lastCycleId: string | null = null;
   private nextDueAt: Date | null = null;
-  /** Resolvers for a wait that `stop()` is allowed to cut short. */
-  private readonly waitInterruptions = new Set<() => void>();
-  /** The cycle currently running, so a shutdown can wait for it. */
-  private inFlightCycle: Promise<unknown> | null = null;
 
   constructor(deps: IngestSchedulerDeps) {
     this.registry = deps.registry;
@@ -79,21 +79,29 @@ export class IngestScheduler {
     this.clock = deps.clock;
     this.config = deps.config ?? DEFAULT_INGEST_SCHEDULER_CONFIG;
     this.afterCycle = deps.afterCycle;
-    this.sleepFn =
-      deps.sleep ??
-      ((ms: number): Promise<void> =>
-        new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, ms);
-          timer.unref?.();
-        }));
+    this.loop = new IntervalLoop({
+      intervalMs: this.config.intervalMs,
+      // The next due time is this scheduler's own, because a cycle may leave a
+      // Source due sooner than a whole interval away.
+      nextDelayMs: () => this.msUntilDue(),
+      onTickError: (err) => console.error('[IngestScheduler] tick failed:', err),
+    });
   }
 
   setSleepFn(fn: (ms: number) => Promise<void>): void {
-    this.sleepFn = fn;
+    this.loop.setSleepFn(fn);
   }
 
   private intervalMs(): number {
     return this.config.intervalMs;
+  }
+
+  /** How long until the next cycle is due, floored at nothing to wait for. */
+  private msUntilDue(): number {
+    const now = this.clock.now();
+    const dueAt =
+      this.nextDueAt ?? new Date(now.getTime() + this.intervalMs());
+    return dueAt.getTime() - now.getTime();
   }
 
   async tick(): Promise<RegistryIngestCycleReport> {
@@ -115,8 +123,8 @@ export class IngestScheduler {
   }
 
   start(): void {
-    if (this.running) return;
-    this.running = true;
+    if (this.loop.isRunning()) return;
+    this.loop.start();
     this.nextDueAt = this.clock.now();
   }
 
@@ -130,10 +138,7 @@ export class IngestScheduler {
    * chance to notice.
    */
   async stop(): Promise<void> {
-    this.running = false;
-    for (const interrupt of [...this.waitInterruptions]) interrupt();
-    this.waitInterruptions.clear();
-    if (this.inFlightCycle) await this.inFlightCycle;
+    await this.loop.stop();
   }
 
   /**
@@ -146,48 +151,11 @@ export class IngestScheduler {
     return backoff === undefined || backoff.nextAttemptAt.getTime() <= now.getTime();
   }
 
-  /**
-   * Wait for `ms`, resolving false as soon as the loop is stopped.
-   *
-   * A plain timer would leave `runForever` parked for a whole interval after
-   * `stop()`, which for the default interval is half an hour of a process that
-   * will not exit. The wait is always routed through the injected sleep, even
-   * when it is zero, so a caller substituting one sees every wait the loop makes.
-   */
-  private async sleepUnlessStopped(ms: number): Promise<boolean> {
-    return new Promise<boolean>((resolve) => {
-      let settled = false;
-      const finish = (completed: boolean) => {
-        if (settled) return;
-        settled = true;
-        this.waitInterruptions.delete(interrupt);
-        resolve(completed);
-      };
-      const interrupt = () => finish(false);
-      this.waitInterruptions.add(interrupt);
-      void this.sleepFn(Math.max(0, ms)).then(() => finish(true));
-    });
-  }
-
-  async runForever(): Promise<void> {
+  runForever(): Promise<void> {
+    // Started here rather than left to the loop, because starting is also what
+    // makes the first cycle due from now rather than a whole interval away.
     this.start();
-    while (this.running) {
-      const dueAt =
-        this.nextDueAt ??
-        new Date(this.clock.now().getTime() + this.intervalMs());
-      const delay = Math.max(0, dueAt.getTime() - this.clock.now().getTime());
-      if (!(await this.sleepUnlessStopped(delay))) break;
-      if (!this.running) break;
-      const cycle = this.tick();
-      this.inFlightCycle = cycle;
-      try {
-        await cycle;
-      } catch (err) {
-        console.error('[IngestScheduler] tick failed:', err);
-      } finally {
-        this.inFlightCycle = null;
-      }
-    }
+    return this.loop.runForever(() => this.tick());
   }
 
   status(): IngestSchedulerStatus {
@@ -203,7 +171,7 @@ export class IngestScheduler {
       });
     }
     return {
-      running: this.running,
+      running: this.loop.isRunning(),
       lastCycleAt: this.lastCycleAt,
       lastCycleId: this.lastCycleId,
       nextDueAt: this.nextDueAt,
