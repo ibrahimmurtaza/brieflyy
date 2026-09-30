@@ -8,6 +8,7 @@ import {
 import { resolveTier, topicCapFor } from '../domain/tier.js';
 import { partsInTz } from '../domain/timezone.js';
 import { escapeHtml } from '../domain/html.js';
+import { titleKey } from '../domain/slug.js';
 import { INITIAL_TOPIC_COUNT } from '../onboarding/onboarding-service.js';
 import type { OnboardingService } from '../onboarding/onboarding-service.js';
 import type { ClusterRepo } from '../repos/cluster-repo.js';
@@ -500,11 +501,30 @@ function pickTopicsPage(input: {
   // A free user at the cap may not tick anything: no add, no swap. The only way
   // to change a topic is to delete one first, or upgrade.
   const locked = input.atCap;
-  // The Directory template ids the User already holds, so those entries can be
+  // The Directory templates the User already holds, so those entries can be
   // shown as already added rather than offered a second time.
+  //
+  // Matched on the title as well as the template id, and both have to be the
+  // rule `addTopics` refuses on. The server treats a free-form "World news" and
+  // the Directory's "World news" as one Topic; a page that only knew about
+  // template ids offered a tickable box for the second and answered a refusal
+  // for the first, which is the duplicate this is meant to prevent arriving from
+  // the other direction.
+  //
+  // The same rule, not the whole of it, and it is not the server's whole rule
+  // either. The free-form field below has no counterpart here, because the
+  // Directory does not list it to offer twice. And `selectTopics`, which handles
+  // the POST from the onboarding screen, does no already-held check at all —
+  // `/pick-topics` reaches a User who has not onboarded and lets them add Topics
+  // first, so that screen is stricter than its own handler. That asymmetry is
+  // pre-existing and it only ever hides a card, so it is left rather than
+  // changed here.
+  const heldTitles = new Set(input.existing.map((t) => titleKey(t.title)));
   const heldTemplateIds = new Set(
     input.existing.flatMap((t) => (t.origin.kind === 'template' ? [t.origin.templateId] : [])),
   );
+  const isHeld = (t: TopicTemplate): boolean =>
+    heldTemplateIds.has(t.id) || heldTitles.has(titleKey(t.title));
   const grouped = new Map<TopicTemplate['category'], TopicTemplate[]>();
   for (const t of input.templates) {
     const list = grouped.get(t.category) ?? [];
@@ -528,7 +548,7 @@ function pickTopicsPage(input: {
           // A Topic already held is shown but not offered. Omitting the card
           // would hide that the Directory contains it; leaving it tickable would
           // offer the User a second copy of something they already have.
-          const alreadyHeld = heldTemplateIds.has(t.id);
+          const alreadyHeld = isHeld(t);
           const disabled = locked || alreadyHeld;
           return `<label class="card${alreadyHeld ? ' card--held' : ''}">
             <input type="checkbox" name="templateIds" value="${escapeHtml(t.id)}"${disabled ? ' disabled' : ''}>

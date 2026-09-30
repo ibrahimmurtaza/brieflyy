@@ -902,6 +902,45 @@ describe('HTTP: /pick-topics (managing topics after onboarding)', () => {
     expect(offered.length).toBeGreaterThanOrEqual(8);
   });
 
+  it('does not offer a Directory template whose title the user already holds freeform', async () => {
+    // The page decides what to offer from the template ids it can match exactly,
+    // and the server refuses on a title match as well as an id match — so a User
+    // who wrote "World news" themselves was shown a tickable, unlabelled card for
+    // the Directory's "World news" and got a 400 back for ticking it. Two rows
+    // the page called different and the server called the same, which is the
+    // reported defect arriving by the other route.
+    //
+    // Every seeded Topic removed first, because they are all from the Directory:
+    // the point is to hold the title without holding the template id, and a
+    // surviving "World news" would be held by id and prove nothing.
+    await removeFirstTopic(app, cookie);
+    await removeFirstTopic(app, cookie);
+    await removeFirstTopic(app, cookie);
+    expect(await slugsHeld(app, cookie)).toHaveLength(0);
+    const added = await app.inject({
+      method: 'POST',
+      url: '/pick-topics',
+      headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      payload: 'freeformTitle=World%20news',
+    });
+    expect(added.statusCode).toBe(302);
+
+    const page = await app.inject({
+      method: 'GET',
+      url: '/pick-topics',
+      headers: { cookie },
+    });
+    expect(page.statusCode).toBe(200);
+    // The matching template is shown rather than hidden, disabled, and says why.
+    expect(page.body).toMatch(
+      /name="templateIds" value="world-news"[^>]*disabled[^]*?Already added/,
+    );
+    // And nothing else is disabled, so this is the title match and not the cap.
+    const disabled = [...page.body.matchAll(/name="templateIds" value="([^"]+)"[^>]*disabled/g)]
+      .map((m) => m[1]!);
+    expect(disabled).toEqual(['world-news']);
+  });
+
   it('refuses a posted topic the user already holds, rather than adding a second copy', async () => {
     await removeFirstTopic(app, cookie);
     const held = await templateIdsAlreadyHeld(app, cookie);
