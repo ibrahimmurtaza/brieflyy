@@ -43,11 +43,17 @@ export interface LayoutInput {
  * when those pages lost their per-page nav left `/pick-topics` reachable only
  * from the empty state and the paywall: a User who already had topics and was
  * under the cap had no way to add or remove one.
+ *
+ * "Email briefs" is here for the same reason: every brief carries unsubscribe
+ * links, and a link that can only turn something off without any way to turn it
+ * back on is not a control. The confirmation page those links land on points
+ * straight at this.
  */
 export const PRIMARY_NAV: readonly NavLink[] = [
   { href: '/topics', label: 'Topics' },
   { href: '/pick-topics', label: 'Manage topics' },
   { href: '/archive/search', label: 'Archive' },
+  { href: '/settings/briefs', label: 'Email briefs' },
   { href: '/settings/delivery', label: 'Delivery time' },
 ];
 

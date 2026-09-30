@@ -308,6 +308,8 @@ export class AuthService {
       // Everyone starts on the free tier. Billing decides otherwise later, and
       // a new User has bought nothing.
       tier: DEFAULT_TIER,
+      // Nobody has opted out of a brief they have not been sent yet.
+      unsubscribedAt: null,
     };
     const account: Account = {
       id: this.random.uuid(),
@@ -447,6 +449,7 @@ export class AuthService {
           createdAt: now,
           onboardingState: 'not_started',
           tier: DEFAULT_TIER,
+          unsubscribedAt: null,
         };
         account = {
           id: this.random.uuid(),

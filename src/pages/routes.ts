@@ -17,6 +17,8 @@ import type { TopicRepo } from '../repos/topic-repo.js';
 import type { FeedbackRepo } from '../repos/feedback-repo.js';
 import type { BriefSnapshotRepo } from '../repos/brief-snapshot-repo.js';
 import type { BriefPlanService } from '../services/brief-plan-service.js';
+import type { UnsubscribeService } from '../services/unsubscribe-service.js';
+import { EMAIL_BRIEFS_PATH } from '../services/unsubscribe-links.js';
 import { layout } from './layout.js';
 import {
   AUTHENTICATED_ROUTE_CONFIG,
@@ -38,6 +40,12 @@ export interface PageRoutesOptions {
    */
   readonly briefPlanService?: BriefPlanService;
   readonly briefSnapshotRepo?: BriefSnapshotRepo;
+  /**
+   * What the brief's unsubscribe links changed, and the way back. Optional for
+   * the same reason `briefPlanService` is: a caller that mounts the pages
+   * without a brief path can still have the rest of them.
+   */
+  readonly unsubscribeService?: UnsubscribeService;
 }
 
 export async function registerPageRoutes(
@@ -167,6 +175,88 @@ export async function registerPageRoutes(
     },
   );
 
+  fastify.get<{ Querystring: { changed?: string } }>(
+    EMAIL_BRIEFS_PATH,
+    AUTHENTICATED_ROUTE_CONFIG,
+    async (req, reply) => {
+      if (!requireAuthPage(req, reply)) return reply;
+      if (!opts.unsubscribeService) {
+        return reply
+          .code(302)
+          .header('location', '/topics')
+          .send();
+      }
+      const userId = req.auth.user.id;
+      const [topics, optedOutAt] = await Promise.all([
+        opts.onboardingService.listTopics(userId),
+        opts.unsubscribeService.globalOptOutAt(userId),
+      ]);
+      const settings = await opts.onboardingService.getDeliveryTime(userId);
+      return reply.type('text/html').send(
+        emailBriefsPage({
+          email: req.auth.account.email,
+          topics,
+          optedOutAt,
+          // The User's own timezone, so a date on this page is a date they would
+          // have written. Falls back to UTC for a User who has not set a time,
+          // which says nothing about where they are rather than guessing.
+          timezone: settings?.timezone ?? 'UTC',
+          justChanged: req.query.changed ?? null,
+        }),
+      );
+    },
+  );
+
+  fastify.post<{ Params: { slug: string } }>(
+    `${EMAIL_BRIEFS_PATH}/:slug/resubscribe`,
+    AUTHENTICATED_ROUTE_CONFIG,
+    async (req, reply) => {
+      if (!opts.unsubscribeService) return reply.code(503).send();
+      if (!requireAuthPage(req, reply)) return reply;
+      // Resolved by slug and scoped to the User, so the form cannot name a Topic
+      // that is not theirs. The service checks the ownership again; this is what
+      // turns "not yours" into a 404 rather than a message about a Topic that
+      // does not exist on this account.
+      const topic = await opts.topicRepo.findBySlug(
+        req.auth.user.id,
+        req.params.slug,
+      );
+      if (!topic) {
+        return reply
+          .code(404)
+          .type('text/html')
+          .send(notFoundPage(req.auth.account.email));
+      }
+      const outcome = await opts.unsubscribeService.resubscribeTopic(
+        req.auth.user.id,
+        topic.id,
+      );
+      return outcome.status === 'ok'
+        ? reply
+            .code(302)
+            .header('location', `${EMAIL_BRIEFS_PATH}?changed=topic`)
+            .send()
+        : reply
+            .code(404)
+            .type('text/html')
+            .send(notFoundPage(req.auth.account.email));
+    },
+  );
+
+  fastify.post(
+    `${EMAIL_BRIEFS_PATH}/resubscribe`,
+    AUTHENTICATED_ROUTE_CONFIG,
+    async (req, reply) => {
+      if (!opts.unsubscribeService) return reply.code(503).send();
+      if (!requireAuthPage(req, reply)) return reply;
+      await opts.unsubscribeService.resubscribeAll(req.auth.user.id);
+      return reply
+        .code(302)
+        .header('location', `${EMAIL_BRIEFS_PATH}?changed=all`)
+        .send();
+    },
+  );
+
   fastify.get('/upgrade', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
     if (!requireAuthPage(req, reply)) return reply;
     // Both paywall surfaces link here, so this has to be a real page. Billing is
@@ -263,7 +353,8 @@ export async function registerPageRoutes(
     '/topics/:slug/send-brief',
     AUTHENTICATED_ROUTE_CONFIG,
     async (req, reply) => {
-      if (!opts.briefPlanService || !requireAuthPage(req, reply)) return reply;
+      if (!opts.briefPlanService) return reply.code(503).send();
+      if (!requireAuthPage(req, reply)) return reply;
       const topic = await opts.topicRepo.findBySlug(
         req.auth.user.id,
         req.params.slug,
@@ -273,6 +364,17 @@ export async function registerPageRoutes(
           .code(404)
           .type('text/html')
           .send(notFoundPage(req.auth.account.email));
+      }
+      // The daily job already skips a User or a Topic that has unsubscribed, and
+      // this is the one path that could get around it: a User who has asked not
+      // to be emailed and then presses the button asking to be emailed has not
+      // unsubscribed, they have asked for one. So it is honoured — but the page
+      // says what happened instead of silently sending.
+      if (req.auth.user.unsubscribedAt !== null || topic.unsubscribedAt !== null) {
+        return reply
+          .code(302)
+          .header('location', `${EMAIL_BRIEFS_PATH}?changed=blocked`)
+          .send();
       }
       // The address is the session's, never one the form supplied: a User can
       // only ever be sent their own brief, so there is nothing here to choose.
@@ -416,6 +518,10 @@ export async function registerPageRoutes(
           verdicts,
           snapshots,
           briefJustSent: req.query.brief === 'sent',
+          // The button to send a brief by hand is only honest while the User
+          // still wants these emails; the route refuses either way.
+          emailsStopped:
+            req.auth.user.unsubscribedAt !== null || topic.unsubscribedAt !== null,
         }),
       );
     },
@@ -789,6 +895,108 @@ ${body}`,
 }
 
 /**
+ * What a User is and is not being sent, and the way back.
+ *
+ * Every brief carries two unsubscribe links, and a reader who uses one lands on
+ * a confirmation page that points here. This is the other end of the same
+ * promise: an opt-out with no way to undo it, and no page that says which Topics
+ * it applies to, is a setting the User has lost control of.
+ *
+ * The two scopes are shown separately and on purpose. "Stop all emails" and
+ * "stop this one topic" are different decisions about different things, and
+ * showing only the outcome of whichever was clicked last would hide one of them.
+ * A Topic turned off individually stays off after a global resubscribe, and the
+ * page says so rather than quietly restoring it.
+ */
+export function emailBriefsPage(input: {
+  email: string;
+  topics: readonly Topic[];
+  /** When the User opted out of every brief, or null while they want them. */
+  optedOutAt: Date | null;
+  timezone: string;
+  /** What the last form on this page changed, or null. */
+  justChanged: string | null;
+}): string {
+  /** Plain text; the caller escapes it, so it never gets escaped twice. */
+  const since = (at: Date): string =>
+    `since ${formatHumanTime(at, input.timezone)} (${input.timezone})`;
+
+  const globalBlock =
+    input.optedOutAt === null
+      ? `    <div class="callout">
+      <p><strong>Every topic is being emailed.</strong></p>
+      <p>Briefs arrive at the time set on <a href="/settings/delivery">Delivery time</a>. Each brief carries a link to stop just that topic, and another to stop all of them.</p>
+    </div>`
+      : `    <div class="callout">
+      <p><strong>You have stopped all Brieflyy emails</strong> &mdash; ${escapeHtml(
+          since(input.optedOutAt),
+        )}.</p>
+      <p>No topic is being emailed until you turn them back on. Your topics and any brief already sent are all still here.</p>
+      <p>Any topic you had stopped on its own stays stopped. Turn those back on below, one at a time.</p>
+      <form method="POST" action="${escapeHtml(`${EMAIL_BRIEFS_PATH}/resubscribe`)}">
+        <button type="submit">Turn all emails back on</button>
+      </form>
+    </div>`;
+
+  const changedHtml =
+    input.justChanged === 'all'
+      ? `    <div class="callout callout--success" role="status"><p>Every topic is being emailed again.</p></div>`
+      : input.justChanged === 'topic'
+        ? `    <div class="callout callout--success" role="status"><p>That topic is being emailed again.</p></div>`
+        : input.justChanged === 'blocked'
+          ? `    <div class="error-summary" role="alert">
+      <p>You have stopped these emails, so no brief was sent. Turn them back on below and try again.</p>
+    </div>`
+          : '';
+
+  const rows = input.topics
+    .map((topic) => {
+      const offSince = topic.unsubscribedAt;
+      const note =
+        offSince === null
+          ? 'Briefs for this topic are on.'
+          : `Briefs for this topic are off ${escapeHtml(since(offSince))}.`;
+      const control =
+        offSince === null
+          ? ''
+          : `      <form class="window-form" method="POST" action="${escapeHtml(
+              `${EMAIL_BRIEFS_PATH}/${encodeURIComponent(topic.slug)}/resubscribe`,
+            )}">
+        <button class="secondary" type="submit">Turn this topic back on</button>
+      </form>`;
+      return `    <li>
+      <span>
+        <a href="/topics/${escapeHtml(topic.slug)}">${escapeHtml(topic.title)}</a>
+        <span class="plan">${note}</span>
+      </span>
+${control}
+    </li>`;
+    })
+    .join('\n');
+
+  const topicsBlock =
+    input.topics.length === 0
+      ? `    <p class="empty-state">You have no topics yet, so there is nothing being emailed. <a href="/pick-topics">Add one</a>.</p>`
+      : `    <ul class="topics">
+${rows}
+    </ul>`;
+
+  return layout({
+    title: 'Email briefs',
+    width: 'form',
+    account: input.email,
+    activeHref: EMAIL_BRIEFS_PATH,
+    body: `    <h1>Email briefs</h1>
+    <p class="lede">What Brieflyy sends you, and how to stop it.</p>
+${changedHtml}
+${globalBlock}
+    <h2>Your topics</h2>
+${topicsBlock}
+    <p class="actions"><a href="/settings/delivery">Change delivery time</a></p>`,
+  });
+}
+
+/**
  * The zones the delivery-time form offers, grouped by region.
  *
  * `Intl.supportedValuesOf('timeZone')` is the platform's own list, so somebody
@@ -1069,6 +1277,8 @@ function topicPage(input: {
   readonly snapshots?: readonly import('../domain/types.js').BriefSnapshot[];
   /** Set when the User has just asked for one and it was sent. */
   readonly briefJustSent?: boolean;
+  /** Set when the User or this Topic has opted out of the mail. */
+  readonly emailsStopped?: boolean;
 }): string {
   const safeTitle = escapeHtml(input.topic.title);
   const action = `/topics/${escapeHtml(input.topicSlug)}/feedback`;
@@ -1179,6 +1389,8 @@ function sendBriefSection(input: {
   topicSlug: string;
   snapshots?: readonly import('../domain/types.js').BriefSnapshot[];
   briefJustSent?: boolean;
+  /** Set when the User or this Topic has opted out of the mail. */
+  emailsStopped?: boolean;
 }): string {
   // A link back to a brief is a link out of the LivingBrief and into the exact
   // document that was sent, which is the only reason this list is here at all:
@@ -1200,9 +1412,18 @@ ${sent.join('\n')}
   const notice = input.briefJustSent
     ? `    <div class="callout callout--success" role="status">Your brief has been sent to ${escapeHtml(input.email)}.</div>`
     : '';
-  return `${notice}    <form method="POST" action="/topics/${escapeHtml(input.topicSlug)}/send-brief">
+  // The route refuses to send while the mail is stopped, so the button must not
+  // be offered: a control that always ends in a refusal is worse than one that
+  // says why it is missing and where to change it.
+  const ask = input.emailsStopped === true
+    ? `    <div class="callout">
+      <p>You have stopped these emails, so no brief can be sent.</p>
+      <p><a href="${escapeHtml(EMAIL_BRIEFS_PATH)}">Turn them back on</a></p>
+    </div>`
+    : `    <form method="POST" action="/topics/${escapeHtml(input.topicSlug)}/send-brief">
       <button type="submit">Email me this brief now</button>
-    </form>
+    </form>`;
+  return `${notice}${ask}
 ${list}`;
 }
 

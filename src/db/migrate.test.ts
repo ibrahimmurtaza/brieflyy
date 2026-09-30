@@ -8,6 +8,7 @@ import Database from 'better-sqlite3';
 import { createDatabase, createInMemorySqliteDriver } from './client.js';
 import { applySchema, migrateToDatabaseFile } from './migrate.js';
 import { DrizzleTopicRepo } from '../repos/topic-repo.js';
+import { DrizzleUserRepo } from '../repos/user-repo.js';
 import { DrizzleStoryRepo } from '../repos/story-repo.js';
 import { decodeSignature, encodeSignature } from '../domain/story-signature.js';
 import { signatureOf, WIRE_COPIES } from '../testing/story-fixtures.js';
@@ -554,6 +555,35 @@ describe('applySchema', () => {
     // The brief that was sent is still there, and it says it has no text part.
     expect(row?.html).toBe('<p>sent</p>');
     expect(row?.text).toBe('');
+  });
+
+  it('adds the unsubscribe opt-outs to a database created before either existed', async () => {
+    // Both columns are nullable and default to nothing, which is what the state
+    // they record is: a User or a Topic with no value in them is still being
+    // sent. A migration that defaulted them to a timestamp would silently opt
+    // every existing reader out of the product on the day it shipped.
+    const driver = createInMemorySqliteDriver();
+    driver.exec(LEGACY_SCHEMA_SQL);
+    driver.prepare(`INSERT INTO users (id) VALUES (?)`).run('user-1');
+    driver
+      .prepare(
+        `INSERT INTO topics (id, user_id, slug, title, blurb, category, origin_kind, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run('topic-1', 'user-1', 'ai', 'AI', 'AI news', 'technology', 'freeform', 1);
+
+    applySchema(driver);
+
+    const db = createDatabase({ driver });
+    expect((await new DrizzleUserRepo(db).getById('user-1'))?.unsubscribedAt).toBeNull();
+    expect((await new DrizzleTopicRepo(db).getById('topic-1'))?.unsubscribedAt).toBeNull();
+
+    // And the new table is there to take a spent token, with the unique index
+    // that makes spending one twice impossible.
+    const rows = driver
+      .prepare(`SELECT name FROM pragma_index_list(?)`)
+      .all('unsubscribes') as { name: string }[];
+    expect(rows.map((r) => r.name)).toContain('unsubscribes_token_unique');
   });
 
   it('keeps the rows of a table it rebuilds', () => {

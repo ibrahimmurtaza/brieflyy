@@ -25,6 +25,7 @@ export interface UserFixture {
   readonly createdAt?: Date;
   readonly onboardingState?: OnboardingState;
   readonly tier?: Tier;
+  readonly unsubscribedAt?: Date | null;
 }
 
 /**
@@ -37,6 +38,7 @@ export function makeUser(input: UserFixture): User {
     createdAt: input.createdAt ?? new Date('2026-01-01T00:00:00Z'),
     onboardingState: input.onboardingState ?? ('not_started' as OnboardingState),
     tier: input.tier ?? ('free' as Tier),
+    unsubscribedAt: input.unsubscribedAt ?? null,
   };
 }
 
@@ -51,6 +53,7 @@ export interface TopicFixture {
   readonly clusterWindowDays?: number;
   readonly createdAt?: Date;
   readonly removedAt?: Date | null;
+  readonly unsubscribedAt?: Date | null;
 }
 
 /**
@@ -71,6 +74,7 @@ export function makeTopic(input: TopicFixture): Topic {
     clusterWindowDays: input.clusterWindowDays ?? DEFAULT_CLUSTER_WINDOW_DAYS,
     createdAt: input.createdAt ?? new Date('2026-09-01T00:00:00Z'),
     removedAt: input.removedAt ?? null,
+    unsubscribedAt: input.unsubscribedAt ?? null,
   };
 }
 

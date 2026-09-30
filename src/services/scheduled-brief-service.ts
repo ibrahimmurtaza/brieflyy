@@ -18,6 +18,7 @@ import {
 import type { BriefRunRepo } from '../repos/brief-run-repo.js';
 import type { DeliverySettingsRepo } from '../repos/delivery-settings-repo.js';
 import type { TopicRepo } from '../repos/topic-repo.js';
+import type { UserRepo } from '../repos/user-repo.js';
 import { IntervalLoop } from '../scheduling/interval-loop.js';
 import { deliveryTimeOf } from '../domain/timezone.js';
 import type { DeliverySlot } from '../domain/delivery-slot.js';
@@ -39,6 +40,13 @@ export interface ScheduledBriefServiceDeps {
   readonly deliverySettingsRepo: DeliverySettingsRepo;
   readonly topicRepo: TopicRepo;
   readonly accountRepo: AccountRepo;
+  /**
+   * Read once per pass for the Users who have opted out of every brief. Held
+   * rather than a boolean passed in, because the opt-out is a fact about a User
+   * that can change between passes and nothing should have to remember to tell
+   * this service about it.
+   */
+  readonly userRepo: UserRepo;
   /** Held so the status view can report the provider the briefs actually went by. */
   readonly emailTransport: EmailTransport;
   readonly clock: Clock;
@@ -118,15 +126,25 @@ export class ScheduledBriefService {
    * refusing one address is not a reason to stop sending everyone else theirs.
    * The pass's own record is written last, so a run that throws reports nothing
    * rather than reporting a pass that did not finish.
+   *
+   * Two kinds of "no" are kept apart here. A User who is not owed a DeliverySlot
+   * has nothing to skip, because nothing was ever on offer; a User or a Topic
+   * who has unsubscribed had something on offer and said no, and their refusal is
+   * counted as neither a send nor a failure — the slot is not owed either, so a
+   * resubscribe does not release a backlog of every reading since.
    */
   async run(): Promise<BriefJobRun> {
     const startedAt = this.deps.clock.now();
     const settings = await this.deps.deliverySettingsRepo.list();
-    const topicsByUser = dailyTopicsByUser(await this.deps.topicRepo.listAll());
+    const optedOut = new Set(await this.deps.userRepo.listUnsubscribedIds());
+    const topicsByUser = dailyTopicsByUser(
+      (await this.deps.topicRepo.listAll()).filter((t) => t.unsubscribedAt === null),
+    );
     let sentCount = 0;
     let failureCount = 0;
 
     for (const setting of settings) {
+      if (optedOut.has(setting.userId)) continue;
       const slot = dueDeliverySlot(
         deliveryTimeOf(setting),
         startedAt,

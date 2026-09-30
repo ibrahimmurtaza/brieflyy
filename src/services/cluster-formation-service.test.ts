@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { createTestDb } from '../testing/test-db.js';
-import { makeTopic } from '../testing/fixtures.js';
+import { makeTopic, makeUser } from '../testing/fixtures.js';
 import { DrizzleArticleRepo } from '../repos/article-repo.js';
 import { DrizzleClusterRepo } from '../repos/cluster-repo.js';
 import { DrizzleEntityRepo } from '../repos/entity-repo.js';
@@ -63,12 +63,7 @@ async function buildHarness(
   const topicRepo = new DrizzleTopicRepo(db);
   const userRepo = new DrizzleUserRepo(db);
 
-  await userRepo.insert({
-    id: 'user-1',
-    createdAt: new Date('2026-09-01T00:00:00Z'),
-    onboardingState: 'topics_picked',
-    tier: 'free',
-  });
+  await userRepo.insert(makeUser({ id: 'user-1', onboardingState: 'topics_picked' }));
   await sourceRepo.insert({
     id: SOURCE_ID,
     slug: 'test',

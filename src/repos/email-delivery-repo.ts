@@ -26,6 +26,17 @@ function rowToEmailDelivery(row: EmailDeliveryRow): EmailDelivery {
 export interface EmailDeliveryRepo {
   insert(delivery: EmailDelivery): Promise<void>;
   findBySnapshotId(snapshotId: string): Promise<readonly EmailDelivery[]>;
+  /**
+   * The delivery a per-Topic unsubscribe token was minted for, or null.
+   *
+   * The token is the whole authorisation, so the lookup is by value and returns
+   * the User and Topic the unsubscribe applies to rather than taking them from
+   * the caller: a URL that carried its own idea of whose subscription to change
+   * would be a URL a forwarded brief could aim anywhere.
+   */
+  findByUnsubscribeToken(token: string): Promise<EmailDelivery | null>;
+  /** The same, for the token that stops every brief for the User. */
+  findByGlobalUnsubscribeToken(token: string): Promise<EmailDelivery | null>;
 }
 
 export class DrizzleEmailDeliveryRepo implements EmailDeliveryRepo {
@@ -49,5 +60,23 @@ export class DrizzleEmailDeliveryRepo implements EmailDeliveryRepo {
       .from(emailDeliveries)
       .where(eq(emailDeliveries.briefSnapshotId, snapshotId))) as readonly EmailDeliveryRow[];
     return rows.map(rowToEmailDelivery);
+  }
+
+  async findByUnsubscribeToken(token: string): Promise<EmailDelivery | null> {
+    const row = (await this.db
+      .select()
+      .from(emailDeliveries)
+      .where(eq(emailDeliveries.unsubscribeToken, token))) as readonly EmailDeliveryRow[];
+    return row[0] ? rowToEmailDelivery(row[0]) : null;
+  }
+
+  async findByGlobalUnsubscribeToken(token: string): Promise<EmailDelivery | null> {
+    const row = (await this.db
+      .select()
+      .from(emailDeliveries)
+      .where(
+        eq(emailDeliveries.globalUnsubscribeToken, token),
+      )) as readonly EmailDeliveryRow[];
+    return row[0] ? rowToEmailDelivery(row[0]) : null;
   }
 }

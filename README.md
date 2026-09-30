@@ -117,6 +117,13 @@ response is the same for an address that has an account and one that has not.
 Requests are counted per address and per caller, and a caller that is out of
 quota gets 429 with a `Retry-After`.
 
+The four `/unsubscribe/*` routes are public for the same reason the magic link
+is: a reader following a link in their inbox is not signed in, so the token in
+the URL is the whole authorisation. Each Topic's opt-out is `topics.unsubscribed_at`
+and the whole-User one is `users.unsubscribed_at`; `ScheduledBriefService` reads
+both on every pass, so a link that is spent really does stop the mail rather
+than only recording that somebody asked. See ADR-0012.
+
 ## Changing the database schema
 
 `src/db/schema.ts` is the declared schema (what Drizzle and `pnpm db:push` see).
@@ -204,7 +211,8 @@ src/
 ├── ingest/                # registry ingest + IngestScheduler (poll every Source)
 ├── onboarding/            # OnboardingService (Directory → Topics) + HTTP routes
 ├── pages/                 # placeholder HTML routes (signup, onboarding, ...)
-├── services/              # clustering, BriefPlan/Snapshot, the daily brief job
+├── services/              # clustering, BriefPlan/Snapshot, the daily brief job,
+│                          # and the unsubscribe state that job honours
 │
 └── testing/               # test-only helpers (test DB, deterministic clock)
 ```
@@ -231,7 +239,8 @@ Fastify's `inject()` against the same `createApp` factory.
 
 Two loops run for the life of the process and both stop on it. `IngestScheduler`
 polls every Source a Topic names (ADR-0003); `ScheduledBriefService` answers each
-User's daily-Cadence Topics for the DeliverySlot they are owed (ADR-0011). Both
+User's daily-Cadence Topics for the DeliverySlot they are owed (ADR-0011), except
+any the User or the Topic has unsubscribed from (ADR-0012). Both
 ride on `IntervalLoop`, so closing the application wakes them out of their wait and
 waits for the work in flight before the database is closed. Both are configurable
 (`INGEST_*`, `BRIEFS_*`) and both report what they last did to a signed-in User at

@@ -5,6 +5,11 @@ import type { LLMSummaryClient, LLMSummaryOutput } from '../domain/llm.js';
 import { articleUrlForStatement } from '../domain/cluster-text.js';
 import { escapeHtml } from '../domain/html.js';
 import { safeExternalUrl } from '../domain/url.js';
+import {
+  allUnsubscribeUrl,
+  oneClickHeaders,
+  topicUnsubscribeUrl,
+} from './unsubscribe-links.js';
 
 /**
  * The three parts of an email a brief is.
@@ -18,6 +23,29 @@ import { safeExternalUrl } from '../domain/url.js';
   /** The plain-text alternative, for the clients that will not show HTML. */
   readonly text: string;
   readonly html: string;
+  /**
+   * The RFC 8058 headers, which are the only way a mail client learns it may
+   * render a one-click unsubscribe control. A brief cannot be unsubscribable
+   * without them, whatever its body says.
+   */
+  readonly headers: Readonly<Record<string, string>>;
+}
+
+/**
+ * The two tokens a brief carries, one per scope.
+ *
+ * Required rather than optional because a brief without them cannot be
+ * unsubscribed from: a rendered document is stored as sent and never
+ * regenerated, so a link added to the renderer tomorrow would never reach the
+ * briefs already in inboxes. The caller mints them before rendering for the same
+ * reason — the renderer has to write them into a document that will not be
+ * rendered again.
+ */
+export interface BriefUnsubscribe {
+  /** Stops this Topic's briefs. */
+  readonly topicToken: string;
+  /** Stops every brief for the User the brief went to. */
+  readonly globalToken: string;
 }
 
 export interface BriefSnapshotRendererDeps {
@@ -39,7 +67,11 @@ export interface BriefSnapshotRendererDeps {
 export class BriefSnapshotRenderer {
   constructor(private readonly deps: BriefSnapshotRendererDeps) {}
 
-  async render(plan: BriefPlan, appBaseUrl: string): Promise<RenderedBrief> {
+  async render(
+    plan: BriefPlan,
+    appBaseUrl: string,
+    unsubscribe: BriefUnsubscribe,
+  ): Promise<RenderedBrief> {
     const topic = await this.deps.topicRepo.getById(plan.topicId);
     if (!topic) {
       // The plan names a Topic the database no longer holds. Rendering anyway
@@ -111,16 +143,26 @@ export class BriefSnapshotRenderer {
     // The application routes on the slug, not the id.
     const topicUrl = `${appBaseUrl}/topics/${encodeURIComponent(topic.slug)}`;
     const date = formatDate(plan.createdAt);
-    // The old footer linked to `/unsubscribe/topic` and `/unsubscribe/all` with a
-    // literal `TOKEN` in the query string, and neither route is registered
-    // anywhere in the application: a link that looks real and answers 404 is
-    // worse than no link. The footer points at the two things a reader can
-    // actually do. Real one-click unsubscribe is a separate change - it needs an
-    // opt-out the send path honours, and no route consumes the token yet.
     const links: readonly EmailLink[] = [
       { href: `${appBaseUrl}/settings/delivery`, label: 'Change delivery time' },
       { href: `${appBaseUrl}/pick-topics`, label: 'Manage topics' },
       { href: `${appBaseUrl}/topics`, label: 'All your topics' },
+    ];
+
+    // Both scopes, in the body as well as in the headers. The headers are what a
+    // client that supports one-click acts on and shows nothing for; the body is
+    // what every other client shows, and a reader who has to go looking for a
+    // menu item to stop the mail will not.
+    const unsubscribeUrls = {
+      topic: topicUnsubscribeUrl(appBaseUrl, unsubscribe.topicToken),
+      global: allUnsubscribeUrl(appBaseUrl, unsubscribe.globalToken),
+    };
+    const unsubscribeLinks: readonly EmailLink[] = [
+      { href: unsubscribeUrls.topic, label: `Stop ${topic.title} briefs` },
+      {
+        href: unsubscribeUrls.global,
+        label: 'Stop all Brieflyy emails',
+      },
     ];
 
     const sections = selected.map((cluster) =>
@@ -137,8 +179,17 @@ export class BriefSnapshotRenderer {
         viewInAppUrl: topicUrl,
         content: sections.map((s) => s.html).join(''),
         links,
+        unsubscribeLinks,
       }),
-      text: plainTextBrief({ heading: topic.title, date, viewInAppUrl: topicUrl, sections, links }),
+      text: plainTextBrief({
+        heading: topic.title,
+        date,
+        viewInAppUrl: topicUrl,
+        sections,
+        links,
+        unsubscribeLinks,
+      }),
+      headers: oneClickHeaders(unsubscribeUrls),
     };
   }
 
@@ -220,13 +271,10 @@ function emailDocument(input: {
   readonly viewInAppUrl: string;
   readonly content: string;
   readonly links: readonly EmailLink[];
+  readonly unsubscribeLinks: readonly EmailLink[];
 }): string {
-  const links = input.links
-    .map(
-      (l) =>
-        `<a href="${escapeHtml(l.href)}" style="color:#1856c4;text-decoration:underline;">${escapeHtml(l.label)}</a>`,
-    )
-    .join(' &middot; ');
+  const linksHtml = linkRow(input.links);
+  const unsubscribeHtml = linkRow(input.unsubscribeLinks);
 
   return `<!doctype html>
 <html lang="en">
@@ -249,14 +297,27 @@ function emailDocument(input: {
   </p>
 </td></tr>
 <tr><td style="padding:8px 28px 24px 28px;font-family:${FONT};">${input.content}</td></tr>
-<tr><td style="padding:0 28px 28px 28px;border-top:1px solid #e9ecf0;font-family:${FONT};">
+<tr><td style="padding:0 28px 20px 28px;font-family:${FONT};">
   <p style="margin:16px 0 0 0;font-size:13px;line-height:1.6;color:#5b6472;">You are receiving this because you signed up for a Brieflyy brief on this topic.</p>
-  <p style="margin:8px 0 0 0;font-size:13px;line-height:1.6;">${links}</p>
+  <p style="margin:8px 0 0 0;font-size:13px;line-height:1.6;">${linksHtml}</p>
+</td></tr>
+<tr><td style="padding:0 28px 28px 28px;border-top:1px solid #e9ecf0;font-family:${FONT};">
+  <p style="margin:16px 0 0 0;font-size:13px;line-height:1.6;color:#5b6472;">${unsubscribeHtml}</p>
 </td></tr>
 </table>
 </td></tr>
 </table>
 </body></html>`;
+}
+
+/** A line of links, joined the way a footer reads: one, then the next. */
+function linkRow(links: readonly EmailLink[]): string {
+  return links
+    .map(
+      (l) =>
+        `<a href="${escapeHtml(l.href)}" style="color:#1856c4;text-decoration:underline;">${escapeHtml(l.label)}</a>`,
+    )
+    .join(' &middot; ');
 }
 
 /**
@@ -273,6 +334,7 @@ function plainTextBrief(input: {
   readonly viewInAppUrl: string;
   readonly sections: readonly BriefSection[];
   readonly links: readonly EmailLink[];
+  readonly unsubscribeLinks: readonly EmailLink[];
 }): string {
   return [
     `Brieflyy - ${input.date}`,
@@ -284,6 +346,8 @@ function plainTextBrief(input: {
     '',
     'You are receiving this because you signed up for a Brieflyy brief on this topic.',
     input.links.map((l) => `${l.label}: ${l.href}`).join('\n'),
+    '',
+    ...input.unsubscribeLinks.map((l) => `${l.label}: ${l.href}`),
   ].join('\n');
 }
 

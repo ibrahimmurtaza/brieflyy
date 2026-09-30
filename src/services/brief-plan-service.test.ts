@@ -196,6 +196,24 @@ describe('BriefPlanService.sendBrief', () => {
     expect(stored[0]?.unsubscribeToken).toBe(snapshot.unsubscribeToken);
   });
 
+  it('puts the tokens in the email it sends, and in the headers that mail clients read', async () => {
+    await seedClusters();
+
+    const { snapshot, delivery } = await harness.service.sendBrief(SEND);
+    const sent = harness.transport.snapshot()[0]!;
+
+    // The links are in the rendered document and the RFC 8058 headers are on the
+    // message, and both carry the very tokens the delivery is recorded with. A
+    // second pair minted for the delivery would be a link in a delivered brief
+    // that resolves to nothing.
+    expect(sent.html).toContain(`/unsubscribe/topic?token=${delivery.unsubscribeToken}`);
+    expect(sent.html).toContain(`/unsubscribe/all?token=${delivery.globalUnsubscribeToken}`);
+    expect(sent.headers?.['List-Unsubscribe']).toContain(
+      `/unsubscribe/topic?token=${snapshot.unsubscribeToken}`,
+    );
+    expect(sent.headers?.['List-Unsubscribe-Post']).toBe('List-Unsubscribe=One-Click');
+  });
+
   it('mints tokens that are not the same for two sends', async () => {
     await seedClusters();
 

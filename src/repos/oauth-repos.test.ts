@@ -4,6 +4,7 @@ import { DrizzleAccountRepo } from './account-repo.js';
 import { DrizzleOAuthAccountRepo } from './oauth-account-repo.js';
 import { DrizzleOAuthStateRepo } from './oauth-state-repo.js';
 import { DrizzleUserRepo } from './user-repo.js';
+import { makeUser } from '../testing/fixtures.js';
 import { createTestDb, type TestDbHandle } from '../testing/test-db.js';
 import {
   deterministicRandom,
@@ -84,12 +85,7 @@ describe('DrizzleOAuthAccountRepo', () => {
     const repo = new DrizzleOAuthAccountRepo(handle.db);
     const now = new Date('2026-01-01T00:00:00Z');
     const userId = deterministicRandom.uuid();
-    await userRepo.insert({
-      id: userId,
-      createdAt: now,
-      onboardingState: 'not_started',
-      tier: 'free',
-    });
+    await userRepo.insert(makeUser({ id: userId, createdAt: now }));
     const accountId = deterministicRandom.uuid();
     await accountRepo.insert({
       id: accountId,

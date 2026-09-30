@@ -72,6 +72,7 @@ test('BriefSnapshot with LLM summary renders clickable bullet links', async ({ p
   const { html } = await renderer.render(
     { id: 'bp-e2e', topicId: 't-e2e', userId: 'u-e2e', createdAt: new Date(), clusterIds: ['c-llm-1'] } as any,
     'https://app',
+    { topicToken: 'e2e-topic-token', globalToken: 'e2e-global-token' },
   );
 
   const filePath = join(tmpdir(), `brief-snapshot-e2e-${Date.now()}.html`);
@@ -119,6 +120,7 @@ test('an extractive bullet is a real link too, not just the generated ones', asy
   const { html } = await renderer.render(
     { id: 'bp-e2e', topicId: 't-e2e', userId: 'u-e2e', createdAt: new Date(), clusterIds: ['c-llm-1'] } as any,
     'https://app',
+    { topicToken: 'e2e-topic-token', globalToken: 'e2e-global-token' },
   );
 
   const filePath = join(tmpdir(), `brief-snapshot-extractive-e2e-${Date.now()}.html`);

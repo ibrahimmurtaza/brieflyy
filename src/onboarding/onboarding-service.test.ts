@@ -7,6 +7,7 @@ import { DrizzleTopicTemplateRepo } from '../repos/directory-repo.js';
 import { DrizzleTopicRepo } from '../repos/topic-repo.js';
 import { DrizzleUserRepo } from '../repos/user-repo.js';
 import { createTestDb } from '../testing/test-db.js';
+import { makeUser } from '../testing/fixtures.js';
 import { applyDirectorySeed } from '../directory/seed.js';
 import type { Tier } from '../domain/types.js';
 import {
@@ -48,12 +49,9 @@ async function makeHarness(): Promise<Harness> {
 
   const signedInUser = async (email: string, tier: Tier = 'free') => {
     const userId = deterministicRandom.uuid();
-    await userRepo.insert({
-      id: userId,
-      createdAt: clock.clock.now(),
-      onboardingState: 'not_started',
-      tier,
-    });
+    await userRepo.insert(
+      makeUser({ id: userId, createdAt: clock.clock.now(), tier }),
+    );
     await accountRepo.insert({
       id: deterministicRandom.uuid(),
       userId,

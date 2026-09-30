@@ -24,6 +24,11 @@ export const users = sqliteTable(
     // integration: it is the fact every paywall reads, so it has to be persisted
     // rather than passed around as a literal.
     tier: text('tier', { enum: ['free', 'paid'] }).notNull().default('free'),
+    // The opt-out a one-click unsubscribe in a brief sets. Nullable because
+    // "still receiving" is the state almost every User is in, and a sentinel
+    // would make the daily job's every-pass check a comparison against a made-up
+    // value rather than against nothing.
+    unsubscribedAt: integer('unsubscribed_at', { mode: 'timestamp_ms' }),
   },
   (t) => ({
     onboardingIdx: index('users_onboarding_idx').on(t.onboardingState),
@@ -235,6 +240,10 @@ export const topics = sqliteTable(
     // Soft delete. A removed topic stops counting toward the free-tier cap and
     // disappears from listings, but its brief history stays intact.
     removedAt: integer('removed_at', { mode: 'timestamp_ms' }),
+    // The opt-out a one-click unsubscribe from *this* Topic sets. Distinct from
+    // `removedAt` on purpose: the Topic is still there and still readable, it
+    // just stops being emailed, and clearing this column is how it starts again.
+    unsubscribedAt: integer('unsubscribed_at', { mode: 'timestamp_ms' }),
   },
   (t) => ({
     userSlugUnique: uniqueIndex('topics_user_slug_unique').on(
@@ -569,6 +578,9 @@ export const emailDeliveries = sqliteTable(
       .notNull()
       .references(() => topics.id, { onDelete: 'cascade' }),
     sentAt: integer('sent_at', { mode: 'timestamp_ms' }).notNull(),
+    // The two tokens in the brief that carries this delivery. Unique because
+    // they are looked up by value: a token that resolved to two deliveries would
+    // be one that unsubscribes the wrong person half the time.
     unsubscribeToken: text('unsubscribe_token').notNull(),
     globalUnsubscribeToken: text('global_unsubscribe_token').notNull(),
   },
@@ -577,6 +589,49 @@ export const emailDeliveries = sqliteTable(
       t.userId,
       t.briefSnapshotId,
     ),
+    unsubscribeTokenIdx: uniqueIndex('email_deliveries_unsubscribe_token_unique').on(
+      t.unsubscribeToken,
+    ),
+    globalUnsubscribeTokenIdx: uniqueIndex('email_deliveries_global_unsubscribe_token_unique').on(
+      t.globalUnsubscribeToken,
+    ),
+  }),
+);
+
+/**
+ * A spent unsubscribe token.
+ *
+ * One row per unsubscribe link that was actually used. The `token` column is
+ * unique, and that is the whole single-use property: the constraint is on the
+ * database rather than in the service, so a second visit to the same link is
+ * refused by the write itself rather than by a check somebody has to remember to
+ * run first.
+ *
+ * `email_delivery_id` is not optional because a token only exists because a
+ * brief was sent, so a row without one would be a claim about an email nobody
+ * received.
+ */
+export const unsubscribes = sqliteTable(
+  'unsubscribes',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** The Topic stopped, or null when the whole User was opted out. */
+    topicId: text('topic_id').references(() => topics.id, {
+      onDelete: 'cascade',
+    }),
+    emailDeliveryId: text('email_delivery_id')
+      .notNull()
+      .references(() => emailDeliveries.id, { onDelete: 'cascade' }),
+    scope: text('scope', { enum: ['this_topic', 'global'] }).notNull(),
+    token: text('token').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    tokenUnique: uniqueIndex('unsubscribes_token_unique').on(t.token),
+    userIdx: index('unsubscribes_user_idx').on(t.userId),
   }),
 );
 
@@ -640,6 +695,8 @@ export type BriefSnapshotRow = typeof briefSnapshots.$inferSelect;
 export type NewBriefSnapshotRow = typeof briefSnapshots.$inferInsert;
 export type EmailDeliveryRow = typeof emailDeliveries.$inferSelect;
 export type NewEmailDeliveryRow = typeof emailDeliveries.$inferInsert;
+export type UnsubscribeRow = typeof unsubscribes.$inferSelect;
+export type NewUnsubscribeRow = typeof unsubscribes.$inferInsert;
 export type BriefRunRow = typeof briefRuns.$inferSelect;
 export type NewBriefRunRow = typeof briefRuns.$inferInsert;
 export type BriefJobRunRow = typeof briefJobRuns.$inferSelect;

@@ -15,6 +15,9 @@ const PLAN = {
 
 const TOPIC = { id: 'topic-1', slug: 'world-news', title: 'World news' };
 
+/** The pair of tokens a brief carries, one per scope. */
+const TOKENS = { topicToken: 'topic-token', globalToken: 'global-token' };
+
 function makeCluster(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: 'c1',
@@ -71,7 +74,7 @@ describe('BriefSnapshotRenderer', () => {
       maxLlmClusters: 5,
     });
 
-    const { html } = await renderer.render(PLAN as never, 'https://app');
+    const { html } = await renderer.render(PLAN as never, 'https://app', TOKENS);
     expect(html).toContain('LLM generated summary');
     expect(html).toContain('Point one');
     expect(html).toContain('https://example.com/article-1');
@@ -83,7 +86,7 @@ describe('BriefSnapshotRenderer', () => {
       topicRepo,
     });
 
-    const { html } = await renderer.render(PLAN as never, 'https://app');
+    const { html } = await renderer.render(PLAN as never, 'https://app', TOKENS);
     expect(html).toContain('Extractive summary');
     expect(html).toContain('b1');
   });
@@ -96,7 +99,7 @@ describe('BriefSnapshotRenderer as a delivered document', () => {
       topicRepo,
     });
 
-    const { html } = await renderer.render(PLAN as never, 'https://app');
+    const { html } = await renderer.render(PLAN as never, 'https://app', TOKENS);
 
     expect(html.startsWith('<!doctype html>')).toBe(true);
     expect(html).toContain('<html lang="en">');
@@ -110,7 +113,7 @@ describe('BriefSnapshotRenderer as a delivered document', () => {
       topicRepo,
     });
 
-    const { html, subject } = await renderer.render(PLAN as never, 'https://app');
+    const { html, subject } = await renderer.render(PLAN as never, 'https://app', TOKENS);
 
     expect(html).toContain('<h1 style="margin:8px 0 0 0;font-size:22px;line-height:1.25;color:#111827;">World news</h1>');
     expect(html).toContain('<title>World news - Brieflyy</title>');
@@ -124,26 +127,62 @@ describe('BriefSnapshotRenderer as a delivered document', () => {
       topicRepo,
     });
 
-    const { html } = await renderer.render(PLAN as never, 'https://app');
+    const { html } = await renderer.render(PLAN as never, 'https://app', TOKENS);
 
     expect(html).toContain('href="https://app/topics/world-news"');
     expect(html).not.toContain('href="https://app/topics/topic-1"');
   });
 
-  it('carries no unsubscribe link, because none of them resolve', async () => {
+  it('carries both unsubscribe links, in the body and in the text', async () => {
     const renderer = new BriefSnapshotRenderer({
       clusterRepo: clusterRepo([makeCluster()]),
       topicRepo,
     });
 
-    const { html } = await renderer.render(PLAN as never, 'https://app');
+    const { html, text } = await renderer.render(PLAN as never, 'https://app', TOKENS);
 
-    // The old footer emitted `/unsubscribe/topic?t=...&token=TOKEN` and
-    // `/unsubscribe/all?token=TOKEN`. Neither route is registered, so both were
-    // 404s wearing the costume of a working link.
-    expect(html).not.toMatch(/unsubscribe/);
-    expect(html).not.toContain('TOKEN');
-    // What it offers instead are the pages that do exist.
+    // The routes these point at are registered (route-guard.test.ts checks the
+    // allowlist against the routes the application actually registers), so a
+    // reader who follows one in a client without one-click support gets an
+    // answer rather than a 404 wearing the costume of a working link.
+    expect(html).toContain('href="https://app/unsubscribe/topic?token=topic-token"');
+    expect(html).toContain('href="https://app/unsubscribe/all?token=global-token"');
+    // Both scopes, because a reader who wants neither this topic nor the rest
+    // should not have to work out which button does which.
+    expect(html).toContain('Stop World news briefs');
+    expect(html).toContain('Stop all Brieflyy emails');
+    // And the plain-text half carries the URLs, since a text-only client shows
+    // no anchor to click.
+    expect(text).toContain('https://app/unsubscribe/topic?token=topic-token');
+    expect(text).toContain('https://app/unsubscribe/all?token=global-token');
+  });
+
+  it('asks the mail client for one-click unsubscribe, per RFC 8058', async () => {
+    const renderer = new BriefSnapshotRenderer({
+      clusterRepo: clusterRepo([makeCluster()]),
+      topicRepo,
+    });
+
+    const { headers } = await renderer.render(PLAN as never, 'https://app', TOKENS);
+
+    // A client that honours these renders its own control and never shows the
+    // links in the body, so the body alone is not an unsubscribe feature.
+    expect(headers['List-Unsubscribe']).toBe(
+      '<https://app/unsubscribe/topic?token=topic-token>, <https://app/unsubscribe/all?token=global-token>',
+    );
+    expect(headers['List-Unsubscribe-Post']).toBe('List-Unsubscribe=One-Click');
+  });
+
+  it('still offers the pages a reader can manage from', async () => {
+    const renderer = new BriefSnapshotRenderer({
+      clusterRepo: clusterRepo([makeCluster()]),
+      topicRepo,
+    });
+
+    const { html } = await renderer.render(PLAN as never, 'https://app', TOKENS);
+
+    // Unsubscribe is not the only thing a reader can do with a brief, and a
+    // footer that only offers the two stop buttons is a smaller one.
     expect(html).toContain('href="https://app/settings/delivery"');
     expect(html).toContain('href="https://app/pick-topics"');
   });
@@ -154,7 +193,7 @@ describe('BriefSnapshotRenderer as a delivered document', () => {
       topicRepo,
     });
 
-    const { html, text } = await renderer.render(PLAN as never, 'https://app');
+    const { html, text } = await renderer.render(PLAN as never, 'https://app', TOKENS);
 
     expect(html).toContain('2 September 2026');
     expect(text).toContain('2 September 2026');
@@ -171,7 +210,7 @@ describe('BriefSnapshotRenderer as a delivered document', () => {
       topicRepo: { getById: async () => null } as never,
     });
 
-    await expect(renderer.render(PLAN as never, 'https://app')).rejects.toThrow(
+    await expect(renderer.render(PLAN as never, 'https://app', TOKENS)).rejects.toThrow(
       /topic-1/,
     );
   });
@@ -201,7 +240,7 @@ describe('BriefSnapshotRenderer bullets', () => {
       topicRepo,
     });
 
-    const { html } = await renderer.render(PLAN as never, 'https://app');
+    const { html } = await renderer.render(PLAN as never, 'https://app', TOKENS);
 
     for (const bullet of bulletPoints) {
       expect(html).toContain(`>${bullet}</a>`);
@@ -216,7 +255,7 @@ describe('BriefSnapshotRenderer bullets', () => {
       topicRepo,
     });
 
-    const { html } = await renderer.render(PLAN as never, 'https://app');
+    const { html } = await renderer.render(PLAN as never, 'https://app', TOKENS);
 
     expect(html).toContain('A sentence no Article here says.');
   });
@@ -230,7 +269,7 @@ describe('BriefSnapshotRenderer bullets', () => {
       topicRepo,
     });
 
-    const { html, text } = await renderer.render(PLAN as never, 'https://app');
+    const { html, text } = await renderer.render(PLAN as never, 'https://app', TOKENS);
 
     expect(html).not.toContain('javascript:');
     expect(text).not.toContain('javascript:');
@@ -252,6 +291,7 @@ describe('BriefSnapshotRenderer bullets', () => {
     const { html, text } = await renderer.render(
       { ...PLAN, clusterIds: ['c-fast', 'c-slow'] } as never,
       'https://app',
+      TOKENS,
     );
 
     expect(html.indexOf('First story')).toBeLessThan(html.indexOf('Second story'));
@@ -277,7 +317,7 @@ describe('BriefSnapshotRenderer as a plain-text alternative', () => {
       topicRepo,
     });
 
-    const { text } = await renderer.render(PLAN as never, 'https://app');
+    const { text } = await renderer.render(PLAN as never, 'https://app', TOKENS);
 
     expect(text).not.toMatch(/<[a-z]/i);
     expect(text).toContain('World news');

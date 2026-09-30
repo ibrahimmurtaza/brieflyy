@@ -4,7 +4,7 @@ import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { topics } from '../db/schema.js';
 import { createTestDb } from '../testing/test-db.js';
-import { makeTopic } from '../testing/fixtures.js';
+import { makeTopic, makeUser } from '../testing/fixtures.js';
 import { DrizzleTopicRepo } from './topic-repo.js';
 import { DrizzleUserRepo } from './user-repo.js';
 
@@ -18,18 +18,8 @@ describe('DrizzleTopicRepo soft delete', () => {
     const userRepo = new DrizzleUserRepo(db);
     topicRepo = new DrizzleTopicRepo(db);
 
-    await userRepo.insert({
-      id: 'user-1',
-      createdAt: new Date('2026-01-01T00:00:00Z'),
-      onboardingState: 'completed',
-      tier: 'free',
-    });
-    await userRepo.insert({
-      id: 'user-2',
-      createdAt: new Date('2026-01-01T00:00:00Z'),
-      onboardingState: 'completed',
-      tier: 'free',
-    });
+    await userRepo.insert(makeUser({ id: 'user-1', onboardingState: 'completed' }));
+    await userRepo.insert(makeUser({ id: 'user-2', onboardingState: 'completed' }));
     await topicRepo.insert(makeTopic({ id: 'topic-1', userId: 'user-1' }));
     await topicRepo.insert(makeTopic({ id: 'topic-2', userId: 'user-1' }));
     await topicRepo.insert(makeTopic({ id: 'topic-3', userId: 'user-2' }));
