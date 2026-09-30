@@ -53,8 +53,10 @@ async function main(): Promise<void> {
       backoffMaxMs: config.ingestBackoffMaxMs,
     },
     // Ingest runs because the process is running. Nothing else has to remember
-    // to trigger it.
+    // to trigger it, and neither does the daily brief job.
     ingestAutoStart: true,
+    briefJobAutoStart: config.briefsEnabled,
+    briefIntervalMs: config.briefsIntervalMs,
   });
 
   installShutdownHandlers(app, driver);

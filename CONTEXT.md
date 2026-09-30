@@ -65,6 +65,15 @@ _Avoid_: digest, summary, newsletter
 **EmailDelivery**: A record that a BriefSnapshot was emailed to a User. Carries per-topic unsubscribe state and an RFC 8058 one-click token. Distinct from the BriefSnapshot so a snapshot can be re-sent, re-linked, or unsubscribed from.
 _Avoid_: email log, sent mail
 
+**DeliverySlot**: The single instant a User's DeliveryTime falls on, for one local day in the User's own timezone. What the daily job compares the clock against, and what a BriefRun is keyed on. A reading that does not exist on a spring-forward day lands on the same half hour of the morning just after the change; a reading that happens twice on a fall-back day is the first of the two.
+_Avoid_: due time, cron time, send window
+
+**BriefRun**: The record that the daily job produced a BriefSnapshot for one of a User's Topics at one DeliverySlot. Written only once the brief has gone out, so a User the job failed to send to is still owed that DeliverySlot. Its existence is also what stops two passes answering the same DeliverySlot twice.
+_Avoid_: brief job log, delivery log
+
+**BriefJobRun**: One pass of the daily job: when it started and finished, how many briefs it sent, and how many it failed to send. A pass that finds nobody due reports zero of each rather than nothing at all, because a job that ran and sent nothing is a different thing from a job that is not running.
+_Avoid_: run log, job log
+
 ### Engagement
 
 **FeedbackType**: An enum of the explicit signals a User can give — `ThumbsUp`, `ThumbsDown`, `HideSource`, `MoreLikeThis`, `LessLikeThis`.
@@ -76,7 +85,7 @@ _Avoid_: reaction, vote, signal
 **FeedbackEvent**: The persisted record of a single piece of Feedback. Carries the FeedbackType, target Cluster, target Scope (this topic only vs global, for HideSource), and timestamp.
 _Avoid_: feedback log, reaction record
 
-**Cadence**: A Topic-level schedule — daily, weekly, or never. Evaluated against the User's DeliveryTime.
+**Cadence**: A Topic-level schedule — daily, weekly, or never. Evaluated against the User's DeliveryTime. Only daily is implemented, because a weekly Cadence needs a day of the week that a Topic does not have.
 _Avoid_: schedule, frequency
 
 ### Trends

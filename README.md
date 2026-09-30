@@ -192,16 +192,19 @@ src/
 │
 ├── db/                    # Drizzle schema, migration runner, driver factory
 ├── directory/             # Seed JSON + directory loader (Sources, TopicTemplates)
-├── domain/                # pure types & helpers (crypto, clock)
+├── domain/                # pure types & helpers (crypto, clock, timezone, DeliverySlot)
 ├── http/                  # route access declarations, auth guard, rate limiter
 ├── repos/                 # persistence adapters (users, accounts, sessions, magic-links, topics, ...)
+├── scheduling/            # IntervalLoop — the loop both background jobs ride on
 ├── verify/                # staged-credential check (run by pnpm secrets:check)
 │
 ├── email/                 # EmailTransport seam (Console + Resend)
 │
 ├── auth/                  # AuthService (orchestration) + HTTP routes
+├── ingest/                # registry ingest + IngestScheduler (poll every Source)
 ├── onboarding/            # OnboardingService (Directory → Topics) + HTTP routes
 ├── pages/                 # placeholder HTML routes (signup, onboarding, ...)
+├── services/              # clustering, BriefPlan/Snapshot, the daily brief job
 │
 └── testing/               # test-only helpers (test DB, deterministic clock)
 ```
@@ -219,9 +222,20 @@ The system has a small number of seams where behaviour is plugged in:
 | `RandomSource`   | `bytes()`, `uuid()`      | `nodeRandom`, `deterministicRandom`         |
 | `EnvSource`      | `Record<string, string?>` | `process.env`, a plain object in tests      |
 | `afterCycle`     | `run(report)`            | `ClusterFormationService`                    |
+| Scheduler loop  | `IntervalLoop`           | the ingest loop, the daily brief job      |
 Tests at the `AuthService` seam use real SQLite (in-memory), a fake clock, a
 fake random source, and a `ConsoleEmailTransport`. Tests at the HTTP seam use
 Fastify's `inject()` against the same `createApp` factory.
+
+### Background jobs
+
+Two loops run for the life of the process and both stop on it. `IngestScheduler`
+polls every Source a Topic names (ADR-0003); `ScheduledBriefService` answers each
+User's daily-Cadence Topics for the DeliverySlot they are owed (ADR-0011). Both
+ride on `IntervalLoop`, so closing the application wakes them out of their wait and
+waits for the work in flight before the database is closed. Both are configurable
+(`INGEST_*`, `BRIEFS_*`) and both report what they last did to a signed-in User at
+`/admin/ingest` and `/admin/briefs`.
 
 ## Tests
 

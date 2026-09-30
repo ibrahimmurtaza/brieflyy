@@ -30,6 +30,8 @@ import { DrizzleSourceRepo } from './repos/source-repo.js';
 import { DrizzleFeedbackRepo } from './repos/feedback-repo.js';
 import { DrizzleBriefPlanRepo } from './repos/brief-plan-repo.js';
 import { DrizzleBriefSnapshotRepo } from './repos/brief-snapshot-repo.js';
+import { DrizzleBriefRunRepo } from './repos/brief-run-repo.js';
+import { DrizzleBriefJobRunRepo } from './repos/brief-job-run-repo.js';
 import { DrizzleEmailDeliveryRepo } from './repos/email-delivery-repo.js';
 import { AuthService } from './auth/auth-service.js';
 import { registerAuthRoutes } from './auth/routes.js';
@@ -52,6 +54,11 @@ import { registerIngestRoutes } from './ingest/routes.js';
 import { ClusterFormationService } from './services/cluster-formation-service.js';
 import { BriefPlanService } from './services/brief-plan-service.js';
 import { BriefSnapshotRenderer } from './services/brief-snapshot-renderer.js';
+import {
+  ScheduledBriefService,
+  DEFAULT_BRIEF_INTERVAL_MS,
+} from './services/scheduled-brief-service.js';
+import { registerBriefStatusRoutes } from './services/brief-status-routes.js';
 import { registerTierRoutes } from './billing/tier-routes.js';
 import type { FeedFetcher } from './ingest/feed-fetcher.js';
 
@@ -93,6 +100,16 @@ export interface CreateAppOptions {
    * the process the only trigger ingest needs.
    */
   readonly ingestAutoStart?: boolean | undefined;
+  /**
+   * Run the daily brief job for as long as the application is up. Off by default
+   * for the reason `ingestAutoStart` is: a test can build the application without a
+   * background timer racing its fixtures. The server entrypoint turns it on, which
+   * is what makes the briefs go out without anything else having to remember to
+   * trigger them.
+   */
+  readonly briefJobAutoStart?: boolean | undefined;
+  /** How often the brief job looks for a DeliveryTime that has arrived. */
+  readonly briefIntervalMs?: number | undefined;
   /** Believe `X-Forwarded-For`, so per-caller limits work behind a proxy. */
   readonly trustProxy?: boolean | undefined;
 }
@@ -164,6 +181,8 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
   const briefPlanRepo = new DrizzleBriefPlanRepo(opts.db);
   const briefSnapshotRepo = new DrizzleBriefSnapshotRepo(opts.db);
   const emailDeliveryRepo = new DrizzleEmailDeliveryRepo(opts.db);
+  const briefRunRepo = new DrizzleBriefRunRepo(opts.db);
+  const briefJobRunRepo = new DrizzleBriefJobRunRepo(opts.db);
 
   await applyDirectorySeed(opts.db);
 
@@ -222,6 +241,24 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     random: opts.random ?? nodeRandom,
   });
 
+  // The daily job is a trigger, not a second way of making a brief: it plans,
+  // renders, stores and sends through the service above, so a scheduled brief is
+  // byte for byte the brief a User would have asked for by hand. It holds the
+  // transport as well as the service, because the status view has to be able to
+  // say where those briefs actually went.
+  const scheduledBriefService = new ScheduledBriefService({
+    briefPlanService,
+    briefRunRepo,
+    briefJobRunRepo,
+    deliverySettingsRepo,
+    topicRepo,
+    accountRepo,
+    emailTransport: opts.emailTransport,
+    clock,
+    random: opts.random ?? nodeRandom,
+    intervalMs: opts.briefIntervalMs ?? DEFAULT_BRIEF_INTERVAL_MS,
+  });
+
   const ingestScheduler = await resolveIngestScheduler({
     provided: opts.ingestScheduler,
     db: opts.db,
@@ -270,6 +307,25 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
 
   if (ingestScheduler) {
     await registerIngestRoutes(app, { scheduler: ingestScheduler });
+  }
+
+  await registerBriefStatusRoutes(app, {
+    scheduler: scheduledBriefService,
+    emailTransport: opts.emailTransport,
+  });
+
+  if (opts.briefJobAutoStart === true) {
+    // Deliberately not awaited, for the reason the ingest loop is not: it runs for
+    // the life of the process. Its status is served whether or not it is running,
+    // so a job that was switched off is visible as switched off rather than as a
+    // job that has never existed.
+    void scheduledBriefService.runForever();
+    // Closing the app is a shutdown request, so the job is stopped and its pass in
+    // flight waited for before the caller tears anything else down — a brief
+    // abandoned half-sent is a brief nobody is recorded as owing.
+    app.addHook('onClose', async () => {
+      await scheduledBriefService.stop();
+    });
   }
 
   if (ingestScheduler && opts.ingestAutoStart === true) {

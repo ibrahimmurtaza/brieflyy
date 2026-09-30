@@ -245,6 +245,26 @@ CREATE TABLE IF NOT EXISTS email_deliveries (
   global_unsubscribe_token TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS email_deliveries_user_snapshot_idx ON email_deliveries (user_id, brief_snapshot_id);
+
+CREATE TABLE IF NOT EXISTS brief_runs (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+  scheduled_for INTEGER NOT NULL,
+  sent_at INTEGER NOT NULL,
+  brief_snapshot_id TEXT NOT NULL REFERENCES brief_snapshots(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS brief_runs_user_topic_slot_idx ON brief_runs (user_id, topic_id, scheduled_for);
+CREATE INDEX IF NOT EXISTS brief_runs_user_idx ON brief_runs (user_id);
+
+CREATE TABLE IF NOT EXISTS brief_job_runs (
+  id TEXT PRIMARY KEY NOT NULL,
+  started_at INTEGER NOT NULL,
+  finished_at INTEGER NOT NULL,
+  sent_count INTEGER NOT NULL,
+  failure_count INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS brief_job_runs_started_at_idx ON brief_job_runs (started_at);
 `;
 
 /**

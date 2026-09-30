@@ -580,9 +580,68 @@ export const emailDeliveries = sqliteTable(
   }),
 );
 
+/**
+* One Topic of one User, answered for one DeliverySlot.
+ *
+ * The unique index on (user, topic, scheduled_for) is the whole reason the daily
+ * job can run as often as it likes: a DeliverySlot can only be answered once, so a
+ * second pass over the same one — whether it is the next tick, a restart, or two
+ * processes — cannot send the same period's brief twice.
+ */
+export const briefRuns = sqliteTable(
+  'brief_runs',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    topicId: text('topic_id')
+      .notNull()
+      .references(() => topics.id, { onDelete: 'cascade' }),
+    /** The DeliverySlot this brief answers, as a UTC instant. */
+    scheduledFor: integer('scheduled_for', { mode: 'timestamp_ms' }).notNull(),
+    sentAt: integer('sent_at', { mode: 'timestamp_ms' }).notNull(),
+    briefSnapshotId: text('brief_snapshot_id')
+      .notNull()
+      .references(() => briefSnapshots.id, { onDelete: 'cascade' }),
+  },
+  (t) => ({
+    userTopicSlotIdx: uniqueIndex('brief_runs_user_topic_slot_idx').on(
+      t.userId,
+      t.topicId,
+      t.scheduledFor,
+    ),
+    userIdx: index('brief_runs_user_idx').on(t.userId),
+  }),
+);
+
+/**
+ * One pass of the daily job. The observable half of the job: a pass that sends
+ * nothing and reports nothing is indistinguishable from a job that is not
+ * running, and this is what tells the two apart.
+ */
+export const briefJobRuns = sqliteTable(
+  'brief_job_runs',
+  {
+    id: text('id').primaryKey(),
+    startedAt: integer('started_at', { mode: 'timestamp_ms' }).notNull(),
+    finishedAt: integer('finished_at', { mode: 'timestamp_ms' }).notNull(),
+    sentCount: integer('sent_count').notNull(),
+    failureCount: integer('failure_count').notNull(),
+  },
+  (t) => ({
+    startedAtIdx: index('brief_job_runs_started_at_idx').on(t.startedAt),
+  }),
+);
+
 export type BriefPlanRow = typeof briefPlans.$inferSelect;
 export type NewBriefPlanRow = typeof briefPlans.$inferInsert;
 export type BriefSnapshotRow = typeof briefSnapshots.$inferSelect;
 export type NewBriefSnapshotRow = typeof briefSnapshots.$inferInsert;
 export type EmailDeliveryRow = typeof emailDeliveries.$inferSelect;
 export type NewEmailDeliveryRow = typeof emailDeliveries.$inferInsert;
+export type BriefRunRow = typeof briefRuns.$inferSelect;
+export type NewBriefRunRow = typeof briefRuns.$inferInsert;
+export type BriefJobRunRow = typeof briefJobRuns.$inferSelect;
+export type NewBriefJobRunRow = typeof briefJobRuns.$inferInsert;
+

@@ -1,11 +1,13 @@
 import { DEFAULT_CLUSTER_WINDOW_DAYS } from '../domain/cluster-window.js';
 import { EMPTY_SIGNATURE } from '../domain/story-signature.js';
 import type {
+  Account,
   Article,
   ArticleId,
   Cadence,
   Cluster,
   ClusterId,
+  DeliverySettings,
   OnboardingState,
   SourceId,
   StoryId,
@@ -72,6 +74,53 @@ export function makeTopic(input: TopicFixture): Topic {
   };
 }
 
+export interface AccountFixture {
+  readonly id: string;
+  readonly userId: string;
+  readonly email?: string;
+  readonly emailVerifiedAt?: Date | null;
+}
+
+/**
+ * A verified Account for a User. A brief is addressed to an Account, so any test
+ * that needs a brief sent has to have one of these rather than just a User.
+ */
+export function makeAccount(input: AccountFixture): Account {
+  return {
+    id: input.id,
+    userId: input.userId as UserId,
+    email: input.email ?? `${input.id}@example.com`,
+    emailVerifiedAt: input.emailVerifiedAt ?? new Date('2026-01-01T00:00:00Z'),
+    createdAt: new Date('2026-01-01T00:00:00Z'),
+  };
+}
+
+export interface DeliverySettingsFixture {
+  readonly userId: string;
+  readonly hour?: number;
+  readonly minute?: number;
+  readonly timezone?: string;
+  /**
+   * When the User recorded this DeliveryTime. It decides which DeliverySlots the User can
+   * be owed, so a test about a DeliverySlot that passed before they asked for one has to
+   * set it.
+   */
+  readonly updatedAt?: Date;
+  readonly welcomeSentAt?: Date | null;
+}
+
+/** Eight in the morning UTC, recorded long ago, unless a test says otherwise. */
+export function makeDeliverySettings(input: DeliverySettingsFixture): DeliverySettings {
+  return {
+    userId: input.userId as UserId,
+    hour: input.hour ?? 8,
+    minute: input.minute ?? 0,
+    timezone: input.timezone ?? 'UTC',
+    welcomeSentAt: input.welcomeSentAt ?? new Date('2026-01-01T00:00:00Z'),
+    updatedAt: input.updatedAt ?? new Date('2026-01-01T00:00:00Z'),
+  };
+}
+
 export interface ClusterFixture {
   readonly id: string;
   readonly topicId: string;
@@ -133,3 +182,4 @@ export function makeArticle(input: ArticleFixture): Article {
     storyId: (input.storyId ?? 'story-1') as StoryId,
   };
 }
+

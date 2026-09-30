@@ -1,4 +1,5 @@
 import type { StorySignature } from './story-signature.js';
+import type { DeliverySlot } from './delivery-slot.js';
 
 export const TOPIC_CATEGORIES = [
   'news',
@@ -270,6 +271,43 @@ export interface EmailDelivery {
   readonly globalUnsubscribeToken: string;
 }
 
+/**
+ * One Topic of one User, answered for one DeliverySlot.
+ *
+ * Written when a brief has actually gone out, so it is the record of the period
+ * being dealt with rather than the intention to deal with it: a User the job
+ * failed to send to has no BriefRun, so the DeliverySlot is still owed and the next
+ * pass tries again. Its existence is also what stops two passes answering the same
+ * DeliverySlot twice.
+ */
+export interface BriefRun {
+  readonly id: string;
+  readonly userId: UserId;
+  readonly topicId: TopicId;
+  /** The DeliverySlot this brief answers. */
+  readonly scheduledFor: DeliverySlot;
+  readonly sentAt: Date;
+  /** The BriefSnapshot that was sent, so a run points at the brief it produced. */
+  readonly briefSnapshotId: string;
+}
+
+/**
+ * One pass of the daily job, and the whole of what is observable about it.
+ *
+ * A pass that finds nobody due reports zero of each rather than nothing at all,
+ * because a job that has run and sent nothing is a different thing from a job
+ * that is not running, and only the first is worth seeing.
+ */
+export interface BriefJobRun {
+  readonly id: string;
+  readonly startedAt: Date;
+  readonly finishedAt: Date;
+  /** Briefs sent this pass. */
+  readonly sentCount: number;
+  /** Briefs owed and not sent this pass, however many Users were unaffected. */
+  readonly failureCount: number;
+}
+
 export interface FeedbackEvent {
   readonly id: string;
   readonly userId: UserId;
@@ -298,3 +336,4 @@ export interface TopicTrend {
   readonly volumeOverTime: readonly { date: string; count: number }[];
   readonly entities: readonly EmergingEntity[];
 }
+
