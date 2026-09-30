@@ -8,6 +8,9 @@ import { createTestDb } from '../testing/test-db.js';
 import { countRows } from '../testing/db.js';
 import { extractMagicLinkToken } from '../testing/email.js';
 import { makeCluster, makeTopic } from '../testing/fixtures.js';
+import { createLLMSummaryClient } from '../services/llm-summary-service.js';
+import type { LLMSummaryClient } from '../domain/llm.js';
+import { RecordingSummaryClient } from '../testing/summary-client.js';
 import {
   deterministicRandom,
   makeTestClock,
@@ -46,7 +49,12 @@ interface Harness {
   firstRow<T>(sql: string): T | undefined;
 }
 
-async function signInWithTopic(input: { readonly email?: string } = {}): Promise<Harness> {
+async function signInWithTopic(
+  input: {
+    readonly email?: string;
+    readonly llmSummaryClient?: LLMSummaryClient | undefined;
+  } = {},
+): Promise<Harness> {
   resetDeterministic();
   const { db, driver } = createTestDb();
   const transport = new ConsoleEmailTransport({ logger: () => {} });
@@ -58,6 +66,7 @@ async function signInWithTopic(input: { readonly email?: string } = {}): Promise
     cookieSecure: false,
     clock: clock.clock,
     random: deterministicRandom,
+    ...(input.llmSummaryClient ? { llmSummaryClient: input.llmSummaryClient } : {}),
   });
   const email = input.email ?? 'iris@example.com';
   await app.inject({ method: 'POST', url: '/auth/magic-link/request', payload: { email } });
@@ -248,6 +257,81 @@ describe('HTTP: POST /topics/:slug/send-brief', () => {
     expect(h.count('brief_plans')).toBe(2);
     expect(h.count('brief_snapshots')).toBe(2);
     expect(h.count('email_deliveries')).toBe(2);
+  });
+});
+
+describe('HTTP: a brief with a configured summary client', () => {
+  it('stores the written text on the snapshot and never asks for it again', async () => {
+    // A BriefSnapshot is what was sent, so the written text is part of the
+    // document and not a recipe for rebuilding it: a User who opens a brief in
+    // six months reads the words they were sent, whatever the Clusters and the
+    // provider have done since.
+    const client = new RecordingSummaryClient();
+    const h = await signInWithTopic({ llmSummaryClient: client });
+
+    await sendBrief(h);
+
+    const sent = briefsSentTo(h)[0]!;
+    expect(sent.html).toContain('Written summary of A story worth reading');
+    expect(sent.html).toContain(`<a href="${ARTICLE_URL}" target="_blank" rel="noopener"`);
+    expect(sent.html).toContain('>A written point.</a>');
+    expect(sent.text).toContain('Written summary of A story worth reading');
+    expect(client.callCount).toBe(1);
+
+    const stored = h.firstRow<{ html: string; text: string }>(
+      `SELECT html, text FROM brief_snapshots LIMIT 1`,
+    )!;
+    expect(stored.html).toBe(sent.html);
+    expect(stored.text).toBe(sent.text);
+
+    const viewed = await h.app.inject({
+      method: 'GET',
+      url: `/briefs/${snapshotIdOf(h)}`,
+      headers: { cookie: h.cookie },
+    });
+    expect(viewed.statusCode).toBe(200);
+    expect(viewed.body).toContain('Written summary of A story worth reading');
+    expect(client.callCount).toBe(1);
+  });
+
+  it('leaves the LivingBrief on the extractive summary', async () => {
+    // The design decision the glossary records: a Cluster summary is quoted, and
+    // what is written is written once, into a snapshot that does not change. The
+    // page a User browses would otherwise say one thing and the email they were
+    // sent said another, for the same Cluster, on the same day.
+    const client = new RecordingSummaryClient();
+    const h = await signInWithTopic({ llmSummaryClient: client });
+    await sendBrief(h);
+
+    const page = await h.app.inject({
+      method: 'GET',
+      url: '/topics/topic-1',
+      headers: { cookie: h.cookie },
+    });
+
+    expect(page.body).toContain('The story broke this morning and it matters.');
+    expect(page.body).not.toContain('Written summary of');
+    expect(page.body).not.toContain('A written point.');
+    // And the page never paid for one either.
+    expect(client.callCount).toBe(1);
+  });
+
+  it('emails a complete brief with no client at all, having asked for nothing', async () => {
+    // The state a deployment with no credential is in. The client is resolved
+    // the way the entrypoint resolves it, and the brief that comes out the other
+    // end is a brief, not an absence of one.
+    expect(createLLMSummaryClient({ env: {} })).toBeNull();
+
+    const h = await signInWithTopic({
+      llmSummaryClient: createLLMSummaryClient({ env: {} }) ?? undefined,
+    });
+    await sendBrief(h);
+
+    const sent = briefsSentTo(h)[0]!;
+    expect(sent.subject).toBe('World news - Brieflyy');
+    expect(sent.html).toContain('The story broke this morning and it matters.');
+    expect(sent.html).toContain(`>${BULLET}</a>`);
+    expect(h.count('brief_snapshots')).toBe(1);
   });
 });
 

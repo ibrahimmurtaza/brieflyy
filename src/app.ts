@@ -41,6 +41,7 @@ import { OnboardingService } from './onboarding/onboarding-service.js';
 import { registerOnboardingRoutes } from './onboarding/routes.js';
 import { registerPageRoutes } from './pages/routes.js';
 import type { EmailTransport } from './email/transport.js';
+import type { LLMSummaryClient } from './domain/llm.js';
 import type { Clock } from './domain/clock.js';
 import { systemClock } from './domain/clock.js';
 import type { RandomSource } from './domain/crypto.js';
@@ -113,6 +114,23 @@ export interface CreateAppOptions {
   readonly briefJobAutoStart?: boolean | undefined;
   /** How often the brief job looks for a DeliveryTime that has arrived. */
   readonly briefIntervalMs?: number | undefined;
+  /**
+   * Writes the one-liner and bullets for the leading Clusters of a brief.
+   *
+   * The caller's to hold, because whether the application has one is a
+   * deployment decision rather than a runtime one: a brief with no client is
+   * built entirely from the extractive summary, which is quotable by
+   * construction, so there is nothing to fail and nothing to report.
+   */
+  readonly llmSummaryClient?: LLMSummaryClient | undefined;
+  /**
+   * How many Clusters of a brief are written rather than quoted. Absent means
+   * the renderer's own default, which is five; zero turns the written path off
+   * without unsetting a key.
+   */
+  readonly briefGeneratedClusters?: number | undefined;
+  /** How many Clusters one brief carries, most active first. Defaults to five. */
+  readonly briefMaxClusters?: number | undefined;
   /** Believe `X-Forwarded-For`, so per-caller limits work behind a proxy. */
   readonly trustProxy?: boolean | undefined;
 }
@@ -229,15 +247,29 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
   });
 
   // A brief is planned, rendered, stored and sent as one step, so the service
-  // is built here rather than at the route. The LLM client is left out: with no
-  // `OPENAI_API_KEY` a brief falls back to the extractive path, which is
-  // quotable by construction. Wiring the generated path is a separate change.
+  // is built here rather than at the route.
   const briefPlanService = new BriefPlanService({
     clusterRepo,
     briefPlanRepo,
     briefSnapshotRepo,
     emailDeliveryRepo,
-    renderer: new BriefSnapshotRenderer({ clusterRepo, topicRepo }),
+    // The client is the caller's, because a deployment either has one or has not
+    // configured the feature. With none, every Cluster is quoted instead of
+    // written, which is a complete brief rather than a missing one.
+    renderer: new BriefSnapshotRenderer({
+      clusterRepo,
+      topicRepo,
+      clock,
+      ...(opts.llmSummaryClient
+        ? {
+            llmClient: opts.llmSummaryClient,
+            ...(opts.briefGeneratedClusters === undefined
+              ? {}
+              : { maxLlmClusters: opts.briefGeneratedClusters }),
+          }
+        : {}),
+    }),
+    ...(opts.briefMaxClusters === undefined ? {} : { maxClusters: opts.briefMaxClusters }),
     // The same transport the magic link and the welcome email go out on.
     emailTransport: opts.emailTransport,
     appBaseUrl: opts.appBaseUrl,

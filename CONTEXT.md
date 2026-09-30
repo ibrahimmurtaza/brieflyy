@@ -50,6 +50,9 @@ _Avoid_: cluster TTL, retention window
 **Cluster summary**: The one-liner and the bullet points a Cluster is shown with. Every line is quoted from an Article in that Cluster, never written afresh, so nothing reaches a User that a Source did not write. A feed's own metadata about an item — the link and score a feed with no description gives instead of text — is not a statement a Source made about the story, so it is not quoted either, and the Article's headline is used instead.
 _Avoid_: abstract, digest, synopsis
 
+**Written summary**: A one-liner and bullet points written afresh for a Cluster, and constrained to cite only Articles inside it. It exists only in a BriefSnapshot and only for the leading Clusters of the plan: the citation constraint is what makes it quotable, and a Cluster's own Cluster summary is what every other surface shows and what a failed call falls back to. A LivingBrief never carries one, so a Cluster reads the same way in the app as it did in the last email. The code names the mechanism rather than the concept — `LLMSummaryClient`, `BRIEF_GENERATED_CLUSTERS` — and not a third thing.
+_Avoid_: AI summary, paraphrase
+
 **BriefPlan**: A selection and ordering of Clusters for a Topic at a moment in time. The regenerable artifact that BriefSnapshots and LivingBriefs are derived from.
 _Avoid_: brief, digest
 

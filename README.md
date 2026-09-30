@@ -19,7 +19,7 @@ personalized brief feed with insights and visual trends.
 - [ ] [08] LivingBrief in-app
 - [ ] [09] Feedback signals
 - [ ] [10] BriefPlan + scheduled BriefSnapshot
-- [ ] [11] LLM summary for BriefSnapshot top-N
+- [x] **[11]** LLM summary for BriefSnapshot top-N
 - [ ] [12] Trends view (per-Topic)
 - [ ] [13] DiscoverTab + Recommendations
 - [ ] [14] Archive search + tier enforcement
@@ -72,12 +72,30 @@ value that is present but unrecognised throws at boot naming the variable. So
 `OAUTH_PROVIDER=Google` turns Google sign-in on, and `EMAIL_TRANSPORT=mailgun`
 stops the process instead of quietly falling back to the console transport.
 
-Two limits on that module: it covers boot configuration, not a value an optional
-component reads for itself (the LLM summary client reads `OPENAI_API_KEY` and
-`OPENAI_API_URL` through the same readers when it is wired up, in #44), and its
-counters live in the process, so they reset on restart and are per instance.
-`TRUST_PROXY` has to be on for the per-caller magic-link limit to tell callers
-apart behind a reverse proxy.
+Two limits on that module: it covers boot configuration, not the counters a
+component keeps while it runs (those live in the process, so they reset on
+restart and are per instance), and every value it does read is resolved before
+the database is opened, so a bad one is reported at boot rather than halfway
+through. `TRUST_PROXY` has to be on for the per-caller magic-link limit to tell
+callers apart behind a reverse proxy.
+
+### Writing a brief
+
+`OPENAI_API_KEY` is optional and its absence is a complete configuration, not a
+degraded one: `createLLMSummaryClient` returns nothing, and a brief is then built
+entirely from the extractive summary, which is quotable by construction. With a
+key, the leading Clusters of a BriefPlan get a written one-liner and bullets
+instead (ADR-0013). Every bullet must cite an Article of that Cluster or it is
+discarded, a Cluster with no citation left is quoted instead, and the rest of the
+brief is quoted when a call fails or the brief's time budget is spent.
+
+Two counts, because they are two decisions: `BRIEF_MAX_CLUSTERS` is how much
+reading one brief carries, and `BRIEF_GENERATED_CLUSTERS` is how much of that is
+worth paying to write (`0` turns the written path off without unsetting the key).
+Both default to five. Every brief makes at most that many calls against the
+endpoint, each call is bounded by a token limit and an eight-second timeout, and
+the brief as a whole by fifteen seconds — past any of the three, the remaining
+Clusters are quoted instead.
 
 ## Secrets
 
@@ -211,8 +229,9 @@ src/
 ├── ingest/                # registry ingest + IngestScheduler (poll every Source)
 ├── onboarding/            # OnboardingService (Directory → Topics) + HTTP routes
 ├── pages/                 # placeholder HTML routes (signup, onboarding, ...)
-├── services/              # clustering, BriefPlan/Snapshot, the daily brief job,
-│                          # and the unsubscribe state that job honours
+├── services/              # clustering, BriefPlan/Snapshot, the written summary
+│                          # client, the daily brief job, and the unsubscribe
+│                          # state that job honours
 │
 └── testing/               # test-only helpers (test DB, deterministic clock)
 ```
@@ -226,6 +245,7 @@ The system has a small number of seams where behaviour is plugged in:
 | Persistence       | `Db` (Drizzle)           | SQLite (dev/test), Postgres (planned)       |
 | `UserRepo` etc.  | domain-shaped methods   | `DrizzleUserRepo` (and Postgres variants)    |
 | `EmailTransport`  | `send(message)`          | `ConsoleEmailTransport`, `ResendEmailTransport` |
+| `LLMSummaryClient`| `generateSummary(clusterTitle, clusterSummary, articles)` | `OpenAILLMSummaryService`, or none at all |
 | `Clock`          | `now()`                  | `systemClock`, `fixedClock`, `makeTestClock` |
 | `RandomSource`   | `bytes()`, `uuid()`      | `nodeRandom`, `deterministicRandom`         |
 | `EnvSource`      | `Record<string, string?>` | `process.env`, a plain object in tests      |
@@ -233,7 +253,10 @@ The system has a small number of seams where behaviour is plugged in:
 | Scheduler loop  | `IntervalLoop`           | the ingest loop, the daily brief job      |
 Tests at the `AuthService` seam use real SQLite (in-memory), a fake clock, a
 fake random source, and a `ConsoleEmailTransport`. Tests at the HTTP seam use
-Fastify's `inject()` against the same `createApp` factory.
+Fastify's `inject()` against the same `createApp` factory. The summary client is
+held rather than constructed by `createApp`, so a test injects a counting double
+and asserts what a brief cost instead of what a brief was sent.
+
 
 ### Background jobs
 
@@ -255,8 +278,8 @@ pnpm test
 Alongside the behavioural suites, four of the tests are guards that fail the
 build when the shape of the system drifts:
 
-- `app-wiring.test.ts` — every `*Service` is constructed by `createApp` or
-  explicitly deferred to a ticket.
+- `app-wiring.test.ts` — every `*Service` is constructed by the application
+  (the entrypoint or `createApp`) or explicitly deferred to a ticket.
 - `route-guard.test.ts` — every registered route is public by allowlist or
   refuses an anonymous request.
 - `env-example.test.ts` — configuration is read in one module, and `.env.example`

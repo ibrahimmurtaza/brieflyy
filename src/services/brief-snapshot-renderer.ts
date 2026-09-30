@@ -1,7 +1,8 @@
-import type { Article, BriefPlan } from '../domain/types.js';
+import type { Article, BriefPlan, Cluster } from '../domain/types.js';
 import type { ClusterRepo } from '../repos/cluster-repo.js';
 import type { TopicRepo } from '../repos/topic-repo.js';
 import type { LLMSummaryClient, LLMSummaryOutput } from '../domain/llm.js';
+import type { Clock } from '../domain/clock.js';
 import { articleUrlForStatement } from '../domain/cluster-text.js';
 import { escapeHtml } from '../domain/html.js';
 import { safeExternalUrl } from '../domain/url.js';
@@ -50,9 +51,28 @@ export interface BriefUnsubscribe {
 
 export interface BriefSnapshotRendererDeps {
   readonly clusterRepo: ClusterRepo;
+  /**
+   * What "now" is, for the brief's own time budget. Required because the budget
+   * is a promise the application makes to its Users — a brief is sent on a
+   * schedule and the schedule does not move — and a promise measured against a
+   * clock nobody can hand a test is a promise nothing can check.
+   */
+  readonly clock: Clock;
+  /**
+   * The written half of a brief, or nothing at all when the deployment has none
+   * configured. Absent is the ordinary state rather than a degraded one: a brief
+   * built from the extractive summary is a complete brief, so the renderer runs
+   * the same way either way and only the leading Clusters differ.
+   */
   readonly llmClient?: LLMSummaryClient | undefined;
-  readonly maxLlmClusters?: number;
-  readonly briefLlmTimeoutMs?: number;
+  /** How many Clusters of the plan are written rather than quoted. Defaults to five. */
+  readonly maxLlmClusters?: number | undefined;
+  /**
+   * How long one brief's writing may take before the rest of it is quoted
+   * instead. Defaults to fifteen seconds, which is longer than a slow call and
+   * shorter than a reader waiting.
+   */
+  readonly briefLlmTimeoutMs?: number | undefined;
   /**
    * Where a brief gets the Topic's own title and slug. Required rather than
    * optional because both of those are the brief's identity: without the Topic
@@ -63,6 +83,12 @@ export interface BriefSnapshotRendererDeps {
    */
   readonly topicRepo: TopicRepo;
 }
+
+/** How many Clusters of a brief are written rather than quoted. */
+const DEFAULT_MAX_LLM_CLUSTERS = 5;
+
+/** How long one brief's writing may take before the rest of it is quoted instead. */
+const DEFAULT_BRIEF_LLM_TIMEOUT_MS = 15_000;
 
 export class BriefSnapshotRenderer {
   constructor(private readonly deps: BriefSnapshotRendererDeps) {}
@@ -105,40 +131,7 @@ export class BriefSnapshotRenderer {
       );
     }
 
-    const llmResults = new Map<string, LLMSummaryOutput | null>();
-    const maxLlm = this.deps.maxLlmClusters ?? 5;
-    if (this.deps.llmClient && selected.length > 0) {
-      const briefTimeoutMs = this.deps.briefLlmTimeoutMs ?? 15000;
-      const briefStart = Date.now();
-      let callsMade = 0;
-      for (const cluster of selected) {
-        if (callsMade >= maxLlm) break;
-        // Global brief-level timeout: if exceeded, fall back for all remaining clusters
-        if (Date.now() - briefStart > briefTimeoutMs) break;
-        callsMade++;
-        const id = cluster.id as string;
-        try {
-          llmResults.set(
-            id,
-            await this.deps.llmClient.generateSummary(
-              cluster.title,
-              cluster.summary,
-              (articlesByCluster.get(id) ?? []).map((a) => ({
-                url: a.url,
-                title: a.title,
-                body: a.body,
-              })),
-            ),
-          );
-        } catch {
-          llmResults.set(id, null);
-        }
-      }
-      // For any clusters not processed (beyond maxLlm or failed), fall back to extractive
-      for (const cluster of selected) {
-        if (!llmResults.has(cluster.id as string)) llmResults.set(cluster.id as string, null);
-      }
-    }
+    const written = await this.writeLeadingClusters(selected, articlesByCluster);
 
     // The application routes on the slug, not the id.
     const topicUrl = `${appBaseUrl}/topics/${encodeURIComponent(topic.slug)}`;
@@ -166,7 +159,7 @@ export class BriefSnapshotRenderer {
     ];
 
     const sections = selected.map((cluster) =>
-      this.renderCluster(cluster, articlesByCluster.get(cluster.id as string) ?? [], llmResults.get(cluster.id as string) ?? null),
+      this.renderCluster(cluster, articlesByCluster.get(cluster.id as string) ?? [], written.get(cluster.id as string) ?? null),
     );
 
     return {
@@ -194,29 +187,92 @@ export class BriefSnapshotRenderer {
   }
 
   /**
+   * The written summaries for the leading Clusters of the plan, and nothing for
+   * the rest.
+   *
+   * Absence is the fallback, not a stored null: a Cluster that is missing from
+   * this map is quoted, whether it was never asked about, the call failed, or
+   * there was nothing quotable in the answer. So there is exactly one thing a
+   * caller has to check and one way for a brief to degrade.
+   *
+   * A summary with no bullets is treated as no summary at all, whoever produced
+   * it. A Cluster is shown with a heading and some bullets, so a heading over an
+   * empty list is not a shorter brief, it is a broken one — and the Cluster's own
+   * extractive summary is both a better heading and the thing every other surface
+   * shows for it.
+   *
+   * The plan is sliced first and the slice is what is iterated, so the number of
+   * calls is a property of the plan rather than of how a counter happened to
+   * break — a brief cannot be billed for more Clusters than were asked for.
+   */
+  private async writeLeadingClusters(
+    selected: readonly Cluster[],
+    articlesByCluster: ReadonlyMap<string, readonly Article[]>,
+  ): Promise<ReadonlyMap<string, LLMSummaryOutput>> {
+    const client = this.deps.llmClient;
+    if (!client) return new Map();
+
+    const leading = selected.slice(0, this.deps.maxLlmClusters ?? DEFAULT_MAX_LLM_CLUSTERS);
+    const budgetMs = this.deps.briefLlmTimeoutMs ?? DEFAULT_BRIEF_LLM_TIMEOUT_MS;
+    const startedAt = this.deps.clock.now().getTime();
+    const written = new Map<string, LLMSummaryOutput>();
+
+    for (const cluster of leading) {
+      // Measured before the call rather than after, so a budget that is already
+      // spent does not start one more, and so a call in flight is the last thing
+      // a brief waits for rather than the first thing it can be cut short of.
+      if (this.deps.clock.now().getTime() - startedAt > budgetMs) break;
+
+      const id = cluster.id as string;
+      try {
+        const summary = await client.generateSummary(
+          cluster.title,
+          cluster.summary,
+          (articlesByCluster.get(id) ?? []).map((a) => ({
+            url: a.url,
+            title: a.title,
+            body: a.body,
+          })),
+        );
+        if (summary && summary.bulletPoints.length > 0) written.set(id, summary);
+      } catch {
+        // A client that throws is the same shape as one that declines: this
+        // Cluster is quoted. The rest of the brief is not the casualty of one
+        // call, so the loop carries on.
+      }
+    }
+
+    return written;
+  }
+
+  /**
    * One Cluster: its heading, its one-liner, and its bullets.
    *
-   * Both paths — generated and extractive — put a link on every bullet that has
-   * one to point at. The generated path is given the Article each bullet came
-   * from; the extractive path has only a sentence, so it looks the sentence up
-   * against the Cluster's own Articles. A bullet with no linkable origin is
-   * still quoted, in plain text, because dropping it would quietly shorten a
-   * brief the plan says includes it.
+   * Both paths — written and quoted — put a link on every bullet that has one to
+   * point at. The written path is given the Article each bullet came from; the
+   * quoted path has only a sentence, so it looks the sentence up against the
+   * Cluster's own Articles. A bullet with no linkable origin is still quoted,
+   * in plain text, because dropping it would quietly shorten a brief the plan
+   * says includes it.
+   *
+   * The prose and the bullets fall back separately, because they arrive
+   * separately: an answer with bullets and no one-liner gets the Cluster's own
+   * one-liner as its prose, because dropping that would replace a sentence a
+   * Source wrote with a bare title.
    */
   private renderCluster(
-    cluster: { readonly title: string; readonly summary: string; readonly bulletPoints: readonly string[] },
+    cluster: Pick<Cluster, 'title' | 'summary' | 'bulletPoints'>,
     articles: readonly Article[],
-    llmResult: LLMSummaryOutput | null,
+    written: LLMSummaryOutput | null,
   ): { html: string; text: string } {
-    const heading = (llmResult ? llmResult.summary || cluster.title : cluster.title).trim();
-    const bullets: { text: string; url: string | null }[] = llmResult
-      ? llmResult.bulletPoints.map((b) => ({ text: b.text, url: safeExternalUrl(b.articleUrl) }))
+    const oneLiner = (written?.summary || cluster.summary).trim();
+    const heading = (written?.summary || cluster.title).trim();
+    const bullets: { text: string; url: string | null }[] = written
+      ? written.bulletPoints.map((b) => ({ text: b.text, url: safeExternalUrl(b.articleUrl) }))
       : cluster.bulletPoints.map((b) => ({
           text: b,
           url: safeExternalUrl(articleUrlForStatement(b, articles) ?? ''),
         }));
-
-    const oneLiner = llmResult ? '' : cluster.summary;
 
     return {
       html:

@@ -28,7 +28,19 @@ function readerNames(source: string): string[] {
   ].sort();
 }
 
-const DIRECT_ENV_READ_RE = /process\.env\s*[.[]/;
+/**
+ * Reading configuration without one of the readers: `process.env.SOMETHING` or
+ * `process.env['SOMETHING']`.
+ */
+const DIRECT_ENV_READ_RE = /process\s*\.\s*env\s*[.[]/;
+
+/**
+ * The same read, laundered: a bare `process.env` handed to something other than a
+ * reader. A default of `opts.env ?? process.env` reads exactly as much
+ * configuration as a direct subscript does, and nothing about the document would
+ * have said so.
+ */
+const BARE_ENV_READ_RE = /process\s*\.\s*env(?!\s*[,)\[])/;
 
 /** Every variable name assigned in a dotenv file. */
 function dotenvKeys(file: string): string[] {
@@ -54,12 +66,11 @@ describe('configuration surface', () => {
 
   it('reads configuration in exactly one module', () => {
     // Tests are excluded: a test may set or read process.env to exercise a reader.
-    const offenders = SOURCES.filter(
-      (file) =>
-        file !== ENV_MODULE &&
-        !file.endsWith('.test.ts') &&
-        DIRECT_ENV_READ_RE.test(readFileSync(file, 'utf8')),
-    );
+    const offenders = SOURCES.filter((file) => {
+      if (file === ENV_MODULE || file.endsWith('.test.ts')) return false;
+      const text = readFileSync(file, 'utf8');
+      return DIRECT_ENV_READ_RE.test(text) || BARE_ENV_READ_RE.test(text);
+    });
     expect(offenders).toEqual([]);
   });
 
@@ -68,6 +79,8 @@ describe('configuration surface', () => {
       'APP_BASE_URL',
       'BRIEFS_ENABLED',
       'BRIEFS_INTERVAL_MS',
+      'BRIEF_GENERATED_CLUSTERS',
+      'BRIEF_MAX_CLUSTERS',
       'COOKIE_SECURE',
       'DATABASE_URL',
       'DEV_TOOLS_ENABLED',

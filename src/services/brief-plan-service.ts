@@ -38,6 +38,13 @@ export interface BriefPlanServiceDeps {
   readonly appBaseUrl: string;
   readonly clock: Clock;
   readonly random: RandomSource;
+  /**
+   * How many Clusters a plan of this Topic carries. A default rather than a
+   * constant so a deployment can carry more of a busy Topic than the five a
+   * reader is assumed to want, and the renderer's written top-N follows the plan
+   * rather than the other way round.
+   */
+  readonly maxClusters?: number | undefined;
 }
 
 export interface CreateBriefPlanInput {
@@ -68,7 +75,10 @@ export class BriefPlanService {
 
   async createPlan(input: CreateBriefPlanInput): Promise<BriefPlan> {
     const clusters = await this.deps.clusterRepo.listByTopicId(input.topicId);
-    const selected = planClusters(clusters, input.maxClusters ?? DEFAULT_MAX_CLUSTERS);
+    const selected = planClusters(
+      clusters,
+      input.maxClusters ?? this.deps.maxClusters ?? DEFAULT_MAX_CLUSTERS,
+    );
 
     const plan: BriefPlan = {
       id: this.deps.random.uuid(),

@@ -69,8 +69,12 @@ function secretValueFromAssignment(line: string): string | null {
   if (value.length < MIN_SECRET_LENGTH) return null;
   if (looksLikePlaceholder(value)) return null;
   // An interpolation, a process lookup, or a computed value is not a credential
-  // written down in the source.
+  // written down in the source. Anything that is not a plain literal is a
+  // computed value: a name that merely ends in `API_KEY` is a name, and what
+  // follows it is code — `{ OPENAI_API_KEY: opts.apiKey }` is a lookup, not a
+  // key. Only a literal is something somebody could have pasted in.
   if (/^[$({]/.test(value) || value.includes('(')) return null;
+  if (!/^[\w.~+/=@-]+$/.test(value)) return null;
   return value;
 }
 

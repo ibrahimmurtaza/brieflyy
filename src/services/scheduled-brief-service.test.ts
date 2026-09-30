@@ -78,7 +78,7 @@ const schedulerWith = (
         briefPlanRepo: new DrizzleBriefPlanRepo(db),
         briefSnapshotRepo: new DrizzleBriefSnapshotRepo(db),
         emailDeliveryRepo: new DrizzleEmailDeliveryRepo(db),
-        renderer: new BriefSnapshotRenderer({ clusterRepo, topicRepo }),
+        renderer: new BriefSnapshotRenderer({ clusterRepo, topicRepo, clock: clock.clock }),
         emailTransport: over,
         appBaseUrl: APP_BASE_URL,
         clock: clock.clock,

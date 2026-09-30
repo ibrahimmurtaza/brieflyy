@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { BriefSnapshotRenderer } from '../../src/services/brief-snapshot-renderer.js';
 import { EMPTY_SIGNATURE } from '../../src/domain/story-signature.js';
+import { systemClock } from '../../src/domain/clock.js';
 import type { LLMSummaryOutput } from '../../src/domain/llm.js';
 import { writeFileSync, unlinkSync } from 'fs';
 import { tmpdir } from 'os';
@@ -63,6 +64,7 @@ const mockTopicRepo = {
 
 test('BriefSnapshot with LLM summary renders clickable bullet links', async ({ page }) => {
   const renderer = new BriefSnapshotRenderer({
+    clock: systemClock,
     clusterRepo: createMockClusterRepo(),
     topicRepo: mockTopicRepo,
     llmClient: new MockLLMClient() as any,
@@ -94,6 +96,7 @@ test('an extractive bullet is a real link too, not just the generated ones', asy
   // and a browser is the only place "is this actually clickable" gets answered
   // rather than asserted about a string.
   const renderer = new BriefSnapshotRenderer({
+    clock: systemClock,
     clusterRepo: {
       ...createMockClusterRepo(),
       listByTopicId: async () => [

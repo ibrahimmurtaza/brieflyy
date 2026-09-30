@@ -9,6 +9,7 @@ import { loadServerConfig } from './env.js';
 import { GoogleOAuthClient } from './oauth/google-client.js';
 import { HttpFeedFetcher } from './ingest/http-feed-fetcher.js';
 import { systemHttpClient } from './ingest/system-http-client.js';
+import { createLLMSummaryClient } from './services/llm-summary-service.js';
 import type { FeedFetcher } from './ingest/feed-fetcher.js';
 
 async function main(): Promise<void> {
@@ -22,6 +23,16 @@ async function main(): Promise<void> {
     driver: config.emailTransport,
     defaultFrom: config.emailFrom,
     resendApiKey: config.resendApiKey,
+  });
+
+  // The written half of a brief, or nothing at all. Held here rather than built
+  // by the factory because whether this deployment has one is a decision about
+  // the deployment: with no key, every brief is built from the extractive
+  // summary, which is quotable by construction, and the brief job has nothing to
+  // fail on and nothing to report.
+  const llmSummaryClient = createLLMSummaryClient({
+    apiKey: config.openaiApiKey,
+    endpointUrl: config.openaiApiUrl,
   });
 
   let oauthClient = undefined;
@@ -47,6 +58,9 @@ async function main(): Promise<void> {
     oauthClient,
     feedFetcher,
     devToolsEnabled: config.devToolsEnabled,
+    ...(llmSummaryClient ? { llmSummaryClient } : {}),
+    briefMaxClusters: config.briefMaxClusters,
+    briefGeneratedClusters: config.briefGeneratedClusters,
     ingestConfig: {
       intervalMs: config.ingestIntervalMs,
       backoffBaseMs: config.ingestBackoffBaseMs,

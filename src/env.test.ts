@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { loadServerConfig, readBool, readEnum, readInt, readString } from './env.js';
+import {
+  loadServerConfig,
+  readBool,
+  readEnum,
+  readInt,
+  readNonNegativeInt,
+  readString,
+} from './env.js';
 
 const MINIMAL: Record<string, string> = {
   DATABASE_URL: 'file:./brieflyy.db',
@@ -63,6 +70,18 @@ describe('env readers', () => {
     expect(readInt({ PORT: ' 8080 ' }, 'PORT', 3000)).toBe(8080);
     expect(() => readInt({ PORT: 'eighty' }, 'PORT', 3000)).toThrow(/PORT/);
     expect(() => readInt({ PORT: '80.5' }, 'PORT', 3000)).toThrow(/PORT/);
+  });
+
+  it('reads a count that cannot be negative, and refuses one that is', () => {
+    // A negative count is a setting that looks accepted and then means the
+    // opposite of what it says — a slice of a plan would drop its last entry
+    // rather than its first — so it fails at boot like any other value the
+    // application cannot make sense of.
+    expect(readNonNegativeInt({ X: '0' }, 'X', 5)).toBe(0);
+    expect(readNonNegativeInt({ X: ' 3 ' }, 'X', 5)).toBe(3);
+    expect(readNonNegativeInt({}, 'X', 5)).toBe(5);
+    expect(() => readNonNegativeInt({ X: '-1' }, 'X', 5)).toThrow(/X/);
+    expect(() => readNonNegativeInt({ X: 'lots' }, 'X', 5)).toThrow(/X/);
   });
 });
 
@@ -127,6 +146,56 @@ describe('loadServerConfig', () => {
     expect(() =>
       loadServerConfig({ ...MINIMAL, INGEST_INTERVAL_MS: 'soon' }),
     ).toThrow(/INGEST_INTERVAL_MS/);
+  });
+
+  it('carries five Clusters of a brief and writes the top five of them', () => {
+    const config = loadServerConfig(MINIMAL);
+    expect(config.briefMaxClusters).toBe(5);
+    expect(config.briefGeneratedClusters).toBe(5);
+  });
+
+  it('reads how many Clusters a brief carries, and how many of them are written', () => {
+    // Two settings rather than one: the plan's size is a reading decision, and
+    // the written top-N is a cost decision. A deployment that carries more of a
+    // busy Topic than it wants to pay to write says so here.
+    const config = loadServerConfig({
+      ...MINIMAL,
+      BRIEF_MAX_CLUSTERS: '8',
+      BRIEF_GENERATED_CLUSTERS: '3',
+    });
+    expect(config.briefMaxClusters).toBe(8);
+    expect(config.briefGeneratedClusters).toBe(3);
+  });
+
+  it('lets a deployment switch the written path off without unsetting a key', () => {
+    expect(
+      loadServerConfig({
+        ...MINIMAL,
+        OPENAI_API_KEY: 'sk-test',
+        BRIEF_GENERATED_CLUSTERS: '0',
+      }).briefGeneratedClusters,
+    ).toBe(0);
+  });
+
+  it('refuses a Cluster count it cannot make sense of, naming the variable', () => {
+    expect(() => loadServerConfig({ ...MINIMAL, BRIEF_MAX_CLUSTERS: '-1' })).toThrow(
+      /BRIEF_MAX_CLUSTERS/,
+    );
+    expect(() => loadServerConfig({ ...MINIMAL, BRIEF_GENERATED_CLUSTERS: 'many' })).toThrow(
+      /BRIEF_GENERATED_CLUSTERS/,
+    );
+  });
+
+  it('reads the summary provider credential, or nothing when there is none', () => {
+    expect(loadServerConfig(MINIMAL).openaiApiKey).toBeUndefined();
+    expect(loadServerConfig(MINIMAL).openaiApiUrl).toBe('https://api.openai.com/v1/chat/completions');
+    const configured = loadServerConfig({
+      ...MINIMAL,
+      OPENAI_API_KEY: ' sk-test ',
+      OPENAI_API_URL: 'https://llm.internal/chat',
+    });
+    expect(configured.openaiApiKey).toBe('sk-test');
+    expect(configured.openaiApiUrl).toBe('https://llm.internal/chat');
   });
 
   it('registers the dev tools outside production, and not in it', () => {

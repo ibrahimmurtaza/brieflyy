@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { BriefPlanService } from './brief-plan-service.js';
+import { BriefPlanService, type BriefPlanServiceDeps } from './brief-plan-service.js';
 import { BriefSnapshotRenderer } from './brief-snapshot-renderer.js';
 import { DrizzleBriefPlanRepo } from '../repos/brief-plan-repo.js';
 import { DrizzleBriefSnapshotRepo } from '../repos/brief-snapshot-repo.js';
@@ -35,8 +35,8 @@ interface Harness {
   readonly clock: TestClock;
   /** Row counts, for the things a test asserts were or were not written. */
   count(table: string): number;
-  /** The same service against a different transport, for the failure path. */
-  serviceWith(transport: EmailTransport): BriefPlanService;
+  /** The same service with one thing changed, for the other paths. */
+  serviceWith(over: Partial<BriefPlanServiceDeps>): BriefPlanService;
 }
 
 let harness: Harness;
@@ -55,21 +55,22 @@ beforeEach(() => {
   void new DrizzleUserRepo(db).insert(makeUser({ id: 'user-1' }));
   void topicRepo.insert(makeTopic({ id: 'topic-1', userId: 'user-1', title: 'World news' }));
 
-  const serviceWith = (over: EmailTransport): BriefPlanService =>
+  const serviceWith = (over: Partial<BriefPlanServiceDeps>): BriefPlanService =>
     new BriefPlanService({
       clusterRepo,
       briefPlanRepo: planRepo,
       briefSnapshotRepo: snapshotRepo,
       emailDeliveryRepo: deliveryRepo,
-      renderer: new BriefSnapshotRenderer({ clusterRepo, topicRepo }),
-      emailTransport: over,
+      renderer: new BriefSnapshotRenderer({ clusterRepo, topicRepo, clock: clock.clock }),
+      emailTransport: transport,
       appBaseUrl: APP_BASE_URL,
       clock: clock.clock,
       random: deterministicRandom,
+      ...over,
     });
 
   harness = {
-    service: serviceWith(transport),
+    service: serviceWith({}),
     transport,
     planRepo,
     snapshotRepo,
@@ -135,6 +136,31 @@ describe('BriefPlanService.createPlan', () => {
     const plan = await harness.service.createPlan({ ...SEND, maxClusters: 1 });
 
     expect(plan.clusterIds).toEqual(['c-fast']);
+  });
+
+  it('carries as many Clusters as the deployment configured, not a fixed five', async () => {
+    // The plan's size is a deployment's answer to how much reading a reader of
+    // this Topic wants, and the renderer's written top-N is then a slice of it.
+    // Hardcoding the plan at five made the two numbers the same by accident, so
+    // neither could be moved without moving the other.
+    for (let i = 0; i < 7; i++) {
+      await harness.clusterRepo.insert(
+        makeCluster({
+          id: `c-${i}`,
+          topicId: 'topic-1',
+          title: `Story ${i}`,
+          velocity: i,
+        }),
+      );
+    }
+
+    const wide = harness.serviceWith({ maxClusters: 7 });
+
+    expect((await wide.createPlan(SEND)).clusterIds).toHaveLength(7);
+    // A second plan of the same Topic is a different moment, and the store keys
+    // plans on the moment they were made.
+    harness.clock.advance(1000);
+    expect((await harness.service.createPlan(SEND)).clusterIds).toHaveLength(5);
   });
 });
 
@@ -238,7 +264,10 @@ describe('BriefPlanService.sendBrief', () => {
       },
     };
 
-    await expect(harness.serviceWith(refusing).sendBrief(SEND)).rejects.toThrow('provider down');
+    await expect(harness.serviceWith({ emailTransport: refusing }).sendBrief(SEND)).rejects.toThrow(
+      'provider down',
+    );
+
 
     // A delivery is the record that a brief reached a User. Writing one for a
     // send that failed would report a delivery that never happened, and the

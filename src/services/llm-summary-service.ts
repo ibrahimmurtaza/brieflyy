@@ -3,27 +3,34 @@ import type {
   LLMSummaryOutput,
   LLMBulletPoint,
 } from '../domain/llm.js';
-import { readOptionalString, readString } from '../env.js';
+import { readOptionalString, readString, type EnvSource } from '../env.js';
 import { OPENAI_API_URL_DEFAULT } from '../config.js';
 
 export interface LLMSummaryServiceOptions {
-  readonly timeoutMs?: number;
-  readonly apiKey?: string;
-  readonly endpointUrl?: string;
-  /** Where to read configuration from; defaults to the process environment. */
-  readonly env?: Readonly<Record<string, string | undefined>>;
+  readonly timeoutMs?: number | undefined;
+  /** The credential, resolved by the caller. Absent means the path is switched off. */
+  readonly apiKey?: string | undefined;
+  readonly endpointUrl?: string | undefined;
 }
 
+/**
+ * Talks to the provider, and knows nothing about where any of it came from.
+ *
+ * The environment is read by `createLLMSummaryClient` rather than here, so this
+ * is a plain object a test can build and the composition root is the only thing
+ * that has to know what a deployment configured. No key is not a failure either:
+ * it is the answer that this deployment does not write briefs, and the renderer
+ * is told so before a brief is ever built.
+ */
 export class OpenAILLMSummaryService implements LLMSummaryClient {
   private readonly timeoutMs: number;
   private readonly apiKey: string | undefined;
   private readonly endpointUrl: string;
 
   constructor(opts: LLMSummaryServiceOptions = {}) {
-    const env = opts.env ?? process.env;
     this.timeoutMs = opts.timeoutMs ?? 8000;
-    this.apiKey = opts.apiKey ?? readOptionalString(env, 'OPENAI_API_KEY');
-    this.endpointUrl = opts.endpointUrl ?? readString(env, 'OPENAI_API_URL', OPENAI_API_URL_DEFAULT);
+    this.apiKey = opts.apiKey;
+    this.endpointUrl = opts.endpointUrl ?? OPENAI_API_URL_DEFAULT;
   }
 
   async generateSummary(
@@ -104,4 +111,38 @@ export class OpenAILLMSummaryService implements LLMSummaryClient {
       return null;
     }
   }
+}
+
+/**
+ * The written path as the deployment has configured it, or nothing at all.
+ *
+ * Absent rather than a client that returns null, because the renderer reads a
+ * missing client as "do not spend this brief's budget finding out" and reads a
+ * null as "this one Cluster fell back". A key that is absent is a deliberate
+ * configuration — a brief built entirely from the extractive summary is a
+ * complete brief, quotable by construction — so it is answered where the
+ * application is wired rather than once per Cluster once per brief.
+ *
+ * Both sources go through the same reader, so a key of whitespace is the same
+ * thing here as it is everywhere else configuration is read: unset. A client
+ * built from one would spend a brief's budget authenticating as `Bearer   `.
+ */
+export function createLLMSummaryClient(
+  opts: LLMSummaryServiceOptions & {
+    /** Where the deployment's configuration is read from. Defaults to nothing set. */
+    readonly env?: EnvSource | undefined;
+  } = {},
+): LLMSummaryClient | null {
+  const env = opts.env ?? {};
+  const apiKey =
+    readOptionalString({ OPENAI_API_KEY: opts.apiKey }, 'OPENAI_API_KEY') ??
+    readOptionalString(env, 'OPENAI_API_KEY');
+  if (apiKey === undefined) return null;
+
+  const { env: _env, ...options } = opts;
+  return new OpenAILLMSummaryService({
+    ...options,
+    apiKey,
+    endpointUrl: options.endpointUrl ?? readString(env, 'OPENAI_API_URL', OPENAI_API_URL_DEFAULT),
+  });
 }
