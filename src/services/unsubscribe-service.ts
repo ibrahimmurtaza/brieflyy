@@ -31,11 +31,25 @@ export type UnsubscribeOutcome =
       readonly userId: UserId;
       /** The Topic stopped, or null when the whole User was opted out. */
       readonly topicId: TopicId | null;
-      readonly at: Date;
     }
   | { readonly status: 'invalid'; readonly reason: UnsubscribeRefusal };
 
 export type ResubscribeOutcome = { status: 'ok' } | { status: 'not_yours' };
+
+/**
+ * Whether this Topic's brief is currently being withheld.
+ *
+ * Both scopes, in one place, because a page offering to send a brief by hand and
+ * a route deciding whether to honour it have to agree: an offer the next page
+ * refuses is worse than no offer, and the two answers were once written out
+ * separately.
+ */
+export function isEmailStopped(input: {
+  readonly userUnsubscribedAt: Date | null;
+  readonly topicUnsubscribedAt: Date | null;
+}): boolean {
+  return input.userUnsubscribedAt !== null || input.topicUnsubscribedAt !== null;
+}
 
 /**
  * Stopping the mail.
@@ -68,11 +82,6 @@ export class UnsubscribeService {
   /** Stop every brief for the User the token belongs to. */
   unsubscribeFromAll(token: string): Promise<UnsubscribeOutcome> {
     return this.spend('global', token);
-  }
-
-  /** When this User opted out of every brief, or null while they want them. */
-  async globalOptOutAt(userId: UserId): Promise<Date | null> {
-    return (await this.deps.userRepo.getById(userId))?.unsubscribedAt ?? null;
   }
 
   /**
@@ -116,10 +125,13 @@ export class UnsubscribeService {
     token: string,
   ): Promise<UnsubscribeOutcome> {
     const now = this.deps.clock.now();
-    const delivery =
-      scope === 'this_topic'
-        ? await this.deps.emailDeliveryRepo.findByUnsubscribeToken(token)
-        : await this.deps.emailDeliveryRepo.findByGlobalUnsubscribeToken(token);
+    // Which token a scope spends, and which column it writes, are the same
+    // decision, so they are made once here rather than re-branched on at each
+    // place the scope is mentioned.
+    const perTopic = scope === 'this_topic';
+    const delivery = perTopic
+      ? await this.deps.emailDeliveryRepo.findByUnsubscribeToken(token)
+      : await this.deps.emailDeliveryRepo.findByGlobalUnsubscribeToken(token);
     if (delivery === null) return { status: 'invalid', reason: 'unknown_token' };
 
     // Measured from when the brief was sent rather than from now, so the window
@@ -134,7 +146,7 @@ export class UnsubscribeService {
       return { status: 'invalid', reason: 'already_used' };
     }
 
-    const topicId = scope === 'this_topic' ? delivery.topicId : null;
+    const topicId = perTopic ? delivery.topicId : null;
     if (topicId === null) {
       await this.deps.userRepo.setUnsubscribedAt(delivery.userId, now);
     } else {
@@ -163,6 +175,6 @@ export class UnsubscribeService {
       throw err;
     }
 
-    return { status: 'ok', scope, userId: delivery.userId, topicId, at: now };
+    return { status: 'ok', scope, userId: delivery.userId, topicId };
   }
 }

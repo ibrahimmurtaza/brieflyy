@@ -8,6 +8,7 @@ import type {
 
 import { layout } from '../pages/layout.js';
 import type { CurrentAuth } from '../auth/auth-service.js';
+import { UNSUBSCRIBE_ALL_PATH, UNSUBSCRIBE_TOPIC_PATH } from '../services/unsubscribe-links.js';
 
 /**
  * How much of the application a route exposes. Every route declares one, and
@@ -32,11 +33,13 @@ export const PUBLIC_ROUTES: ReadonlySet<string> = new Set([
   'GET /api/onboarding/templates',
   // The links a brief carries. Public because the token in the URL is the whole
   // authorisation: a reader following a link in their inbox is by definition not
-  // signed in, and the token decides whose subscription changes.
-  'GET /unsubscribe/topic',
-  'POST /unsubscribe/topic',
-  'GET /unsubscribe/all',
-  'POST /unsubscribe/all',
+  // signed in, and the token decides whose subscription changes. Named rather
+  // than written out, because a path spelled here and again where the route is
+  // registered is a public surface that can drift from the one that exists.
+  `GET ${UNSUBSCRIBE_TOPIC_PATH}`,
+  `POST ${UNSUBSCRIBE_TOPIC_PATH}`,
+  `GET ${UNSUBSCRIBE_ALL_PATH}`,
+  `POST ${UNSUBSCRIBE_ALL_PATH}`,
 ]);
 
 declare module 'fastify' {

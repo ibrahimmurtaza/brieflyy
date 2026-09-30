@@ -299,6 +299,29 @@ describe('following the link in a browser', () => {
     expect(settings.statusCode).toBe(200);
   });
 
+  it('names no Topic rather than naming "undefined", when the Topic is gone', async () => {
+    await sendBrief();
+    const { topic } = harness.sentTokens();
+    // The reader removed the Topic after the brief went out and only then
+    // followed the link, so the token resolves to a Topic that no longer does.
+    // A soft delete keeps the row, so the delivery the token names is still
+    // there and the unsubscribe is still real.
+    harness.driver
+      .prepare(`UPDATE topics SET removed_at = ? WHERE id = 'topic-1'`)
+      .run(NOW.getTime());
+
+    const res = await harness.app.inject({
+      method: 'GET',
+      url: `/unsubscribe/topic?token=${encodeURIComponent(topic)}`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    // A page reading "You have stopped undefined briefs" is the kind of thing a
+    // reader screenshots and sends to support.
+    expect(res.body).not.toContain('undefined');
+    expect(res.body).toContain('You have stopped all Brieflyy emails');
+  });
+
   it('says what happened rather than showing an error, when the token is spent', async () => {
     await sendBrief();
     const { topic } = harness.sentTokens();

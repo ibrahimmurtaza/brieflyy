@@ -38,7 +38,12 @@ import { DrizzleTopicRepo } from '../../src/repos/topic-repo.js';
 import { makeCluster, makeTopic } from '../../src/testing/fixtures.js';
 import type { SourceId, StoryId, TopicCategory, TopicOrigin } from '../../src/domain/types.js';
 import { E2E_BASE_URL, E2E_PORT } from './base-url.js';
-import { E2E_EMAIL, E2E_SESSION_ID } from './fixture-data.js';
+import {
+  E2E_ALL_UNSUBSCRIBE_TOKEN,
+  E2E_EMAIL,
+  E2E_SESSION_ID,
+  E2E_TOPIC_UNSUBSCRIBE_TOKEN,
+} from './fixture-data.js';
 
 const HOST = '127.0.0.1';
 const NOW = new Date();
@@ -168,6 +173,84 @@ await clusterRepo.insert(
   }),
   ['e2e-story-1' as StoryId],
 );
+
+/**
+ * A brief that really went out, with tokens the specs know.
+ *
+ * The unsubscribe routes are public and the token is the whole authorisation, so
+ * the only honest way for a spec to reach them is the way a reader does: by
+ * following a link out of an email. The spec process cannot reach into this
+ * server's memory to read a token the way the vitest suite does, so the delivery
+ * is written here with the tokens `fixture-data.ts` exports, and the spec uses
+ * them as the links they are — same columns, same lookups, same route.
+ *
+ * Written on `fusion-energy` rather than `world-news` so that a spec spending the
+ * per-Topic token stops a brief no other spec reads.
+ */
+insert(
+  `INSERT INTO brief_plans (id, topic_id, user_id, created_at, cluster_ids)
+   VALUES ('e2e-brief-plan-1', 'fusion-energy', ?, ?, ?)`,
+  USER_ID,
+  NOW.getTime() - DAY,
+  '["e2e-cluster-1"]',
+);
+insert(
+  `INSERT INTO brief_snapshots (id, brief_plan_id, user_id, topic_id, created_at, html, text, unsubscribe_token, global_unsubscribe_token)
+   VALUES ('e2e-snapshot-1', 'e2e-brief-plan-1', ?, 'fusion-energy', ?, '<p>A brief</p>', 'A brief', ?, ?)`,
+  USER_ID,
+  NOW.getTime() - DAY,
+  E2E_TOPIC_UNSUBSCRIBE_TOKEN,
+  E2E_ALL_UNSUBSCRIBE_TOKEN,
+);
+insert(
+  `INSERT INTO email_deliveries (id, user_id, brief_snapshot_id, topic_id, sent_at, unsubscribe_token, global_unsubscribe_token)
+   VALUES ('e2e-delivery-1', ?, 'e2e-snapshot-1', 'fusion-energy', ?, ?, ?)`,
+  USER_ID,
+  NOW.getTime() - DAY,
+  E2E_TOPIC_UNSUBSCRIBE_TOKEN,
+  E2E_ALL_UNSUBSCRIBE_TOKEN,
+);
+
+/**
+ * Put the unsubscribe state back, so each spec starts from a reader who still
+ * wants their mail.
+ *
+ * A token is single-use by design, and the specs share one server process. That
+ * makes a spent token a fact about the whole run rather than about one spec: the
+ * first spec to follow a link would leave every later one looking at a reader who
+ * has already unsubscribed. This exists only here, in the fixture server, rather
+ * than in the application — the single-use property is the product's, and a reset
+ * route in `src/` would be a way to spend the same token twice.
+ */
+app.post('/e2e/reset-unsubscribe', async (_req, reply) => {
+  insert(`UPDATE users SET unsubscribed_at = NULL WHERE id = ?`, USER_ID);
+  insert(`UPDATE topics SET unsubscribed_at = NULL WHERE user_id = ?`, USER_ID);
+  insert(`DELETE FROM unsubscribes`);
+  return reply.code(204).send();
+});
+
+/**
+ * Soft-remove a Topic, the way a User does from `/topics`.
+ *
+ * A removal keeps the row, so the delivery a token was minted for still resolves
+ * and the unsubscribe is still real — which is the state that made a
+ * confirmation page read "You have stopped undefined briefs": the Topic id
+ * resolved, and the Topic behind it did not.
+ */
+app.post<{ Body: { id?: string } }>('/e2e/remove-topic', async (req, reply) => {
+  const id = (req.body ?? {}).id;
+  if (typeof id !== 'string') return reply.code(400).send();
+  insert(`UPDATE topics SET removed_at = ? WHERE id = ?`, NOW.getTime(), id);
+  return reply.code(204).send();
+});
+
+/** Undo a soft removal, so the removal spec does not affect the ones after it. */
+app.post<{ Body: { id?: string } }>('/e2e/restore-topic', async (req, reply) => {
+  const id = (req.body ?? {}).id;
+  if (typeof id !== 'string') return reply.code(400).send();
+  insert(`UPDATE topics SET removed_at = NULL WHERE id = ?`, id);
+  return reply.code(204).send();
+});
 
 await app.listen({ port: E2E_PORT, host: HOST });
 console.log(`e2e: listening on ${E2E_BASE_URL} (session cookie ${SESSION_COOKIE_NAME}=${E2E_SESSION_ID})`);

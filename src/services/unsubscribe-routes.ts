@@ -10,7 +10,11 @@ import type {
   UnsubscribeRefusal,
   UnsubscribeService,
 } from './unsubscribe-service.js';
-import { UNSUBSCRIBE_ALL_PATH, UNSUBSCRIBE_TOPIC_PATH } from './unsubscribe-links.js';
+import {
+  EMAIL_BRIEFS_PATH,
+  UNSUBSCRIBE_ALL_PATH,
+  UNSUBSCRIBE_TOPIC_PATH,
+} from './unsubscribe-links.js';
 
 export interface UnsubscribeRoutesOptions {
   readonly unsubscribeService: UnsubscribeService;
@@ -188,11 +192,14 @@ function confirmationPage(input: {
     <div class="error-summary" role="alert">
       <p>${escapeHtml(humanRefusal(outcome.reason))}</p>
     </div>
-    <p class="actions"><a class="button" href="/settings/briefs">Manage your emails</a></p>`,
+    <p class="actions"><a class="button" href="${EMAIL_BRIEFS_PATH}">Manage your emails</a></p>`,
     });
   }
 
-  const subject = input.scope === 'this_topic' ? input.topic?.title : null;
+  // `?? null`, not just `?.`: a removed Topic still resolves a token, so this
+  // page really does get asked to name a Topic that no longer exists, and a
+  // subject of `undefined` would read "You have stopped undefined briefs".
+  const subject = input.scope === 'this_topic' ? (input.topic?.title ?? null) : null;
   const headline =
     subject === null
       ? 'You have stopped all Brieflyy emails'
@@ -209,6 +216,6 @@ function confirmationPage(input: {
     body: `    <h1>${escapeHtml(headline)}</h1>
     <div class="callout callout--success" role="status"><p>${escapeHtml(what)}</p></div>
     <p>Changed your mind? You can turn them back on at any time.</p>
-    <p class="actions"><a class="button" href="/settings/briefs">Manage your emails</a></p>`,
+    <p class="actions"><a class="button" href="${EMAIL_BRIEFS_PATH}">Manage your emails</a></p>`,
   });
 }

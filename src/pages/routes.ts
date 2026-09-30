@@ -17,7 +17,10 @@ import type { TopicRepo } from '../repos/topic-repo.js';
 import type { FeedbackRepo } from '../repos/feedback-repo.js';
 import type { BriefSnapshotRepo } from '../repos/brief-snapshot-repo.js';
 import type { BriefPlanService } from '../services/brief-plan-service.js';
-import type { UnsubscribeService } from '../services/unsubscribe-service.js';
+import {
+  isEmailStopped,
+  type UnsubscribeService,
+} from '../services/unsubscribe-service.js';
 import { EMAIL_BRIEFS_PATH } from '../services/unsubscribe-links.js';
 import { layout } from './layout.js';
 import {
@@ -187,16 +190,16 @@ export async function registerPageRoutes(
           .send();
       }
       const userId = req.auth.user.id;
-      const [topics, optedOutAt] = await Promise.all([
-        opts.onboardingService.listTopics(userId),
-        opts.unsubscribeService.globalOptOutAt(userId),
-      ]);
+      // The global opt-out is read off the session rather than fetched again: the
+      // User is loaded on every authenticated request, so the value this page
+      // needs is already in hand and a second query would only ever agree with it.
+      const topics = await opts.onboardingService.listTopics(userId);
       const settings = await opts.onboardingService.getDeliveryTime(userId);
       return reply.type('text/html').send(
         emailBriefsPage({
           email: req.auth.account.email,
           topics,
-          optedOutAt,
+          optedOutAt: req.auth.user.unsubscribedAt,
           // The User's own timezone, so a date on this page is a date they would
           // have written. Falls back to UTC for a User who has not set a time,
           // which says nothing about where they are rather than guessing.
@@ -370,7 +373,12 @@ export async function registerPageRoutes(
       // to be emailed and then presses the button asking to be emailed has not
       // unsubscribed, they have asked for one. So it is honoured — but the page
       // says what happened instead of silently sending.
-      if (req.auth.user.unsubscribedAt !== null || topic.unsubscribedAt !== null) {
+      if (
+        isEmailStopped({
+          userUnsubscribedAt: req.auth.user.unsubscribedAt,
+          topicUnsubscribedAt: topic.unsubscribedAt,
+        })
+      ) {
         return reply
           .code(302)
           .header('location', `${EMAIL_BRIEFS_PATH}?changed=blocked`)
@@ -520,8 +528,10 @@ export async function registerPageRoutes(
           briefJustSent: req.query.brief === 'sent',
           // The button to send a brief by hand is only honest while the User
           // still wants these emails; the route refuses either way.
-          emailsStopped:
-            req.auth.user.unsubscribedAt !== null || topic.unsubscribedAt !== null,
+          emailsStopped: isEmailStopped({
+            userUnsubscribedAt: req.auth.user.unsubscribedAt,
+            topicUnsubscribedAt: topic.unsubscribedAt,
+          }),
         }),
       );
     },
