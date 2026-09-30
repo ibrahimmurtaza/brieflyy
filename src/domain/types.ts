@@ -285,6 +285,16 @@ export interface EmailDelivery {
   readonly sentAt: Date;
   readonly unsubscribeToken: string;
   readonly globalUnsubscribeToken: string;
+  /**
+   * What writing this brief cost.
+   *
+   * Held here rather than only on a pass of the daily job, because a brief is
+   * also sent by hand from the Topic page and a counter only the job kept would
+   * have nothing to say about those. It is also the only place the number belongs:
+   * not on the BriefSnapshot, which is a document a User reads and which is
+   * served forever, and not in a log, because nothing reads a log.
+   */
+  readonly generation: BriefGeneration;
 }
 
 export type UnsubscribeScope = 'this_topic' | 'global';
@@ -333,11 +343,49 @@ export interface BriefRun {
 }
 
 /**
+ * What producing one brief cost, and what it got for it.
+ *
+ * The written path degrades quietly on purpose — no credential, a failed call, a
+ * spent budget, a citation that did not hold — so without this a brief that is
+ * entirely quoted looks exactly like one that is entirely written, and nobody
+ * finds out the feature has stopped working until a User says so. Each number is
+ * a primitive nothing else can be derived from, and together they tell the whole
+ * story: nothing asked and nothing written is the path switched off, asked and
+ * nothing written is the path broken, asked and all written is healthy.
+ */
+export interface BriefGeneration {
+  /** Clusters that got a written one-liner and bullets. */
+  readonly writtenClusters: number;
+  /** Requests made against the provider. Zero when none is configured. */
+  readonly calls: number;
+  /**
+   * Written bullets thrown away for failing the citation contract. Counted by the
+   * client, because the client is the only thing that ever sees them.
+   */
+  readonly discardedBullets: number;
+}
+
+/**
+ * Nothing asked, nothing written, nothing dropped.
+ *
+ * The answer for a brief whose deployment has no summary client, and the default
+ * for a delivery recorded without a report. A pass of the daily job builds a
+ * mutable one of these and adds to it, which is the one thing this is not for.
+ */
+export const NO_GENERATION: BriefGeneration = {
+  writtenClusters: 0,
+  calls: 0,
+  discardedBullets: 0,
+};
+
+/**
  * One pass of the daily job, and the whole of what is observable about it.
  *
  * A pass that finds nobody due reports zero of each rather than nothing at all,
  * because a job that has run and sent nothing is a different thing from a job
- * that is not running, and only the first is worth seeing.
+ * that is not running, and only the first is worth seeing. The written half is
+ * counted here for the same reason: a pass that sent briefs and wrote none of
+ * them has told an operator nothing until it says so itself.
  */
 export interface BriefJobRun {
   readonly id: string;
@@ -347,6 +395,8 @@ export interface BriefJobRun {
   readonly sentCount: number;
   /** Briefs owed and not sent this pass, however many Users were unaffected. */
   readonly failureCount: number;
+  /** What every brief this pass sent cost to write, added up. */
+  readonly generation: BriefGeneration;
 }
 
 export interface FeedbackEvent {

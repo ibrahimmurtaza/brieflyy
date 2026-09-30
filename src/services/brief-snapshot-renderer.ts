@@ -1,4 +1,5 @@
-import type { Article, BriefPlan, Cluster } from '../domain/types.js';
+import type { Article, BriefGeneration, BriefPlan, Cluster } from '../domain/types.js';
+import { NO_GENERATION } from '../domain/types.js';
 import type { ClusterRepo } from '../repos/cluster-repo.js';
 import type { TopicRepo } from '../repos/topic-repo.js';
 import type { LLMSummaryClient, LLMSummaryOutput } from '../domain/llm.js';
@@ -6,6 +7,10 @@ import type { Clock } from '../domain/clock.js';
 import { articleUrlForStatement } from '../domain/cluster-text.js';
 import { escapeHtml } from '../domain/html.js';
 import { safeExternalUrl } from '../domain/url.js';
+import {
+  BRIEF_GENERATED_CLUSTERS_DEFAULT,
+  BRIEF_GENERATION_BUDGET_MS_DEFAULT,
+} from '../config.js';
 import {
   allUnsubscribeUrl,
   oneClickHeaders,
@@ -30,6 +35,14 @@ import {
    * without them, whatever its body says.
    */
   readonly headers: Readonly<Record<string, string>>;
+  /**
+   * What writing it cost. Part of what rendering produced rather than of the
+   * document, and never stored on the snapshot: a brief is a thing a User reads,
+   * and how many calls the machine made to assemble it is not part of it. It is
+   * returned because the written path fails quietly by design, and the only place
+   * that can be noticed is the job that sent the brief.
+   */
+  readonly generation: BriefGeneration;
 }
 
 /**
@@ -69,8 +82,7 @@ export interface BriefSnapshotRendererDeps {
   readonly maxLlmClusters?: number | undefined;
   /**
    * How long one brief's writing may take before the rest of it is quoted
-   * instead. Defaults to fifteen seconds, which is longer than a slow call and
-   * shorter than a reader waiting.
+   * instead. Defaults to the shared brief budget.
    */
   readonly briefLlmTimeoutMs?: number | undefined;
   /**
@@ -83,12 +95,6 @@ export interface BriefSnapshotRendererDeps {
    */
   readonly topicRepo: TopicRepo;
 }
-
-/** How many Clusters of a brief are written rather than quoted. */
-const DEFAULT_MAX_LLM_CLUSTERS = 5;
-
-/** How long one brief's writing may take before the rest of it is quoted instead. */
-const DEFAULT_BRIEF_LLM_TIMEOUT_MS = 15_000;
 
 export class BriefSnapshotRenderer {
   constructor(private readonly deps: BriefSnapshotRendererDeps) {}
@@ -131,7 +137,10 @@ export class BriefSnapshotRenderer {
       );
     }
 
-    const written = await this.writeLeadingClusters(selected, articlesByCluster);
+    const { summaries, generation } = await this.writeLeadingClusters(
+      selected,
+      articlesByCluster,
+    );
 
     // The application routes on the slug, not the id.
     const topicUrl = `${appBaseUrl}/topics/${encodeURIComponent(topic.slug)}`;
@@ -159,7 +168,7 @@ export class BriefSnapshotRenderer {
     ];
 
     const sections = selected.map((cluster) =>
-      this.renderCluster(cluster, articlesByCluster.get(cluster.id as string) ?? [], written.get(cluster.id as string) ?? null),
+      this.renderCluster(cluster, articlesByCluster.get(cluster.id as string) ?? [], summaries.get(cluster.id as string) ?? null),
     );
 
     return {
@@ -183,15 +192,16 @@ export class BriefSnapshotRenderer {
         unsubscribeLinks,
       }),
       headers: oneClickHeaders(unsubscribeUrls),
+      generation,
     };
   }
 
   /**
-   * The written summaries for the leading Clusters of the plan, and nothing for
-   * the rest.
+   * The written summaries for the leading Clusters of the plan, and what getting
+   * them cost.
    *
    * Absence is the fallback, not a stored null: a Cluster that is missing from
-   * this map is quoted, whether it was never asked about, the call failed, or
+   * `summaries` is quoted, whether it was never asked about, the call failed, or
    * there was nothing quotable in the answer. So there is exactly one thing a
    * caller has to check and one way for a brief to degrade.
    *
@@ -199,23 +209,31 @@ export class BriefSnapshotRenderer {
    * it. A Cluster is shown with a heading and some bullets, so a heading over an
    * empty list is not a shorter brief, it is a broken one — and the Cluster's own
    * extractive summary is both a better heading and the thing every other surface
-   * shows for it.
+   * shows for it. The bullets it lost are still counted, because a Cluster
+   * quietly losing every one of them is the thing worth being able to see.
    *
    * The plan is sliced first and the slice is what is iterated, so the number of
    * calls is a property of the plan rather than of how a counter happened to
-   * break — a brief cannot be billed for more Clusters than were asked for.
+   * break — a brief cannot be billed for more Clusters than were asked for. A
+   * written top-N larger than the plan carries writes the whole plan, which is
+   * the only reading of the two numbers that means anything.
    */
   private async writeLeadingClusters(
     selected: readonly Cluster[],
     articlesByCluster: ReadonlyMap<string, readonly Article[]>,
-  ): Promise<ReadonlyMap<string, LLMSummaryOutput>> {
+  ): Promise<{ summaries: ReadonlyMap<string, LLMSummaryOutput>; generation: BriefGeneration }> {
     const client = this.deps.llmClient;
-    if (!client) return new Map();
+    if (!client) return { summaries: new Map(), generation: NO_GENERATION };
 
-    const leading = selected.slice(0, this.deps.maxLlmClusters ?? DEFAULT_MAX_LLM_CLUSTERS);
-    const budgetMs = this.deps.briefLlmTimeoutMs ?? DEFAULT_BRIEF_LLM_TIMEOUT_MS;
+    const leading = selected.slice(
+      0,
+      this.deps.maxLlmClusters ?? BRIEF_GENERATED_CLUSTERS_DEFAULT,
+    );
+    const budgetMs = this.deps.briefLlmTimeoutMs ?? BRIEF_GENERATION_BUDGET_MS_DEFAULT;
     const startedAt = this.deps.clock.now().getTime();
-    const written = new Map<string, LLMSummaryOutput>();
+    const summaries = new Map<string, LLMSummaryOutput>();
+    let calls = 0;
+    let discardedBullets = 0;
 
     for (const cluster of leading) {
       // Measured before the call rather than after, so a budget that is already
@@ -224,6 +242,9 @@ export class BriefSnapshotRenderer {
       if (this.deps.clock.now().getTime() - startedAt > budgetMs) break;
 
       const id = cluster.id as string;
+      // Counted before the call, so a client that throws still cost a request. A
+      // call that fails is the most expensive kind to under-report.
+      calls += 1;
       try {
         const summary = await client.generateSummary(
           cluster.title,
@@ -234,7 +255,9 @@ export class BriefSnapshotRenderer {
             body: a.body,
           })),
         );
-        if (summary && summary.bulletPoints.length > 0) written.set(id, summary);
+        if (summary === null) continue;
+        discardedBullets += summary.discardedBullets;
+        if (summary.bulletPoints.length > 0) summaries.set(id, summary);
       } catch {
         // A client that throws is the same shape as one that declines: this
         // Cluster is quoted. The rest of the brief is not the casualty of one
@@ -242,7 +265,10 @@ export class BriefSnapshotRenderer {
       }
     }
 
-    return written;
+    return {
+      summaries,
+      generation: { writtenClusters: summaries.size, calls, discardedBullets },
+    };
   }
 
   /**

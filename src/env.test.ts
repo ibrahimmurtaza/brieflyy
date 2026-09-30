@@ -198,6 +198,54 @@ describe('loadServerConfig', () => {
     expect(configured.openaiApiUrl).toBe('https://llm.internal/chat');
   });
 
+  it('bounds how long a brief may be writing, so a deployment can move either end', () => {
+    // Hardcoded bounds are a deployment's answer that it cannot change: the
+    // provider gets slower, or a User's schedule is tighter, and the number that
+    // decides which Clusters a brief quotes rather than writes is not theirs.
+    const defaults = loadServerConfig(MINIMAL);
+    expect(defaults.briefGenerationCallTimeoutMs).toBe(8000);
+    expect(defaults.briefGenerationBudgetMs).toBe(15000);
+
+    const tuned = loadServerConfig({
+      ...MINIMAL,
+      BRIEF_GENERATION_CALL_TIMEOUT_MS: '3000',
+      BRIEF_GENERATION_BUDGET_MS: '45000',
+    });
+    expect(tuned.briefGenerationCallTimeoutMs).toBe(3000);
+    expect(tuned.briefGenerationBudgetMs).toBe(45000);
+  });
+
+  it('refuses a call timeout that could spend the whole budget on its own', () => {
+    // The budget is a promise a brief makes to a User. If one call can overrun
+    // it, the budget is a number that only exists on paper, and the difference
+    // between the two settings is a setting that can be got wrong silently.
+    expect(() =>
+      loadServerConfig({
+        ...MINIMAL,
+        BRIEF_GENERATION_CALL_TIMEOUT_MS: '20000',
+        BRIEF_GENERATION_BUDGET_MS: '15000',
+      }),
+    ).toThrow(/BRIEF_GENERATION_CALL_TIMEOUT_MS.*BRIEF_GENERATION_BUDGET_MS/);
+    // Equal is the boundary and it holds: a call that uses exactly the budget
+    // leaves nothing for the next one, which is a brief that quotes its tail.
+    expect(
+      loadServerConfig({
+        ...MINIMAL,
+        BRIEF_GENERATION_CALL_TIMEOUT_MS: '15000',
+        BRIEF_GENERATION_BUDGET_MS: '15000',
+      }).briefGenerationCallTimeoutMs,
+    ).toBe(15000);
+  });
+
+  it('refuses a bound it cannot make sense of, naming the variable', () => {
+    expect(() =>
+      loadServerConfig({ ...MINIMAL, BRIEF_GENERATION_CALL_TIMEOUT_MS: 'soon' }),
+    ).toThrow(/BRIEF_GENERATION_CALL_TIMEOUT_MS/);
+    expect(() => loadServerConfig({ ...MINIMAL, BRIEF_GENERATION_BUDGET_MS: '-1' })).toThrow(
+      /BRIEF_GENERATION_BUDGET_MS/,
+    );
+  });
+
   it('registers the dev tools outside production, and not in it', () => {
     expect(
       loadServerConfig({ ...MINIMAL, NODE_ENV: 'production' }).devToolsEnabled,

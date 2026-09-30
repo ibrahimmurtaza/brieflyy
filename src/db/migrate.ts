@@ -244,7 +244,10 @@ CREATE TABLE IF NOT EXISTS email_deliveries (
   topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
   sent_at INTEGER NOT NULL,
   unsubscribe_token TEXT NOT NULL,
-  global_unsubscribe_token TEXT NOT NULL
+  global_unsubscribe_token TEXT NOT NULL,
+  written_clusters INTEGER NOT NULL DEFAULT 0,
+  generation_calls INTEGER NOT NULL DEFAULT 0,
+  discarded_bullets INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS email_deliveries_user_snapshot_idx ON email_deliveries (user_id, brief_snapshot_id);
 CREATE UNIQUE INDEX IF NOT EXISTS email_deliveries_unsubscribe_token_unique ON email_deliveries (unsubscribe_token);
@@ -278,7 +281,10 @@ CREATE TABLE IF NOT EXISTS brief_job_runs (
   started_at INTEGER NOT NULL,
   finished_at INTEGER NOT NULL,
   sent_count INTEGER NOT NULL,
-  failure_count INTEGER NOT NULL
+  failure_count INTEGER NOT NULL,
+  written_clusters INTEGER NOT NULL DEFAULT 0,
+  generation_calls INTEGER NOT NULL DEFAULT 0,
+  discarded_bullets INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS brief_job_runs_started_at_idx ON brief_job_runs (started_at);
 `;
@@ -652,6 +658,42 @@ const COLUMN_MIGRATIONS: readonly ColumnMigration[] = [
     table: 'topics',
     column: 'unsubscribed_at',
     ddl: `ALTER TABLE topics ADD COLUMN unsubscribed_at INTEGER`,
+  },
+  {
+    // What writing the brief a delivery carried cost. Zero for every delivery
+    // recorded before this existed, which is the truth about them: nothing had
+    // written a brief then, so there is nothing to say they spent.
+    table: 'email_deliveries',
+    column: 'written_clusters',
+    ddl: `ALTER TABLE email_deliveries ADD COLUMN written_clusters INTEGER NOT NULL DEFAULT 0`,
+  },
+  {
+    table: 'email_deliveries',
+    column: 'generation_calls',
+    ddl: `ALTER TABLE email_deliveries ADD COLUMN generation_calls INTEGER NOT NULL DEFAULT 0`,
+  },
+  {
+    table: 'email_deliveries',
+    column: 'discarded_bullets',
+    ddl: `ALTER TABLE email_deliveries ADD COLUMN discarded_bullets INTEGER NOT NULL DEFAULT 0`,
+  },
+  {
+    // What writing a pass's briefs cost. Zero for every pass recorded before this
+    // existed, which is the truth about them: nothing had written a brief then,
+    // so there is nothing to say they spent.
+    table: 'brief_job_runs',
+    column: 'written_clusters',
+    ddl: `ALTER TABLE brief_job_runs ADD COLUMN written_clusters INTEGER NOT NULL DEFAULT 0`,
+  },
+  {
+    table: 'brief_job_runs',
+    column: 'generation_calls',
+    ddl: `ALTER TABLE brief_job_runs ADD COLUMN generation_calls INTEGER NOT NULL DEFAULT 0`,
+  },
+  {
+    table: 'brief_job_runs',
+    column: 'discarded_bullets',
+    ddl: `ALTER TABLE brief_job_runs ADD COLUMN discarded_bullets INTEGER NOT NULL DEFAULT 0`,
   },
 ];
 

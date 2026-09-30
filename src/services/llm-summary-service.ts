@@ -4,7 +4,7 @@ import type {
   LLMBulletPoint,
 } from '../domain/llm.js';
 import { readOptionalString, readString, type EnvSource } from '../env.js';
-import { OPENAI_API_URL_DEFAULT } from '../config.js';
+import { BRIEF_GENERATION_CALL_TIMEOUT_MS_DEFAULT, OPENAI_API_URL_DEFAULT } from '../config.js';
 
 export interface LLMSummaryServiceOptions {
   readonly timeoutMs?: number | undefined;
@@ -28,7 +28,7 @@ export class OpenAILLMSummaryService implements LLMSummaryClient {
   private readonly endpointUrl: string;
 
   constructor(opts: LLMSummaryServiceOptions = {}) {
-    this.timeoutMs = opts.timeoutMs ?? 8000;
+    this.timeoutMs = opts.timeoutMs ?? BRIEF_GENERATION_CALL_TIMEOUT_MS_DEFAULT;
     this.apiKey = opts.apiKey;
     this.endpointUrl = opts.endpointUrl ?? OPENAI_API_URL_DEFAULT;
   }
@@ -104,9 +104,17 @@ export class OpenAILLMSummaryService implements LLMSummaryClient {
         })
         .filter((b): b is LLMBulletPoint => b !== null);
 
-      if (bulletPoints.length === 0) return null;
-
-      return { summary, bulletPoints };
+      // An answer with none of its bullets left is still an answer, and the count
+      // is the only thing anybody learns from a call like it. Returning null
+      // instead would throw that away and leave a Cluster that quietly lost every
+      // bullet looking exactly like one nobody asked about. The renderer quotes
+      // the Cluster on an answer with no bullets, so the reader sees the same
+      // thing either way.
+      return {
+        summary,
+        bulletPoints,
+        discardedBullets: bulletsRaw.length - bulletPoints.length,
+      };
     } catch {
       return null;
     }

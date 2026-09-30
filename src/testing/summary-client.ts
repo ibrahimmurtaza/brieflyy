@@ -23,6 +23,7 @@ export class RecordingSummaryClient implements LLMSummaryClient {
   private readonly ordinary = (call: RecordedSummaryCall): LLMSummaryOutput => ({
     summary: `Written summary of ${call.clusterTitle}`,
     bulletPoints: call.articleUrls.map((url) => ({ text: 'A written point.', articleUrl: url })),
+    discardedBullets: 0,
   });
 
   constructor(

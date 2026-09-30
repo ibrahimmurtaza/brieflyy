@@ -23,6 +23,8 @@ import {
   type TestClock,
 } from '../testing/test-clocks.js';
 import type { TopicId, UserId } from '../domain/types.js';
+import { NO_GENERATION } from '../domain/types.js';
+
 
 const SENT_AT = new Date('2026-09-02T12:00:00Z');
 const TOPIC_TOKEN = 'topic-token-for-topic-1';
@@ -105,6 +107,7 @@ beforeEach(async () => {
     sentAt: SENT_AT,
     unsubscribeToken: TOPIC_TOKEN,
     globalUnsubscribeToken: GLOBAL_TOKEN,
+    generation: NO_GENERATION,
   });
 
   harness = {
@@ -393,6 +396,7 @@ async function seedBrief(driver: SqliteDriver): Promise<void> {
     sentAt: SENT_AT,
     unsubscribeToken: TOPIC_TOKEN,
     globalUnsubscribeToken: GLOBAL_TOKEN,
+    generation: NO_GENERATION,
   });
 }
 

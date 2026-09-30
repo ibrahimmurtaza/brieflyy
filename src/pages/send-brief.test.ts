@@ -294,6 +294,51 @@ describe('HTTP: a brief with a configured summary client', () => {
     expect(client.callCount).toBe(1);
   });
 
+  it('keeps the count of what writing cost out of the brief it delivered', async () => {
+    // The counters are how a pass of the job says whether the written path ran.
+    // A BriefSnapshot is stored and served forever, so a number about how the
+    // machine built it has no business being in it — a User reading a brief from
+    // six months ago is reading the brief, not a build log. Asserted against the
+    // labels the status view uses, because "Clusters written: 1" would pass a
+    // test that only looked for the word "discarded".
+    const h = await signInWithTopic({ llmSummaryClient: new RecordingSummaryClient() });
+
+    await sendBrief(h);
+
+    const sent = briefsSentTo(h)[0]!;
+    for (const label of ['Clusters written', 'Write calls', 'Bullets discarded']) {
+      expect(sent.html, label).not.toContain(label);
+      expect(sent.text, label).not.toContain(label);
+    }
+  });
+
+  it('records what the send cost on the delivery, not on the brief', async () => {
+    // The row that has to carry it, and the reason the daily job is not the only
+    // one that can: this brief was sent by hand, from a button, and the job never
+    // heard of it. Without this a brief an operator triggered by hand would be
+    // the one brief whose cost nothing recorded.
+    const h = await signInWithTopic({ llmSummaryClient: new RecordingSummaryClient() });
+
+    await sendBrief(h);
+
+    const row = h.firstRow<{
+      written_clusters: number;
+      generation_calls: number;
+      discarded_bullets: number;
+      html_has_report: number;
+    }>(
+      `SELECT written_clusters, generation_calls, discarded_bullets,
+              (instr(brief_snapshots.html, 'Clusters written') > 0) AS html_has_report
+       FROM email_deliveries JOIN brief_snapshots
+         ON brief_snapshots.id = email_deliveries.brief_snapshot_id
+       LIMIT 1`,
+    );
+    expect(row?.written_clusters).toBe(1);
+    expect(row?.generation_calls).toBe(1);
+    expect(row?.discarded_bullets).toBe(0);
+    expect(row?.html_has_report).toBe(0);
+  });
+
   it('leaves the LivingBrief on the extractive summary', async () => {
     // The design decision the glossary records: a Cluster summary is quoted, and
     // what is written is written once, into a snapshot that does not change. The

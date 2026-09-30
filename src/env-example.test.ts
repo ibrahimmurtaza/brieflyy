@@ -80,6 +80,8 @@ describe('configuration surface', () => {
       'BRIEFS_ENABLED',
       'BRIEFS_INTERVAL_MS',
       'BRIEF_GENERATED_CLUSTERS',
+      'BRIEF_GENERATION_BUDGET_MS',
+      'BRIEF_GENERATION_CALL_TIMEOUT_MS',
       'BRIEF_MAX_CLUSTERS',
       'COOKIE_SECURE',
       'DATABASE_URL',

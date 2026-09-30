@@ -33,6 +33,7 @@ async function main(): Promise<void> {
   const llmSummaryClient = createLLMSummaryClient({
     apiKey: config.openaiApiKey,
     endpointUrl: config.openaiApiUrl,
+    timeoutMs: config.briefGenerationCallTimeoutMs,
   });
 
   let oauthClient = undefined;
@@ -61,6 +62,7 @@ async function main(): Promise<void> {
     ...(llmSummaryClient ? { llmSummaryClient } : {}),
     briefMaxClusters: config.briefMaxClusters,
     briefGeneratedClusters: config.briefGeneratedClusters,
+    briefGenerationBudgetMs: config.briefGenerationBudgetMs,
     ingestConfig: {
       intervalMs: config.ingestIntervalMs,
       backoffBaseMs: config.ingestBackoffBaseMs,

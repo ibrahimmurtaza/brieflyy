@@ -92,10 +92,25 @@ brief is quoted when a call fails or the brief's time budget is spent.
 Two counts, because they are two decisions: `BRIEF_MAX_CLUSTERS` is how much
 reading one brief carries, and `BRIEF_GENERATED_CLUSTERS` is how much of that is
 worth paying to write (`0` turns the written path off without unsetting the key).
-Both default to five. Every brief makes at most that many calls against the
-endpoint, each call is bounded by a token limit and an eight-second timeout, and
-the brief as a whole by fifteen seconds — past any of the three, the remaining
-Clusters are quoted instead.
+Both default to five, and a written top-N larger than the brief carries simply
+writes the whole brief. Two bounds on the writing itself,
+`BRIEF_GENERATION_CALL_TIMEOUT_MS` and `BRIEF_GENERATION_BUDGET_MS`, are the
+per-call and per-brief limits; the first may not exceed the second, and boot
+refuses a pair that does rather than leaving the budget unreachable.
+
+### Seeing whether it worked
+
+The written path fails quietly by design — no credential, a failed call, a spent
+budget, a citation that did not hold — and every one of those still produces a
+perfect brief, so nothing a User can see distinguishes a brief that was written
+from one that was quoted. `/admin/briefs` and `/api/briefs/status` therefore carry
+three counters per pass: Clusters written, write calls, and bullets discarded for
+failing the citation contract. They are three numbers rather than one status
+because they are three different problems — no calls and nothing written is a
+deployment that has not configured the feature, calls and nothing written is a
+feature that has stopped working, and written Clusters with discarded bullets is
+a feature working on answers nobody can check. Nothing about the counters reaches
+the document a User reads.
 
 ## Secrets
 

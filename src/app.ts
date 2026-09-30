@@ -125,10 +125,17 @@ export interface CreateAppOptions {
   readonly llmSummaryClient?: LLMSummaryClient | undefined;
   /**
    * How many Clusters of a brief are written rather than quoted. Absent means
-   * the renderer's own default, which is five; zero turns the written path off
-   * without unsetting a key.
+   * the shared default, which is five; zero turns the written path off without
+   * unsetting a key.
    */
   readonly briefGeneratedClusters?: number | undefined;
+  /**
+   * How long one brief's writing may take before the rest of it is quoted.
+   *
+   * The renderer's concern, and the only bound here: the per-call bound belongs
+   * to the client, which the caller built and already holds.
+   */
+  readonly briefGenerationBudgetMs?: number | undefined;
   /** How many Clusters one brief carries, most active first. Defaults to five. */
   readonly briefMaxClusters?: number | undefined;
   /** Believe `X-Forwarded-For`, so per-caller limits work behind a proxy. */
@@ -266,6 +273,9 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
             ...(opts.briefGeneratedClusters === undefined
               ? {}
               : { maxLlmClusters: opts.briefGeneratedClusters }),
+            ...(opts.briefGenerationBudgetMs === undefined
+              ? {}
+              : { briefLlmTimeoutMs: opts.briefGenerationBudgetMs }),
           }
         : {}),
     }),

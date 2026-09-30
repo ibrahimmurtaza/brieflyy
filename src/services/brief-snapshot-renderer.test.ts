@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { BriefSnapshotRenderer } from './brief-snapshot-renderer.js';
-import type { LLMSummaryClient, LLMSummaryOutput } from '../domain/llm.js';
 import { bulletsFrom, oneLinerFrom } from '../domain/cluster-text.js';
 import type { Article } from '../domain/types.js';
 import { systemClock } from '../domain/clock.js';
@@ -51,21 +50,6 @@ function clusterRepo(
   } as never;
 }
 
-class MockLLMClient implements LLMSummaryClient {
-  async generateSummary(
-    _clusterTitle: string,
-    _clusterSummary: string,
-    _articles: readonly { url: string; title: string; body: string }[],
-  ): Promise<LLMSummaryOutput | null> {
-    return {
-      summary: 'LLM generated summary',
-      bulletPoints: [
-        { text: 'Point one', articleUrl: 'https://example.com/article-1' },
-      ],
-    };
-  }
-}
-
 /**
  * `count` Clusters, each with its own title, one-liner, bullet and Article.
  *
@@ -95,20 +79,20 @@ function planOf(ids: readonly string[]): typeof PLAN {
 }
 
 describe('BriefSnapshotRenderer', () => {
-  it('renders LLM summary when available', async () => {
+  it('renders a written summary when there is one', async () => {
     const renderer = new BriefSnapshotRenderer({
       clock: systemClock,
       clusterRepo: clusterRepo([makeCluster()], {
         c1: [makeArticle({ id: 'article-1' })],
       }),
       topicRepo,
-      llmClient: new MockLLMClient(),
+      llmClient: new RecordingSummaryClient(),
       maxLlmClusters: 5,
     });
 
     const { html } = await renderer.render(PLAN as never, 'https://app', TOKENS);
-    expect(html).toContain('LLM generated summary');
-    expect(html).toContain('Point one');
+    expect(html).toContain('Written summary of Cluster 1');
+    expect(html).toContain('A written point.');
     expect(html).toContain('https://example.com/article-1');
   });
 
@@ -249,7 +233,7 @@ describe('BriefSnapshotRenderer generation', () => {
     const plan = aPlanOf(2);
     const client = new RecordingSummaryClient((call) =>
       call.clusterTitle === 'Story 0'
-        ? { summary: 'A heading with nothing under it.', bulletPoints: [] }
+        ? { summary: 'A heading with nothing under it.', bulletPoints: [], discardedBullets: 0 }
         : undefined,
     );
     const renderer = new BriefSnapshotRenderer({
@@ -274,6 +258,7 @@ describe('BriefSnapshotRenderer generation', () => {
     const client = new RecordingSummaryClient(() => ({
       summary: '',
       bulletPoints: [{ text: 'A point.', articleUrl: 'https://example.com/a-0' }],
+      discardedBullets: 0,
     }));
     const renderer = new BriefSnapshotRenderer({
       clock: systemClock,
@@ -300,6 +285,7 @@ describe('BriefSnapshotRenderer generation', () => {
       return {
         summary: `Written: ${call.clusterTitle}`,
         bulletPoints: [{ text: 'A point.', articleUrl: 'https://example.com/a-0' }],
+        discardedBullets: 0,
       };
     });
     const renderer = new BriefSnapshotRenderer({
@@ -329,6 +315,7 @@ describe('BriefSnapshotRenderer generation', () => {
         { text: 'First point.', articleUrl: 'https://example.com/a-1' },
         { text: 'Second point.', articleUrl: 'https://example.com/a-2' },
       ],
+      discardedBullets: 0,
     }));
     const renderer = new BriefSnapshotRenderer({
       clock: systemClock,
@@ -368,6 +355,7 @@ describe('BriefSnapshotRenderer generation', () => {
       llmClient: new RecordingSummaryClient(() => ({
         summary: 'Written.',
         bulletPoints: [{ text: 'A point.', articleUrl: 'javascript:alert(1)' }],
+        discardedBullets: 0,
       })),
     });
 
@@ -399,6 +387,146 @@ describe('BriefSnapshotRenderer generation', () => {
 
     expect(client.calls).toEqual([]);
     expect(html).toContain('Extractive 0');
+  });
+
+  it('writes the whole plan when the written top-N is larger than the plan', async () => {
+    // Two deployment settings, and this is the only reading of them together that
+    // means anything: a brief carries five Clusters and a deployment asks for
+    // eight written, so it gets five. Not an error and not clamped — the number
+    // that bounds the cost is the plan, and the number that bounds the content is
+    // the caller's, and either can be the smaller of the two.
+    const plan = aPlanOf(2);
+    const client = new RecordingSummaryClient();
+    const renderer = new BriefSnapshotRenderer({
+      clock: systemClock,
+      clusterRepo: clusterRepo(plan.clusters, plan.articles),
+      topicRepo,
+      llmClient: client,
+      maxLlmClusters: 8,
+    });
+
+    const { generation } = await renderer.render(
+      planOf(['c0', 'c1']) as never,
+      'https://app',
+      TOKENS,
+    );
+
+    expect(client.callCount).toBe(2);
+    expect(generation).toEqual({ writtenClusters: 2, calls: 2, discardedBullets: 0 });
+  });
+});
+
+describe('BriefSnapshotRenderer reports what writing a brief cost', () => {
+  it('reports nothing asked and nothing written when no client is configured', async () => {
+    // The state a deployment with no credential is in, and the one an operator
+    // most needs to be able to tell apart from a broken feature: both produce a
+    // perfect brief, and only one of them is what anybody meant.
+    const renderer = new BriefSnapshotRenderer({
+      clock: systemClock,
+      clusterRepo: clusterRepo(aPlanOf(3).clusters, aPlanOf(3).articles),
+      topicRepo,
+    });
+
+    const { generation } = await renderer.render(
+      planOf(['c0', 'c1', 'c2']) as never,
+      'https://app',
+      TOKENS,
+    );
+
+    expect(generation).toEqual({ writtenClusters: 0, calls: 0, discardedBullets: 0 });
+  });
+
+  it('counts the Clusters it wrote, the calls it spent, and nothing it lost', async () => {
+    const plan = aPlanOf(3);
+    const renderer = new BriefSnapshotRenderer({
+      clock: systemClock,
+      clusterRepo: clusterRepo(plan.clusters, plan.articles),
+      topicRepo,
+      llmClient: new RecordingSummaryClient(),
+      maxLlmClusters: 2,
+    });
+
+    const { generation } = await renderer.render(
+      planOf(['c0', 'c1', 'c2']) as never,
+      'https://app',
+      TOKENS,
+    );
+
+    // Two written of three carried: the third was never asked about, and the
+    // difference between the two numbers is the plan's tail, not a failure.
+    expect(generation).toEqual({ writtenClusters: 2, calls: 2, discardedBullets: 0 });
+  });
+
+  it('counts a call that failed, because a failed call is still a request', async () => {
+    // Under-reporting the calls is how a deployment that is being billed for
+    // requests ends up with a status view saying it asked for none.
+    const plan = aPlanOf(2);
+    const renderer = new BriefSnapshotRenderer({
+      clock: systemClock,
+      clusterRepo: clusterRepo(plan.clusters, plan.articles),
+      topicRepo,
+      llmClient: new RecordingSummaryClient((call) => {
+        if (call.clusterTitle === 'Story 0') throw new Error('the endpoint fell over');
+        return undefined;
+      }),
+    });
+
+    const { generation } = await renderer.render(
+      planOf(['c0', 'c1']) as never,
+      'https://app',
+      TOKENS,
+    );
+
+    expect(generation).toEqual({ writtenClusters: 1, calls: 2, discardedBullets: 0 });
+  });
+
+  it('counts the bullets a client threw away for citing something else', async () => {
+    // The signal the ticket asked for and the brief cannot carry: a Cluster
+    // losing bullets to a model citing things nobody checked looks, in the
+    // document, exactly like a Cluster that had fewer bullets to begin with.
+    const plan = aPlanOf(2);
+    const renderer = new BriefSnapshotRenderer({
+      clock: systemClock,
+      clusterRepo: clusterRepo(plan.clusters, plan.articles),
+      topicRepo,
+      llmClient: new RecordingSummaryClient((call) =>
+        call.clusterTitle === 'Story 0'
+          ? { summary: 'A line.', bulletPoints: [], discardedBullets: 3 }
+          : { summary: 'Another line.', bulletPoints: [], discardedBullets: 1 },
+      ),
+    });
+
+    const { generation } = await renderer.render(
+      planOf(['c0', 'c1']) as never,
+      'https://app',
+      TOKENS,
+    );
+
+    // Both Clusters were quoted — neither answer had a bullet in it — and the
+    // four bullets that were thrown away are still counted.
+    expect(generation).toEqual({ writtenClusters: 0, calls: 2, discardedBullets: 4 });
+  });
+
+  it('does not put what writing cost into the document it renders', async () => {
+    // A brief is a thing a User reads. How many calls the machine made to
+    // assemble it is not part of it, and a BriefSnapshot is stored and served
+    // forever, so a number in the HTML would outlive its usefulness. Asserted
+    // against the labels the status view uses, because a report reading
+    // "Clusters written: 1" would pass a test that only looked for one word.
+    const plan = aPlanOf(1);
+    const renderer = new BriefSnapshotRenderer({
+      clock: systemClock,
+      clusterRepo: clusterRepo(plan.clusters, plan.articles),
+      topicRepo,
+      llmClient: new RecordingSummaryClient(),
+    });
+
+    const { html, text } = await renderer.render(planOf(['c0']) as never, 'https://app', TOKENS);
+
+    for (const label of ['Clusters written', 'Write calls', 'Bullets discarded']) {
+      expect(html, label).not.toContain(label);
+      expect(text, label).not.toContain(label);
+    }
   });
 });
 

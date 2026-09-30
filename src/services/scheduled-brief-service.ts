@@ -2,6 +2,7 @@ import type { Clock } from '../domain/clock.js';
 import type { RandomSource } from '../domain/crypto.js';
 import { dueDeliverySlot } from '../domain/delivery-slot.js';
 import type {
+  BriefGeneration,
   BriefJobRun,
   BriefRun,
   DeliverySettings,
@@ -142,6 +143,10 @@ export class ScheduledBriefService {
     );
     let sentCount = 0;
     let failureCount = 0;
+    // A mutable one, unlike the shared zero a brief with no client reports: this
+    // is an accumulator, and the pass that sent nothing still has to be able to
+    // add to it.
+    const generation = { writtenClusters: 0, calls: 0, discardedBullets: 0 };
 
     for (const setting of settings) {
       if (optedOut.has(setting.userId)) continue;
@@ -155,7 +160,15 @@ export class ScheduledBriefService {
       for (const topic of topicsByUser.get(setting.userId) ?? []) {
         try {
           const sent = await this.sendIfOwed(setting, topic, slot);
-          if (sent) sentCount += 1;
+          if (sent === null) continue;
+          sentCount += 1;
+          // What this brief cost to write, added up. Counted here rather than read
+          // back from the brief, because a pass that sent nothing still reports
+          // zero of each, and a status view that cannot tell "wrote nothing" from
+          // "was never asked" is the thing this is for.
+          generation.writtenClusters += sent.writtenClusters;
+          generation.calls += sent.calls;
+          generation.discardedBullets += sent.discardedBullets;
         } catch (err) {
           failureCount += 1;
           console.error(
@@ -172,6 +185,7 @@ export class ScheduledBriefService {
       finishedAt: this.deps.clock.now(),
       sentCount,
       failureCount,
+      generation,
     };
     await this.deps.briefJobRunRepo.insert(run);
     // The table the status view reads is written every pass and read for the newest
@@ -184,21 +198,21 @@ export class ScheduledBriefService {
   }
 
   /**
-   * Answer one Topic's DeliverySlot, if it is still owed. False when it was
-   * already answered, which is the ordinary case for every pass after the one that
-   * sent it.
+   * Answer one Topic's DeliverySlot, if it is still owed, and say what writing
+   * that brief cost. Null when it was already answered, which is the ordinary case
+   * for every pass after the one that sent it.
    */
   private async sendIfOwed(
     settings: DeliverySettings,
     topic: Topic,
     slot: DeliverySlot,
-  ): Promise<boolean> {
+  ): Promise<BriefGeneration | null> {
     const already = await this.deps.briefRunRepo.findBySlot(
       settings.userId,
       topic.id,
       slot,
     );
-    if (already !== null) return false;
+    if (already !== null) return null;
 
     const account = await this.deps.accountRepo.getByUserId(settings.userId);
     if (account === null) {
@@ -209,7 +223,7 @@ export class ScheduledBriefService {
       throw new Error(`no account for user ${settings.userId}`);
     }
 
-    const { snapshot } = await this.deps.briefPlanService.sendBrief({
+    const { snapshot, generation } = await this.deps.briefPlanService.sendBrief({
       topicId: topic.id,
       userId: settings.userId,
       to: account.email,
@@ -227,7 +241,7 @@ export class ScheduledBriefService {
       briefSnapshotId: snapshot.id,
     };
     await this.deps.briefRunRepo.insert(run);
-    return true;
+    return generation;
   }
 
   /**

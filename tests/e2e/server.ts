@@ -36,6 +36,7 @@ import { DrizzleClusterRepo } from '../../src/repos/cluster-repo.js';
 import { DrizzleStoryRepo } from '../../src/repos/story-repo.js';
 import { DrizzleTopicRepo } from '../../src/repos/topic-repo.js';
 import { makeCluster, makeTopic } from '../../src/testing/fixtures.js';
+import { RecordingSummaryClient } from '../../src/testing/summary-client.js';
 import type { SourceId, StoryId, TopicCategory, TopicOrigin } from '../../src/domain/types.js';
 import { E2E_BASE_URL, E2E_PORT } from './base-url.js';
 import {
@@ -100,6 +101,11 @@ const app = await createApp({
   cookieSecure: false,
   clock: systemClock,
   devToolsEnabled: true,
+  // A summary client that writes, so a spec can follow a brief a User actually
+  // asked for rather than one a test assembled and wrote to a temp file. The
+  // same double the vitest suite uses, and a double for the same reason: the
+  // specs share this process and nothing in here may reach a provider.
+  llmSummaryClient: new RecordingSummaryClient(),
 });
 
 const topicRepo = new DrizzleTopicRepo(db);

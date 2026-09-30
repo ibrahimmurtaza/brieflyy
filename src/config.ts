@@ -29,6 +29,40 @@ export const MAGIC_LINK_RATE_LIMITS: MagicLinkRateLimits = {
 export const OPENAI_API_URL_DEFAULT = 'https://api.openai.com/v1/chat/completions';
 
 /**
+ * How many Clusters one brief carries, most active first.
+ *
+ * The reading decision, and the one the whole product shape follows from: a brief
+ * that carries more of a busy Topic is a longer email, and a reader is reading.
+ */
+export const BRIEF_MAX_CLUSTERS_DEFAULT = 5;
+
+/**
+ * How many of a brief's leading Clusters are written rather than quoted.
+ *
+ * The cost decision, and deliberately a second number rather than the first one:
+ * a deployment can carry more of a busy Topic than it wants to pay to write, and
+ * a larger written top-N than the brief carries simply writes the whole brief.
+ */
+export const BRIEF_GENERATED_CLUSTERS_DEFAULT = 5;
+
+/**
+ * How long one written summary may take before that Cluster falls back.
+ *
+ * Shorter than the budget below, because a call that can spend the whole budget
+ * on its own makes the budget a number that only exists on paper.
+ */
+export const BRIEF_GENERATION_CALL_TIMEOUT_MS_DEFAULT = 8000;
+
+/**
+ * How long one brief's writing may take before the rest of it is quoted instead.
+ *
+ * A brief is due to a User at their own DeliveryTime, and the schedule does not
+ * move for one slow call, so past this the remaining Clusters are quoted rather
+ * than the reader getting nothing.
+ */
+export const BRIEF_GENERATION_BUDGET_MS_DEFAULT = 15_000;
+
+/**
  * How long an unsubscribe link in a brief keeps working.
  *
  * Long enough that the link in a brief from a month ago still does what a reader

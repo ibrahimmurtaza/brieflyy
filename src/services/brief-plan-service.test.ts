@@ -19,6 +19,7 @@ import {
   resetDeterministic,
   type TestClock,
 } from '../testing/test-clocks.js';
+import { RecordingSummaryClient } from '../testing/summary-client.js';
 import type { TopicId, UserId } from '../domain/types.js';
 
 const NOW = new Date('2026-09-02T12:00:00Z');
@@ -32,6 +33,7 @@ interface Harness {
   readonly snapshotRepo: DrizzleBriefSnapshotRepo;
   readonly deliveryRepo: DrizzleEmailDeliveryRepo;
   readonly clusterRepo: DrizzleClusterRepo;
+  readonly topicRepo: DrizzleTopicRepo;
   readonly clock: TestClock;
   /** Row counts, for the things a test asserts were or were not written. */
   count(table: string): number;
@@ -76,6 +78,7 @@ beforeEach(() => {
     snapshotRepo,
     deliveryRepo,
     clusterRepo,
+    topicRepo,
     clock,
     count: (table: string): number => countRows(driver, table),
     serviceWith,
@@ -186,6 +189,32 @@ describe('BriefPlanService.sendBrief', () => {
     const { text = '' } = harness.transport.snapshot()[0]!;
     expect(text.indexOf('Fast story')).toBeLessThan(text.indexOf('Slow story'));
     expect(text).not.toContain('Old story');
+  });
+
+  it('reports what writing it cost, so the job that sent it can add it up', async () => {
+    // The report is the only way a pass of the job can tell a brief that was
+    // written from one that was quoted, and both are perfect briefs. It is
+    // carried out of the render rather than logged, because the caller is the
+    // only thing that knows a brief happened at all.
+    await seedClusters();
+    const client = new RecordingSummaryClient(() => ({
+      summary: 'A written line.',
+      bulletPoints: [{ text: 'A point.', articleUrl: 'https://example.com/a-1' }],
+      discardedBullets: 1,
+    }));
+    const service = harness.serviceWith({
+      renderer: new BriefSnapshotRenderer({
+        clusterRepo: harness.clusterRepo,
+        topicRepo: harness.topicRepo,
+        clock: harness.clock.clock,
+        llmClient: client,
+      }),
+    });
+
+    const { generation } = await service.sendBrief(SEND);
+
+    // Two Clusters in the fixture, so two of each.
+    expect(generation).toEqual({ writtenClusters: 2, calls: 2, discardedBullets: 2 });
   });
 
   it('stores the rendered brief rather than re-deriving it on view', async () => {

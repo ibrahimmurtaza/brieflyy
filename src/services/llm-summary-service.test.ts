@@ -80,6 +80,7 @@ describe('OpenAILLMSummaryService', () => {
     expect(result).toEqual({
       summary: 'A line.',
       bulletPoints: [{ text: 'A point.', articleUrl: 'https://example.com/a-1' }],
+      discardedBullets: 0,
     });
   });
 
@@ -129,10 +130,12 @@ describe('OpenAILLMSummaryService', () => {
     expect(body.length).toBeLessThan(50_000);
   });
 
-  it('keeps only the bullets that cite an Article in the Cluster', async () => {
+  it('keeps only the bullets that cite an Article in the Cluster, and says how many it dropped', async () => {
     // The whole point of the constraint: a brief that quotes a Source is making a
     // claim about what that Source wrote, and a URL from outside the Cluster is a
-    // citation of something nobody checked.
+    // citation of something nobody checked. The count is in the answer because a
+    // Cluster that quietly loses bullets is otherwise indistinguishable from one
+    // that never had any to lose.
     stubEndpoint(() =>
       completion(
         JSON.stringify({
@@ -152,9 +155,32 @@ describe('OpenAILLMSummaryService', () => {
       { text: 'Cites the first Article.', articleUrl: 'https://example.com/a-1' },
       { text: 'Cites the second Article.', articleUrl: 'https://example.com/a-2' },
     ]);
+    expect(result?.discardedBullets).toBe(1);
   });
 
-  it('discards a bullet that is not a text citing a URL at all', async () => {
+  it('answers with nothing but the count when every bullet cites outside the Cluster', async () => {
+    // An answer rather than a null, because the count is the only thing anybody
+    // learns from a call like this and a null would throw it away. The renderer
+    // quotes the Cluster on an answer with no bullets, so the two agree on what
+    // the reader sees and disagree about nothing.
+    stubEndpoint(() =>
+      completion(
+        JSON.stringify({
+          summary: 'A line.',
+          bulletPoints: [
+            { text: 'A stranger.', articleUrl: 'https://elsewhere.test/not-ours' },
+            { text: 'Another stranger.', articleUrl: 'https://elsewhere.test/also-not-ours' },
+          ],
+        }),
+      ),
+    );
+
+    const result = await aClient().generateSummary('Acme and Foo', '', ARTICLES);
+
+    expect(result).toEqual({ summary: 'A line.', bulletPoints: [], discardedBullets: 2 });
+  });
+
+  it('discards a bullet that is not a text citing a URL at all, and counts it', async () => {
     stubEndpoint(() =>
       completion(
         JSON.stringify({
@@ -173,22 +199,9 @@ describe('OpenAILLMSummaryService', () => {
     expect(result?.bulletPoints).toEqual([
       { text: 'Cites the first Article.', articleUrl: 'https://example.com/a-1' },
     ]);
-  });
-
-  it('returns null when every bullet cites something outside the Cluster', async () => {
-    // Null rather than a summary with no bullets: a Cluster whose bullets all
-    // failed the constraint has nothing quotable, and the caller falls back to
-    // the extractive summary rather than rendering a heading over an empty list.
-    stubEndpoint(() =>
-      completion(
-        JSON.stringify({
-          summary: 'A line.',
-          bulletPoints: [{ text: 'A stranger.', articleUrl: 'https://elsewhere.test/not-ours' }],
-        }),
-      ),
-    );
-
-    expect(await aClient().generateSummary('Acme and Foo', '', ARTICLES)).toBeNull();
+    // A bullet that is not a bullet failed the same contract a wrong citation
+    // did, and an operator watching the discarded count should see both.
+    expect(result?.discardedBullets).toBe(2);
   });
 
   it('returns null when the endpoint answers with an error', async () => {

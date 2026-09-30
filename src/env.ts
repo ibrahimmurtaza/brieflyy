@@ -8,7 +8,13 @@
  * setting must fail at boot, not disable the feature it controls.
  */
 
-import { OPENAI_API_URL_DEFAULT } from './config.js';
+import {
+  BRIEF_GENERATION_BUDGET_MS_DEFAULT,
+  BRIEF_GENERATION_CALL_TIMEOUT_MS_DEFAULT,
+  BRIEF_GENERATED_CLUSTERS_DEFAULT,
+  BRIEF_MAX_CLUSTERS_DEFAULT,
+  OPENAI_API_URL_DEFAULT,
+} from './config.js';
 
 export type EnvSource = Readonly<Record<string, string | undefined>>;
 
@@ -150,6 +156,14 @@ export interface ServerConfig {
    */
   readonly briefGeneratedClusters: number;
   /**
+   * How long one written summary may take before that Cluster falls back to its
+   * Cluster summary. Never more than `briefGenerationBudgetMs`, which is checked
+   * rather than assumed.
+   */
+  readonly briefGenerationCallTimeoutMs: number;
+  /** How long one brief's writing may take before the rest of it is quoted. */
+  readonly briefGenerationBudgetMs: number;
+  /**
    * The key that writes a brief's Clusters, or undefined when the deployment has
    * not configured one — in which case every brief is built from the extractive
    * summary, which is quotable by construction.
@@ -207,8 +221,22 @@ export function loadServerConfig(env: EnvSource): ServerConfig {
     ingestBackoffMaxMs: readInt(env, 'INGEST_BACKOFF_MAX_MS', 30 * 60 * 1000),
     briefsEnabled: readBool(env, 'BRIEFS_ENABLED', true),
     briefsIntervalMs: readInt(env, 'BRIEFS_INTERVAL_MS', 60 * 1000),
-    briefMaxClusters: readNonNegativeInt(env, 'BRIEF_MAX_CLUSTERS', 5),
-    briefGeneratedClusters: readNonNegativeInt(env, 'BRIEF_GENERATED_CLUSTERS', 5),
+    briefMaxClusters: readNonNegativeInt(env, 'BRIEF_MAX_CLUSTERS', BRIEF_MAX_CLUSTERS_DEFAULT),
+    briefGeneratedClusters: readNonNegativeInt(
+      env,
+      'BRIEF_GENERATED_CLUSTERS',
+      BRIEF_GENERATED_CLUSTERS_DEFAULT,
+    ),
+    briefGenerationCallTimeoutMs: readNonNegativeInt(
+      env,
+      'BRIEF_GENERATION_CALL_TIMEOUT_MS',
+      BRIEF_GENERATION_CALL_TIMEOUT_MS_DEFAULT,
+    ),
+    briefGenerationBudgetMs: readNonNegativeInt(
+      env,
+      'BRIEF_GENERATION_BUDGET_MS',
+      BRIEF_GENERATION_BUDGET_MS_DEFAULT,
+    ),
     openaiApiKey: readOptionalString(env, 'OPENAI_API_KEY'),
     openaiApiUrl: readString(env, 'OPENAI_API_URL', OPENAI_API_URL_DEFAULT),
     devToolsEnabled: readBool(env, 'DEV_TOOLS_ENABLED', !isProduction(env)),
@@ -217,6 +245,15 @@ export function loadServerConfig(env: EnvSource): ServerConfig {
     port: readInt(env, 'PORT', 3000),
     host: readString(env, 'HOST', '0.0.0.0'),
   };
+  if (config.briefGenerationCallTimeoutMs > config.briefGenerationBudgetMs) {
+    // The two bounds are one decision, so they are checked as one. A call that
+    // can outlive the budget makes the budget unreachable, and the difference
+    // between the settings becomes one that can be got wrong silently.
+    throw new Error(
+      'BRIEF_GENERATION_CALL_TIMEOUT_MS cannot be more than BRIEF_GENERATION_BUDGET_MS: ' +
+        'one call would be able to spend the whole budget on its own',
+    );
+  }
   if (config.oauthProvider === 'google') {
     if (config.googleOAuthClientId === undefined) {
       throw new Error('Missing required env var: GOOGLE_OAUTH_CLIENT_ID');
