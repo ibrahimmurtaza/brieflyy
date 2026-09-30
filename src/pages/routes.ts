@@ -190,16 +190,16 @@ export async function registerPageRoutes(
           .send();
       }
       const userId = req.auth.user.id;
-      const [topics, optedOutAt] = await Promise.all([
-        opts.onboardingService.listTopics(userId),
-        opts.unsubscribeService.globalOptOutAt(userId),
-      ]);
+      // The global opt-out is read off the session rather than fetched again: the
+      // User is loaded on every authenticated request, so the value this page
+      // needs is already in hand and a second query would only ever agree with it.
+      const topics = await opts.onboardingService.listTopics(userId);
       const settings = await opts.onboardingService.getDeliveryTime(userId);
       return reply.type('text/html').send(
         emailBriefsPage({
           email: req.auth.account.email,
           topics,
-          optedOutAt,
+          optedOutAt: req.auth.user.unsubscribedAt,
           // The User's own timezone, so a date on this page is a date they would
           // have written. Falls back to UTC for a User who has not set a time,
           // which says nothing about where they are rather than guessing.

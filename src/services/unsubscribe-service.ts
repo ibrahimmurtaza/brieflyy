@@ -31,7 +31,6 @@ export type UnsubscribeOutcome =
       readonly userId: UserId;
       /** The Topic stopped, or null when the whole User was opted out. */
       readonly topicId: TopicId | null;
-      readonly at: Date;
     }
   | { readonly status: 'invalid'; readonly reason: UnsubscribeRefusal };
 
@@ -85,11 +84,6 @@ export class UnsubscribeService {
     return this.spend('global', token);
   }
 
-  /** When this User opted out of every brief, or null while they want them. */
-  async globalOptOutAt(userId: UserId): Promise<Date | null> {
-    return (await this.deps.userRepo.getById(userId))?.unsubscribedAt ?? null;
-  }
-
   /**
    * Start one Topic sending again, if the caller owns it.
    *
@@ -131,10 +125,13 @@ export class UnsubscribeService {
     token: string,
   ): Promise<UnsubscribeOutcome> {
     const now = this.deps.clock.now();
-    const delivery =
-      scope === 'this_topic'
-        ? await this.deps.emailDeliveryRepo.findByUnsubscribeToken(token)
-        : await this.deps.emailDeliveryRepo.findByGlobalUnsubscribeToken(token);
+    // Which token a scope spends, and which column it writes, are the same
+    // decision, so they are made once here rather than re-branched on at each
+    // place the scope is mentioned.
+    const perTopic = scope === 'this_topic';
+    const delivery = perTopic
+      ? await this.deps.emailDeliveryRepo.findByUnsubscribeToken(token)
+      : await this.deps.emailDeliveryRepo.findByGlobalUnsubscribeToken(token);
     if (delivery === null) return { status: 'invalid', reason: 'unknown_token' };
 
     // Measured from when the brief was sent rather than from now, so the window
@@ -149,7 +146,7 @@ export class UnsubscribeService {
       return { status: 'invalid', reason: 'already_used' };
     }
 
-    const topicId = scope === 'this_topic' ? delivery.topicId : null;
+    const topicId = perTopic ? delivery.topicId : null;
     if (topicId === null) {
       await this.deps.userRepo.setUnsubscribedAt(delivery.userId, now);
     } else {
@@ -178,6 +175,6 @@ export class UnsubscribeService {
       throw err;
     }
 
-    return { status: 'ok', scope, userId: delivery.userId, topicId, at: now };
+    return { status: 'ok', scope, userId: delivery.userId, topicId };
   }
 }

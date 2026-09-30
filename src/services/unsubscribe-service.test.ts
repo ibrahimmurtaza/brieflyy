@@ -279,7 +279,10 @@ describe('UnsubscribeService, after a restart', () => {
   it('still knows the User opted out of everything', async () => {
     await harness.service.unsubscribeFromAll(GLOBAL_TOKEN);
 
-    expect(await harness.afterRestart().globalOptOutAt('user-1')).toEqual(SENT_AT);
+    // Read off the user row rather than through the service: the state is the
+    // column, and a test that asked the service would pass even if the only
+    // thing keeping it true were the service answering.
+    expect(harness.unsubscribedAtOf('user-1')).toEqual(SENT_AT);
   });
 });
 
