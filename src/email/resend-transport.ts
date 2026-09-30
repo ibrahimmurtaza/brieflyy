@@ -29,6 +29,7 @@ export class ResendEmailTransport implements EmailTransport {
       subject: string;
       text: string;
       html?: string;
+      headers?: Record<string, string>;
     } = {
       from,
       to: message.to,
@@ -37,6 +38,13 @@ export class ResendEmailTransport implements EmailTransport {
     };
     if (message.html !== undefined) {
       params.html = message.html;
+    }
+    // Carried rather than dropped: `List-Unsubscribe` is the only way a client
+    // learns it may render a one-click unsubscribe control, so a transport that
+    // silently dropped it would leave a brief that looks unsubscribeable and is
+    // not.
+    if (message.headers !== undefined) {
+      params.headers = { ...message.headers };
     }
     const result = await this.client.emails.send(params);
     if (result.error) {

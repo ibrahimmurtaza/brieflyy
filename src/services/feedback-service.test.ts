@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { createTestDb } from '../testing/test-db.js';
-import { makeCluster, makeTopic } from '../testing/fixtures.js';
+import { makeCluster, makeTopic, makeUser } from '../testing/fixtures.js';
 import { DrizzleClusterRepo } from '../repos/cluster-repo.js';
 import { DrizzleFeedbackRepo } from '../repos/feedback-repo.js';
 import { DrizzleTopicRepo } from '../repos/topic-repo.js';
@@ -18,12 +18,7 @@ describe('FeedbackService', () => {
     const topicRepo = new DrizzleTopicRepo(db);
     const clusterRepo = new DrizzleClusterRepo(db);
 
-    await userRepo.insert({
-      id: 'user-1',
-      createdAt: new Date('2026-01-01T00:00:00Z'),
-      onboardingState: 'completed',
-      tier: 'free',
-    });
+    await userRepo.insert(makeUser({ id: 'user-1', onboardingState: 'completed' }));
     await topicRepo.insert(makeTopic({ id: 'topic-1', userId: 'user-1' }));
     await clusterRepo.insert(makeCluster({ id: 'cluster-1', topicId: 'topic-1' }));
 

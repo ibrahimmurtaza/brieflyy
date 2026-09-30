@@ -30,6 +30,13 @@ export const PUBLIC_ROUTES: ReadonlySet<string> = new Set([
   'GET /auth/google/start',
   'GET /auth/google/callback',
   'GET /api/onboarding/templates',
+  // The links a brief carries. Public because the token in the URL is the whole
+  // authorisation: a reader following a link in their inbox is by definition not
+  // signed in, and the token decides whose subscription changes.
+  'GET /unsubscribe/topic',
+  'POST /unsubscribe/topic',
+  'GET /unsubscribe/all',
+  'POST /unsubscribe/all',
 ]);
 
 declare module 'fastify' {

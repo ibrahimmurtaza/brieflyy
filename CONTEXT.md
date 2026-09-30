@@ -6,7 +6,7 @@ A SaaS tool that aggregates content around user-specified topics, clusters relat
 
 ### Identity
 
-**User**: A human who has signed up for Brieflyy. One account = one human.
+**User**: A human who has signed up for Brieflyy. One account = one human. A User who has asked to stop receiving every brief carries an unsubscribed-at date; it is what the daily job reads to skip them.
 _Avoid_: customer, member, account holder
 
 **Account**: The authentication record for a User. Holds email, linked OAuth providers (Google), and active sessions.
@@ -23,7 +23,7 @@ _Avoid_: send time, schedule time
 **TopicTemplate**: A curated, shared definition in the Directory. Selecting a TopicTemplate clones it into a per-user Topic.
 _Avoid_: preset, default topic
 
-**Topic**: A user-scoped interest that scopes all aggregation, clustering, and briefing for a single user. Created from a TopicTemplate or from a free-form phrase. Has its own source list, cadence, and feedback history.
+**Topic**: A user-scoped interest that scopes all aggregation, clustering, and briefing for a single user. Created from a TopicTemplate or from a free-form phrase. Has its own source list, cadence, and feedback history. A Topic a User has unsubscribed from keeps an unsubscribed-at date and stops being emailed; it is not removed, and clearing the date starts it again.
 _Avoid_: subject, interest, feed
 
 **Source**: A news outlet or RSS feed in the curated Brieflyy registry. Each Topic has a curated default source list that the user can edit.
@@ -62,8 +62,14 @@ _Avoid_: feed, topic view
 **Brief**: The conceptual product artifact. A specific instance is either a BriefSnapshot (email) or a LivingBrief (in-app), both produced from a BriefPlan.
 _Avoid_: digest, summary, newsletter
 
-**EmailDelivery**: A record that a BriefSnapshot was emailed to a User. Carries per-topic unsubscribe state and an RFC 8058 one-click token. Distinct from the BriefSnapshot so a snapshot can be re-sent, re-linked, or unsubscribed from.
+**EmailDelivery**: A record that a BriefSnapshot was emailed to a User. Carries the per-Topic and global one-click unsubscribe tokens the brief went out with, and is what those tokens are looked up on. Distinct from the BriefSnapshot so a snapshot can be re-sent, re-linked, or unsubscribed from.
 _Avoid_: email log, sent mail
+
+**Unsubscribe**: One use of an unsubscribe link from a sent brief, recorded. Carries the UnsubscribeScope, the EmailDelivery the link arrived in, and the token that was spent. Single-use — the token is unique — and time-limited, so a link in a brief stays usable for as long as a reader would expect and no longer. The state the daily job honours is the unsubscribed-at date on the Topic or the User; the Unsubscribe is the record of the ask, and survives a resubscribe.
+_Avoid_: opt-out event, suppression record, bounce
+
+**UnsubscribeScope**: What an unsubscribe stops — one Topic or the whole User. The same two answers a FeedbackScope gives and spelled the same way, because they are the same question asked of different things, and two vocabularies for one distinction is one more thing a reader of the schema has to reconcile. The per-Topic one is `this_topic`, the whole-User one `global`.
+_Avoid_: level, breadth, kind
 
 **DeliverySlot**: The single instant a User's DeliveryTime falls on, for one local day in the User's own timezone. What the daily job compares the clock against, and what a BriefRun is keyed on. A reading that does not exist on a spring-forward day lands on the same half hour of the morning just after the change; a reading that happens twice on a fall-back day is the first of the two.
 _Avoid_: due time, cron time, send window

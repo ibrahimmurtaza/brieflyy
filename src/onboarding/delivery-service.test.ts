@@ -5,6 +5,7 @@ import { DrizzleDeliverySettingsRepo } from '../repos/delivery-settings-repo.js'
 import { DrizzleTopicTemplateRepo } from '../repos/directory-repo.js';
 import { DrizzleTopicRepo } from '../repos/topic-repo.js';
 import { DrizzleUserRepo } from '../repos/user-repo.js';
+import { makeUser } from '../testing/fixtures.js';
 import { createTestDb } from '../testing/test-db.js';
 import { applyDirectorySeed } from '../directory/seed.js';
 import { ConsoleEmailTransport } from '../email/console-transport.js';
@@ -50,12 +51,7 @@ async function makeHarness(): Promise<Harness> {
     state: 'not_started' | 'topics_picked' = 'topics_picked',
   ) => {
     const userId = deterministicRandom.uuid();
-    await userRepo.insert({
-      id: userId,
-      createdAt: clock.clock.now(),
-      onboardingState: state,
-      tier: 'free',
-    });
+    await userRepo.insert(makeUser({ id: userId, createdAt: clock.clock.now(), onboardingState: state }));
     await accountRepo.insert({
       id: deterministicRandom.uuid(),
       userId,

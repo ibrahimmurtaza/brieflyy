@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { createTestDb } from '../testing/test-db.js';
-import { makeTopic, makeCluster } from '../testing/fixtures.js';
+import { makeTopic, makeCluster, makeUser } from '../testing/fixtures.js';
 import { DrizzleClusterRepo } from './cluster-repo.js';
 import { DrizzleStoryRepo } from './story-repo.js';
 import { DrizzleArticleRepo } from './article-repo.js';
@@ -28,12 +28,9 @@ async function insertTopicWithSources(
     readonly sourceIds: readonly string[];
   },
 ): Promise<TopicId> {
-  await userRepo.insert({
-    id: input.userId as UserId,
-    createdAt: new Date('2026-09-01T00:00:00Z'),
-    onboardingState: 'topics_picked',
-    tier: 'free',
-  });
+  await userRepo.insert(
+    makeUser({ id: input.userId as UserId, onboardingState: 'topics_picked' }),
+  );
   await topicRepo.insert(
     makeTopic({ id: input.id, userId: input.userId }),
   );
@@ -63,12 +60,9 @@ describe('DrizzleClusterRepo', () => {
     sourceRepo = new DrizzleSourceRepo(db);
     topicRepo = new DrizzleTopicRepo(db);
     userRepo = new DrizzleUserRepo(db);
-    await userRepo.insert({
-      id: 'user-1' as UserId,
-      createdAt: new Date('2026-09-01T00:00:00Z'),
-      onboardingState: 'completed',
-      tier: 'free',
-    });
+    await userRepo.insert(
+      makeUser({ id: 'user-1' as UserId, onboardingState: 'completed' }),
+    );
     await topicRepo.insert(makeTopic({ id: 'topic-1', userId: 'user-1' }));
     await sourceRepo.insert({
       id: 'src-test',

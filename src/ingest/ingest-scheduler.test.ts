@@ -10,7 +10,7 @@ import type {
   RawFeedEntry,
 } from './feed-fetcher.js';
 import { createTestDb } from '../testing/test-db.js';
-import { makeTopic } from '../testing/fixtures.js';
+import { makeTopic, makeUser } from '../testing/fixtures.js';
 import {
   deterministicRandom,
   makeTestClock,
@@ -192,12 +192,9 @@ async function insertTopicWithSources(
     readonly sourceIds: readonly string[];
   },
 ): Promise<TopicId> {
-  await userRepo.insert({
-    id: input.userId as UserId,
-    createdAt: new Date('2026-09-01T00:00:00Z'),
-    onboardingState: 'topics_picked',
-    tier: 'free',
-  });
+  await userRepo.insert(
+    makeUser({ id: input.userId as UserId, onboardingState: 'topics_picked' }),
+  );
   await topicRepo.insert(
     makeTopic({
       id: input.id,

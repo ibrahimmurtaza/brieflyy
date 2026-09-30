@@ -35,6 +35,7 @@ function rowToTopic(row: TopicRow, sourceIds: readonly string[]): Topic {
     clusterWindowDays: row.clusterWindowDays,
     createdAt: row.createdAt,
     removedAt: row.removedAt ?? null,
+    unsubscribedAt: row.unsubscribedAt ?? null,
   };
 }
 
@@ -91,6 +92,15 @@ export interface TopicRepo {
    * narrows to the nearest window that still means something.
    */
   setClusterWindowDays(id: TopicId, days: number): Promise<void>;
+  /**
+   * Record or clear the opt-out a one-click unsubscribe from this Topic sets.
+   *
+   * A date to stop sending, and null to start again. The row is kept either way:
+   * an unsubscribed Topic is still the User's, still on `/topics`, and still has
+   * a brief history worth reading — which is why this is a column rather than a
+   * removal.
+   */
+  setUnsubscribedAt(id: TopicId, at: Date | null): Promise<void>;
 }
 
 export class DrizzleTopicRepo implements TopicRepo {
@@ -115,6 +125,10 @@ export class DrizzleTopicRepo implements TopicRepo {
       clusterWindowDays: topic.clusterWindowDays ?? DEFAULT_CLUSTER_WINDOW_DAYS,
       createdAt: topic.createdAt,
       removedAt: topic.removedAt,
+      // Written rather than defaulted, because an insert is not how a User stops
+      // being emailed: that arrives later as an update, from a link in a brief
+      // or from the settings screen.
+      unsubscribedAt: topic.unsubscribedAt,
     });
   }
 
@@ -227,5 +241,9 @@ export class DrizzleTopicRepo implements TopicRepo {
       .update(topics)
       .set({ clusterWindowDays: clampClusterWindowDays(days) })
       .where(eq(topics.id, id));
+  }
+
+  async setUnsubscribedAt(id: TopicId, at: Date | null): Promise<void> {
+    await this.db.update(topics).set({ unsubscribedAt: at }).where(eq(topics.id, id));
   }
 }

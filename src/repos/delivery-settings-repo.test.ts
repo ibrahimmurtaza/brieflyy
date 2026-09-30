@@ -5,18 +5,14 @@ import { deliverySettings } from '../db/schema.js';
 import { createTestDb } from '../testing/test-db.js';
 import { DrizzleDeliverySettingsRepo } from './delivery-settings-repo.js';
 import { DrizzleUserRepo } from './user-repo.js';
+import { makeUser } from '../testing/fixtures.js';
 
 async function makeHarness() {
   const { db } = createTestDb();
   const userRepo = new DrizzleUserRepo(db);
   const repo = new DrizzleDeliverySettingsRepo(db);
   const userId = 'user-test';
-  await userRepo.insert({
-    id: userId,
-    createdAt: new Date('2026-01-01T00:00:00Z'),
-    onboardingState: 'topics_picked',
-    tier: 'free',
-  });
+  await userRepo.insert(makeUser({ id: userId, onboardingState: 'topics_picked' }));
   return { db, repo, userId, userRepo };
 }
 

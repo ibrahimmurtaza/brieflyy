@@ -326,6 +326,7 @@ export class OnboardingService {
         clusterWindowDays: DEFAULT_CLUSTER_WINDOW_DAYS,
         createdAt: now,
         removedAt: null,
+        unsubscribedAt: null,
       };
       await this.topicRepo.insert(topic);
       for (let i = 0; i < t.defaultSourceIds.length; i++) {
@@ -354,6 +355,7 @@ export class OnboardingService {
         clusterWindowDays: DEFAULT_CLUSTER_WINDOW_DAYS,
         createdAt: now,
         removedAt: null,
+        unsubscribedAt: null,
       };
       await this.topicRepo.insert(topic);
       created.push(topic);

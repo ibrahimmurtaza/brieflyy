@@ -89,6 +89,7 @@ const schedulerWith = (
       deliverySettingsRepo: settingsRepo,
       topicRepo,
       accountRepo,
+      userRepo,
       emailTransport: over,
       clock: clock.clock,
       random: deterministicRandom,
@@ -118,6 +119,8 @@ interface SeedUserInput {
   readonly deliveryTime?: DeliveryTime;
   readonly deliveryRecordedAt?: Date;
   readonly tier?: Tier;
+  /** When the User opted out of every brief, or omit to leave them receiving them. */
+  readonly unsubscribedAt?: Date;
   /** Omit to leave the User with no DeliveryTime at all. */
   readonly withoutDeliveryTime?: boolean;
 }
@@ -132,6 +135,7 @@ async function seedUser(input: SeedUserInput): Promise<void> {
       id: input.id,
       onboardingState: 'completed',
       ...(input.tier ? { tier: input.tier } : {}),
+      ...(input.unsubscribedAt ? { unsubscribedAt: input.unsubscribedAt } : {}),
     }),
   );
   await harness.accountRepo.insert(
@@ -164,7 +168,11 @@ async function seedUser(input: SeedUserInput): Promise<void> {
 async function seedTopic(
   userId: string,
   topicId: string,
-  overrides: { readonly cadence?: Cadence; readonly title?: string } = {},
+  overrides: {
+    readonly cadence?: Cadence;
+    readonly title?: string;
+    readonly unsubscribedAt?: Date | null;
+  } = {},
 ): Promise<void> {
   await harness.topicRepo.insert(
     makeTopic({
@@ -172,6 +180,9 @@ async function seedTopic(
       userId,
       title: overrides.title ?? `Topic ${topicId}`,
       ...(overrides.cadence ? { cadence: overrides.cadence } : {}),
+      ...(overrides.unsubscribedAt === undefined
+        ? {}
+        : { unsubscribedAt: overrides.unsubscribedAt }),
     }),
   );
   await harness.clusterRepo.insert(
@@ -189,6 +200,63 @@ async function seedTopic(
 function recipients(): readonly string[] {
   return harness.transport.snapshot().map((message) => message.to);
 }
+
+describe('ScheduledBriefService, an unsubscribed reader', () => {
+  it('sends nothing at all to a User who unsubscribed from every brief', async () => {
+    // The unsubscribe link in a brief has to stop the mail, and the only thing
+    // that can stop it is the job: a flag nothing reads is a link that reads as
+    // working and is not.
+    await seedUser({ id: 'iris', unsubscribedAt: NOW });
+    await seedTopic('iris', 'topic-one');
+    await seedTopic('iris', 'topic-two');
+
+    const run = await harness.scheduler.run();
+
+    expect(run.sentCount).toBe(0);
+    expect(run.failureCount).toBe(0);
+    expect(harness.transport.snapshot()).toHaveLength(0);
+    expect(harness.count('brief_snapshots')).toBe(0);
+    // And nothing is owed for that slot either, so a resubscribe does not
+    // produce a backlog of every reading since the opt-out.
+    expect(harness.count('brief_runs')).toBe(0);
+  });
+
+  it('sends to everyone else in the same pass', async () => {
+    await seedUser({ id: 'gone', email: 'gone@example.com', unsubscribedAt: NOW });
+    await seedUser({ id: 'staying', email: 'staying@example.com' });
+    await seedTopic('gone', 'topic-gone');
+    await seedTopic('staying', 'topic-staying');
+
+    const run = await harness.scheduler.run();
+
+    // One reader's decision is not a reason to stop sending everyone else theirs.
+    expect(run.sentCount).toBe(1);
+    expect(recipients()).toEqual(['staying@example.com']);
+  });
+
+  it('stops one unsubscribed Topic and leaves the User other Topics sending', async () => {
+    await seedUser({ id: 'iris' });
+    await seedTopic('iris', 'topic-one', { title: 'World news', unsubscribedAt: NOW });
+    await seedTopic('iris', 'topic-two', { title: 'Elections' });
+
+    const run = await harness.scheduler.run();
+
+    expect(run.sentCount).toBe(1);
+    expect(harness.transport.snapshot().map((m) => m.subject)).toEqual([
+      'Elections - Brieflyy',
+    ]);
+  });
+
+  it('starts sending again once the Topic is resubscribed', async () => {
+    await seedUser({ id: 'iris' });
+    await seedTopic('iris', 'topic-one', { unsubscribedAt: NOW });
+
+    expect((await harness.scheduler.run()).sentCount).toBe(0);
+
+    await harness.topicRepo.setUnsubscribedAt('topic-one', null);
+    expect((await harness.scheduler.run()).sentCount).toBe(1);
+  });
+});
 
 describe('ScheduledBriefService.run', () => {
   it('sends a brief to a User whose DeliveryTime has arrived in their timezone', async () => {

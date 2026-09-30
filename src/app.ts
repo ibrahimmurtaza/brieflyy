@@ -33,6 +33,7 @@ import { DrizzleBriefSnapshotRepo } from './repos/brief-snapshot-repo.js';
 import { DrizzleBriefRunRepo } from './repos/brief-run-repo.js';
 import { DrizzleBriefJobRunRepo } from './repos/brief-job-run-repo.js';
 import { DrizzleEmailDeliveryRepo } from './repos/email-delivery-repo.js';
+import { DrizzleUnsubscribeRepo } from './repos/unsubscribe-repo.js';
 import { AuthService } from './auth/auth-service.js';
 import { registerAuthRoutes } from './auth/routes.js';
 import type { OAuthClient } from './oauth/client.js';
@@ -59,6 +60,8 @@ import {
   DEFAULT_BRIEF_INTERVAL_MS,
 } from './services/scheduled-brief-service.js';
 import { registerBriefStatusRoutes } from './services/brief-status-routes.js';
+import { UnsubscribeService } from './services/unsubscribe-service.js';
+import { registerUnsubscribeRoutes } from './services/unsubscribe-routes.js';
 import { registerTierRoutes } from './billing/tier-routes.js';
 import type { FeedFetcher } from './ingest/feed-fetcher.js';
 
@@ -183,6 +186,7 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
   const emailDeliveryRepo = new DrizzleEmailDeliveryRepo(opts.db);
   const briefRunRepo = new DrizzleBriefRunRepo(opts.db);
   const briefJobRunRepo = new DrizzleBriefJobRunRepo(opts.db);
+  const unsubscribeRepo = new DrizzleUnsubscribeRepo(opts.db);
 
   await applyDirectorySeed(opts.db);
 
@@ -245,7 +249,9 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
   // renders, stores and sends through the service above, so a scheduled brief is
   // byte for byte the brief a User would have asked for by hand. It holds the
   // transport as well as the service, because the status view has to be able to
-  // say where those briefs actually went.
+  // say where those briefs actually went. It reads the Users' opt-outs too,
+  // because a brief that keeps arriving after somebody unsubscribed from it is
+  // the failure the whole unsubscribe path exists to prevent.
   const scheduledBriefService = new ScheduledBriefService({
     briefPlanService,
     briefRunRepo,
@@ -253,10 +259,24 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     deliverySettingsRepo,
     topicRepo,
     accountRepo,
+    userRepo,
     emailTransport: opts.emailTransport,
     clock,
     random: opts.random ?? nodeRandom,
     intervalMs: opts.briefIntervalMs ?? DEFAULT_BRIEF_INTERVAL_MS,
+  });
+
+  // What the unsubscribe links in a brief are for. Built here because the routes
+  // and the scheduler are two readers of the same opt-outs, and a second service
+  // with its own copy of the rule would be a rule that could disagree with the
+  // one the email promised.
+  const unsubscribeService = new UnsubscribeService({
+    emailDeliveryRepo,
+    unsubscribeRepo,
+    topicRepo,
+    userRepo,
+    clock,
+    random: opts.random ?? nodeRandom,
   });
 
   const ingestScheduler = await resolveIngestScheduler({
@@ -303,7 +323,12 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     feedbackRepo,
     briefPlanService,
     briefSnapshotRepo,
+    unsubscribeService,
   });
+
+  // Registered with the rest of the routes rather than with the pages: these are
+  // the links a brief carries, and they are public.
+  await registerUnsubscribeRoutes(app, { unsubscribeService, topicRepo });
 
   if (ingestScheduler) {
     await registerIngestRoutes(app, { scheduler: ingestScheduler });

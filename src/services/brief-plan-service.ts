@@ -1,5 +1,6 @@
 import type { Clock } from '../domain/clock.js';
 import type { RandomSource } from '../domain/crypto.js';
+import { generateUnsubscribeToken } from '../domain/crypto.js';
 import type {
   BriefPlan,
   BriefSnapshot,
@@ -14,7 +15,11 @@ import type { ClusterRepo } from '../repos/cluster-repo.js';
 import type { BriefPlanRepo } from '../repos/brief-plan-repo.js';
 import type { BriefSnapshotRepo } from '../repos/brief-snapshot-repo.js';
 import type { EmailDeliveryRepo } from '../repos/email-delivery-repo.js';
-import type { BriefSnapshotRenderer, RenderedBrief } from './brief-snapshot-renderer.js';
+import type {
+  BriefSnapshotRenderer,
+  BriefUnsubscribe,
+  RenderedBrief,
+} from './brief-snapshot-renderer.js';
 
 export interface BriefPlanServiceDeps {
   readonly clusterRepo: ClusterRepo;
@@ -86,10 +91,16 @@ export class BriefPlanService {
    * kept only the HTML could not be handed to a transport at all, and one that
    * regenerated its text from the HTML on view would be serving a reader
    * something other than the brief that reached them.
+   *
+   * The tokens are passed in rather than minted here because the document that
+   * carries them was already rendered by the time this runs — the link is in the
+   * HTML and in the headers, and a token invented now would be a link in a
+   * sent brief that resolves to nothing.
    */
   async createSnapshotFromPlan(
     plan: BriefPlan,
     rendered: RenderedBrief,
+    unsubscribe: BriefUnsubscribe,
   ): Promise<BriefSnapshot> {
     const snapshot: BriefSnapshot = {
       id: this.deps.random.uuid(),
@@ -99,8 +110,8 @@ export class BriefPlanService {
       createdAt: this.deps.clock.now(),
       html: rendered.html,
       text: rendered.text,
-      unsubscribeToken: this.deps.random.uuid(),
-      globalUnsubscribeToken: this.deps.random.uuid(),
+      unsubscribeToken: unsubscribe.topicToken,
+      globalUnsubscribeToken: unsubscribe.globalToken,
     };
 
     await this.deps.briefSnapshotRepo.insert(snapshot);
@@ -117,14 +128,25 @@ export class BriefPlanService {
    */
   async sendBrief(input: SendBriefInput): Promise<SendBriefResult> {
     const plan = await this.createPlan(input);
-    const rendered = await this.deps.renderer.render(plan, this.deps.appBaseUrl);
-    const snapshot = await this.createSnapshotFromPlan(plan, rendered);
+    // Minted before the render rather than after, because the render is what
+    // writes them into the document: an unsubscribe link is part of the brief
+    // that was sent, and a BriefSnapshot is never rendered again.
+    const unsubscribe = this.mintUnsubscribeTokens();
+    const rendered = await this.deps.renderer.render(
+      plan,
+      this.deps.appBaseUrl,
+      unsubscribe,
+    );
+    const snapshot = await this.createSnapshotFromPlan(plan, rendered, unsubscribe);
 
     await this.deps.emailTransport.send({
       to: input.to,
       subject: rendered.subject,
       text: rendered.text,
       html: rendered.html,
+      // The RFC 8058 headers, which are the only way a client knows it may
+      // render a one-click unsubscribe control at all.
+      headers: rendered.headers,
     });
 
     // Written after the send, because this row is the claim that a brief
@@ -136,16 +158,29 @@ export class BriefPlanService {
   }
 
   /**
+   * One pair of tokens per brief, one for each scope.
+   *
+   * Fresh for every send rather than stored per User, so unsubscribing from one
+   * delivery cannot unsubscribe from another: a token that outlived its brief
+   * would keep working from a mailbox full of them.
+   */
+  private mintUnsubscribeTokens(): BriefUnsubscribe {
+    return {
+      topicToken: generateUnsubscribeToken(this.deps.random),
+      globalToken: generateUnsubscribeToken(this.deps.random),
+    };
+  }
+
+  /**
    * The record that this snapshot was emailed, carrying the tokens that the
    * unsubscribe route will consume.
    *
-   * Separate from the snapshot so that a brief can be re-sent or unsubscribed
-   * from without touching the document that was sent, and so the two sets of
-   * tokens are the snapshot's own rather than a second pair that could disagree
-   * with them. Nothing reads the tokens yet — there is no unsubscribe route and
-   * `EmailMessage` has no way to carry a `List-Unsubscribe` header — so this is
-   * the state the glossary describes, kept where the glossary says it lives,
-   * rather than an unsubscribable brief.
+   * Separate from the snapshot so a brief can be re-sent or unsubscribed from
+   * without touching the document that was sent, and so the two sets of tokens
+   * are the snapshot's own rather than a second pair that could disagree with
+   * them. The tokens are the snapshot's, copied rather than minted again: a
+   * second pair would be a link in the email pointing at nothing, because the
+   * email was rendered with the first pair.
    */
   async recordDelivery(snapshot: BriefSnapshot): Promise<EmailDelivery> {
     const delivery: EmailDelivery = {

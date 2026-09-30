@@ -27,3 +27,18 @@ export const MAGIC_LINK_RATE_LIMITS: MagicLinkRateLimits = {
 };
 
 export const OPENAI_API_URL_DEFAULT = 'https://api.openai.com/v1/chat/completions';
+
+/**
+ * How long an unsubscribe link in a brief keeps working.
+ *
+ * Long enough that the link in a brief from a month ago still does what a reader
+ * would expect it to, which is the whole problem with a link that lives in an
+ * inbox: the mail client that renders a one-click button acts on it days later,
+ * from a mailbox nobody was looking at. A token is single-use regardless, so this
+ * window is the only thing bounding how long a token copied out of the database
+ * would be worth anything.
+ */
+export const UNSUBSCRIBE_TOKEN_TTL_MS_DEFAULT = 30 * 24 * 60 * 60 * 1000;
+
+/** Enough entropy that a token is not guessable and not worth brute-forcing. */
+export const UNSUBSCRIBE_TOKEN_BYTES = 32;

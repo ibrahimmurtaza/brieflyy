@@ -34,6 +34,14 @@ export interface User {
   readonly createdAt: Date;
   readonly onboardingState: OnboardingState;
   readonly tier: Tier;
+  /**
+   * When this User asked to stop receiving every brief, and null while they want
+   * them. A User-level opt-out rather than a per-Topic one: "stop emailing me"
+   * is a decision about the mailbox, and the daily job honours it by skipping the
+   * User entirely. Distinct from a Topic's own `unsubscribedAt`, which is a
+   * decision about one subject and leaves the rest of the mailbox alone.
+   */
+  readonly unsubscribedAt: Date | null;
 }
 
 export interface Account {
@@ -133,6 +141,14 @@ export interface Topic {
   readonly clusterWindowDays: number;
   readonly createdAt: Date;
   readonly removedAt: Date | null;
+  /**
+   * When this User stopped being sent this Topic, and null while they want it.
+   * Separate from `removedAt`, because the two answer different questions: a
+   * removed Topic is gone from the application, while an unsubscribed one is
+   * still there, still on `/topics`, and starts sending again the moment the
+   * User resubscribes.
+   */
+  readonly unsubscribedAt: Date | null;
 }
 
 export interface DeliveryTime {
@@ -269,6 +285,31 @@ export interface EmailDelivery {
   readonly sentAt: Date;
   readonly unsubscribeToken: string;
   readonly globalUnsubscribeToken: string;
+}
+
+export type UnsubscribeScope = 'this_topic' | 'global';
+
+/**
+ * One unsubscribe link, spent.
+ *
+ * Written when a token in a sent brief is used, and never edited afterwards: the
+ * `token` column is unique, so this row *is* the single-use property rather than
+ * a record of somebody checking a flag somewhere. It names the EmailDelivery the
+ * link arrived in, which is what makes "this User unsubscribed from this Topic on
+ * this day" answerable long after the token has expired.
+ *
+ * `topicId` is null for a `global` unsubscribe on purpose. "Stop emailing me" is
+ * not a statement about the Topic the brief happened to be about, and a row that
+ * carried the id would read as one.
+ */
+export interface Unsubscribe {
+  readonly id: string;
+  readonly userId: UserId;
+  readonly topicId: TopicId | null;
+  readonly scope: UnsubscribeScope;
+  readonly emailDeliveryId: string;
+  readonly token: string;
+  readonly createdAt: Date;
 }
 
 /**

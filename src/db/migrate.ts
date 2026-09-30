@@ -15,7 +15,8 @@ CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY NOT NULL,
   created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
   onboarding_state TEXT NOT NULL DEFAULT 'not_started',
-  tier TEXT NOT NULL DEFAULT 'free'
+  tier TEXT NOT NULL DEFAULT 'free',
+  unsubscribed_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS users_onboarding_idx ON users (onboarding_state);
 CREATE INDEX IF NOT EXISTS users_tier_idx ON users (tier);
@@ -115,7 +116,8 @@ CREATE TABLE IF NOT EXISTS topics (
   cadence TEXT NOT NULL DEFAULT 'daily',
   created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
   removed_at INTEGER,
-  cluster_window_days INTEGER NOT NULL DEFAULT 7
+  cluster_window_days INTEGER NOT NULL DEFAULT 7,
+  unsubscribed_at INTEGER
 );
 CREATE UNIQUE INDEX IF NOT EXISTS topics_user_slug_unique ON topics (user_id, slug);
 CREATE INDEX IF NOT EXISTS topics_user_idx ON topics (user_id);
@@ -245,6 +247,20 @@ CREATE TABLE IF NOT EXISTS email_deliveries (
   global_unsubscribe_token TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS email_deliveries_user_snapshot_idx ON email_deliveries (user_id, brief_snapshot_id);
+CREATE UNIQUE INDEX IF NOT EXISTS email_deliveries_unsubscribe_token_unique ON email_deliveries (unsubscribe_token);
+CREATE UNIQUE INDEX IF NOT EXISTS email_deliveries_global_unsubscribe_token_unique ON email_deliveries (global_unsubscribe_token);
+
+CREATE TABLE IF NOT EXISTS unsubscribes (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  topic_id TEXT REFERENCES topics(id) ON DELETE CASCADE,
+  email_delivery_id TEXT NOT NULL REFERENCES email_deliveries(id) ON DELETE CASCADE,
+  scope TEXT NOT NULL,
+  token TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS unsubscribes_token_unique ON unsubscribes (token);
+CREATE INDEX IF NOT EXISTS unsubscribes_user_idx ON unsubscribes (user_id);
 
 CREATE TABLE IF NOT EXISTS brief_runs (
   id TEXT PRIMARY KEY NOT NULL,
@@ -619,6 +635,23 @@ const COLUMN_MIGRATIONS: readonly ColumnMigration[] = [
     table: 'brief_snapshots',
     column: 'text',
     ddl: `ALTER TABLE brief_snapshots ADD COLUMN text TEXT NOT NULL DEFAULT ''`,
+  },
+  {
+    // The opt-out a one-click unsubscribe from every brief sets. Nullable and
+    // with no default, because the state it records is the absence of the
+    // column: a User with no value in it is receiving mail, which is what every
+    // row written before this column existed has to keep doing.
+    table: 'users',
+    column: 'unsubscribed_at',
+    ddl: `ALTER TABLE users ADD COLUMN unsubscribed_at INTEGER`,
+  },
+  {
+    // The same opt-out, for one Topic. Separate from `removed_at` because the two
+    // are not the same decision: a removed Topic is gone, and an unsubscribed one
+    // is still on `/topics` and starts sending again when this is cleared.
+    table: 'topics',
+    column: 'unsubscribed_at',
+    ddl: `ALTER TABLE topics ADD COLUMN unsubscribed_at INTEGER`,
   },
 ];
 
