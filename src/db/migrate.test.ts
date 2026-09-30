@@ -371,8 +371,20 @@ CREATE UNIQUE INDEX magic_links_token_hash_unique ON magic_links (token_hash);
 CREATE INDEX magic_links_account_idx ON magic_links (account_id);
 `;
 
+/** A database from before a pass recorded what writing its briefs cost. */
+const NO_GENERATION_COLUMNS_SCHEMA_SQL = `
+CREATE TABLE brief_job_runs (
+  id TEXT PRIMARY KEY NOT NULL,
+  started_at INTEGER NOT NULL,
+  finished_at INTEGER NOT NULL,
+  sent_count INTEGER NOT NULL,
+  failure_count INTEGER NOT NULL
+);
+`;
+
 /** A database from before a BriefSnapshot carried a plain-text alternative. */
 const NO_SNAPSHOT_TEXT_SCHEMA_SQL = `
+
 CREATE TABLE users (
   id TEXT PRIMARY KEY NOT NULL,
   created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
@@ -555,6 +567,36 @@ describe('applySchema', () => {
     // The brief that was sent is still there, and it says it has no text part.
     expect(row?.html).toBe('<p>sent</p>');
     expect(row?.text).toBe('');
+  });
+
+  it('adds what a pass cost to a database created before the columns existed', () => {
+    // The pass counters are how an operator tells a brief that was written from
+    // one that was quoted, and a row written before they existed has to read as
+    // the first of those. Zero is the truth about those passes: nothing had
+    // written a brief then, so there is nothing to say they spent.
+    const driver = createInMemorySqliteDriver();
+    driver.exec(NO_GENERATION_COLUMNS_SCHEMA_SQL);
+    driver
+      .prepare(
+        `INSERT INTO brief_job_runs (id, started_at, finished_at, sent_count, failure_count)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run('run-1', 1, 2, 3, 0);
+
+    applySchema(driver);
+
+    const row = driver
+      .prepare(
+        `SELECT sent_count, failure_count, written_clusters, generation_calls, discarded_bullets
+         FROM brief_job_runs WHERE id = ?`,
+      )
+      .get('run-1') as Record<string, number> | undefined;
+    // The pass it recorded is intact, and it reports having written nothing.
+    expect(row?.sent_count).toBe(3);
+    expect(row?.failure_count).toBe(0);
+    expect(row?.written_clusters).toBe(0);
+    expect(row?.generation_calls).toBe(0);
+    expect(row?.discarded_bullets).toBe(0);
   });
 
   it('adds the unsubscribe opt-outs to a database created before either existed', async () => {

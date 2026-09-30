@@ -2,6 +2,7 @@ import type { Clock } from '../domain/clock.js';
 import type { RandomSource } from '../domain/crypto.js';
 import { generateUnsubscribeToken } from '../domain/crypto.js';
 import type {
+  BriefGeneration,
   BriefPlan,
   BriefSnapshot,
   Cluster,
@@ -10,7 +11,9 @@ import type {
   UserId,
   ClusterId,
 } from '../domain/types.js';
+import { NO_GENERATION } from '../domain/types.js';
 import type { EmailTransport } from '../email/transport.js';
+import { BRIEF_MAX_CLUSTERS_DEFAULT } from '../config.js';
 import type { ClusterRepo } from '../repos/cluster-repo.js';
 import type { BriefPlanRepo } from '../repos/brief-plan-repo.js';
 import type { BriefSnapshotRepo } from '../repos/brief-snapshot-repo.js';
@@ -38,6 +41,13 @@ export interface BriefPlanServiceDeps {
   readonly appBaseUrl: string;
   readonly clock: Clock;
   readonly random: RandomSource;
+  /**
+   * How many Clusters a plan of this Topic carries. A default rather than a
+   * constant so a deployment can carry more of a busy Topic than the five a
+   * reader is assumed to want, and the renderer's written top-N follows the plan
+   * rather than the other way round.
+   */
+  readonly maxClusters?: number | undefined;
 }
 
 export interface CreateBriefPlanInput {
@@ -58,17 +68,24 @@ export interface SendBriefResult {
   readonly plan: BriefPlan;
   readonly snapshot: BriefSnapshot;
   readonly delivery: EmailDelivery;
+  /**
+   * What writing this brief cost. Carried rather than logged, because the caller
+   * is the only thing that knows when a brief happened, and the written path
+   * fails quietly by design — a pass that sent briefs and wrote none of them is
+   * indistinguishable from one that sent briefs nobody asked to be written.
+   */
+  readonly generation: BriefGeneration;
 }
-
-/** The most Clusters one brief carries. A reader is reading, not archiving. */
-const DEFAULT_MAX_CLUSTERS = 5;
 
 export class BriefPlanService {
   constructor(private readonly deps: BriefPlanServiceDeps) {}
 
   async createPlan(input: CreateBriefPlanInput): Promise<BriefPlan> {
     const clusters = await this.deps.clusterRepo.listByTopicId(input.topicId);
-    const selected = planClusters(clusters, input.maxClusters ?? DEFAULT_MAX_CLUSTERS);
+    const selected = planClusters(
+      clusters,
+      input.maxClusters ?? this.deps.maxClusters ?? BRIEF_MAX_CLUSTERS_DEFAULT,
+    );
 
     const plan: BriefPlan = {
       id: this.deps.random.uuid(),
@@ -153,8 +170,8 @@ export class BriefPlanService {
     // reached a User. A transport that threw never delivered anything, and a
     // delivery recorded for it would be a report of an event that did not
     // happen.
-    const delivery = await this.recordDelivery(snapshot);
-    return { plan, snapshot, delivery };
+    const delivery = await this.recordDelivery(snapshot, rendered.generation);
+    return { plan, snapshot, delivery, generation: rendered.generation };
   }
 
   /**
@@ -173,7 +190,7 @@ export class BriefPlanService {
 
   /**
    * The record that this snapshot was emailed, carrying the tokens that the
-   * unsubscribe route will consume.
+   * unsubscribe route will consume and what writing the brief cost.
    *
    * Separate from the snapshot so a brief can be re-sent or unsubscribed from
    * without touching the document that was sent, and so the two sets of tokens
@@ -181,8 +198,17 @@ export class BriefPlanService {
    * them. The tokens are the snapshot's, copied rather than minted again: a
    * second pair would be a link in the email pointing at nothing, because the
    * email was rendered with the first pair.
+   *
+   * The generation report is the one number about building a brief that is kept
+   * anywhere, and it is here because this row exists for every brief that was
+   * sent — including one a User asked for by hand from the Topic page, which the
+   * daily job would never know about. It is deliberately not on the snapshot:
+   * that is a document a User reads, served for as long as the product exists.
    */
-  async recordDelivery(snapshot: BriefSnapshot): Promise<EmailDelivery> {
+  async recordDelivery(
+    snapshot: BriefSnapshot,
+    generation: BriefGeneration = NO_GENERATION,
+  ): Promise<EmailDelivery> {
     const delivery: EmailDelivery = {
       id: this.deps.random.uuid(),
       userId: snapshot.userId,
@@ -191,6 +217,7 @@ export class BriefPlanService {
       sentAt: this.deps.clock.now(),
       unsubscribeToken: snapshot.unsubscribeToken,
       globalUnsubscribeToken: snapshot.globalUnsubscribeToken,
+      generation,
     };
 
     await this.deps.emailDeliveryRepo.insert(delivery);

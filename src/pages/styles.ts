@@ -281,6 +281,15 @@ small { font-size: var(--text-sm); }
   margin: 0 0 var(--space-5);
 }
 .callout p:last-child { margin-bottom: 0; }
+/* A link that is a callout's whole action — alone in its own paragraph — is a
+   control rather than a word in a sentence, so it gets the same target size
+   every other control on a page gets and a finger can find it. Scoped to the
+   alone case on purpose: a link inside a sentence keeps its line box. */
+.callout p > a:only-child {
+  display: inline-block;
+  min-height: 2.25rem;
+  line-height: 2.25rem;
+}
 .callout--paywall {
   background: var(--color-paywall-surface);
   border-color: var(--color-paywall-border);

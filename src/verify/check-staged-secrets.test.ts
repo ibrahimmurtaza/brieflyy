@@ -171,4 +171,21 @@ describe('staged credential check', () => {
     );
     expect(runCheck(dir).ok).toBe(true);
   });
+
+  it('ignores a credential-shaped name that is being read rather than assigned', () => {
+    // `OPENAI_API_KEY` in an object literal is a name, and the name says nothing
+    // about what follows it. Reading a value the application holds is the whole
+    // point of the configuration readers, and flagging it would mean the one
+    // module allowed to read configuration is the only one that cannot say so.
+    initRepo();
+    stage(
+      'src/services/llm.ts',
+      [
+        "const apiKey = readOptionalString({ OPENAI_API_KEY: opts.apiKey }, 'OPENAI_API_KEY');",
+        "const other = createClient({ env: { OPENAI_API_KEY: 'ambient' } });",
+        '',
+      ].join('\n'),
+    );
+    expect(runCheck(dir).ok).toBe(true);
+  });
 });

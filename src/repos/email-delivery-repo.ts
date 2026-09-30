@@ -20,6 +20,11 @@ function rowToEmailDelivery(row: EmailDeliveryRow): EmailDelivery {
     sentAt: new Date(row.sentAt),
     unsubscribeToken: row.unsubscribeToken,
     globalUnsubscribeToken: row.globalUnsubscribeToken,
+    generation: {
+      writtenClusters: row.writtenClusters,
+      calls: row.generationCalls,
+      discardedBullets: row.discardedBullets,
+    },
   };
 }
 
@@ -51,6 +56,9 @@ export class DrizzleEmailDeliveryRepo implements EmailDeliveryRepo {
       sentAt: delivery.sentAt,
       unsubscribeToken: delivery.unsubscribeToken,
       globalUnsubscribeToken: delivery.globalUnsubscribeToken,
+      writtenClusters: delivery.generation.writtenClusters,
+      generationCalls: delivery.generation.calls,
+      discardedBullets: delivery.generation.discardedBullets,
     });
   }
 

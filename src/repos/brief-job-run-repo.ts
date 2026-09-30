@@ -11,6 +11,11 @@ function rowToBriefJobRun(row: BriefJobRunRow): BriefJobRun {
     finishedAt: new Date(row.finishedAt),
     sentCount: row.sentCount,
     failureCount: row.failureCount,
+    generation: {
+      writtenClusters: row.writtenClusters,
+      calls: row.generationCalls,
+      discardedBullets: row.discardedBullets,
+    },
   };
 }
 
@@ -55,6 +60,9 @@ export class DrizzleBriefJobRunRepo implements BriefJobRunRepo {
       finishedAt: run.finishedAt,
       sentCount: run.sentCount,
       failureCount: run.failureCount,
+      writtenClusters: run.generation.writtenClusters,
+      generationCalls: run.generation.calls,
+      discardedBullets: run.generation.discardedBullets,
     });
   }
 

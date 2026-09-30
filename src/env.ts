@@ -8,6 +8,14 @@
  * setting must fail at boot, not disable the feature it controls.
  */
 
+import {
+  BRIEF_GENERATION_BUDGET_MS_DEFAULT,
+  BRIEF_GENERATION_CALL_TIMEOUT_MS_DEFAULT,
+  BRIEF_GENERATED_CLUSTERS_DEFAULT,
+  BRIEF_MAX_CLUSTERS_DEFAULT,
+  OPENAI_API_URL_DEFAULT,
+} from './config.js';
+
 export type EnvSource = Readonly<Record<string, string | undefined>>;
 
 const TRUE_VALUES: ReadonlySet<string> = new Set(['1', 'true', 'yes', 'on']);
@@ -91,6 +99,22 @@ export function readInt(env: EnvSource, name: string, fallback: number): number 
   return Number.parseInt(raw, 10);
 }
 
+/**
+ * A count that cannot go below zero.
+ *
+ * Separate from `readInt` because a negative count is a value the application
+ * cannot act on in the way it reads: a slice of a plan would drop its last entry
+ * instead of its first, and nothing about the brief would look wrong. Failing at
+ * boot, naming the variable, is the honest answer.
+ */
+export function readNonNegativeInt(env: EnvSource, name: string, fallback: number): number {
+  const value = readInt(env, name, fallback);
+  if (value < 0) {
+    throw unrecognised(name, readRaw(env, name) ?? String(value), 'zero or a whole number above it');
+  }
+  return value;
+}
+
 export type EmailTransportDriver = 'console' | 'resend';
 export type OauthProvider = 'google';
 
@@ -119,6 +143,34 @@ export interface ServerConfig {
    * run at; this is how soon after a reading arrives the brief goes out.
    */
   readonly briefsIntervalMs: number;
+  /**
+   * How many Clusters one brief carries, most active first. The reading decision:
+   * how much a reader of this product wants in an email.
+   */
+  readonly briefMaxClusters: number;
+  /**
+   * How many of the leading Clusters of a brief are written rather than quoted.
+   * The cost decision, and a separate one: a deployment can carry more of a busy
+   * Topic than it wants to pay to write. Zero turns the written path off without
+   * unsetting the credential.
+   */
+  readonly briefGeneratedClusters: number;
+  /**
+   * How long one written summary may take before that Cluster falls back to its
+   * Cluster summary. Never more than `briefGenerationBudgetMs`, which is checked
+   * rather than assumed.
+   */
+  readonly briefGenerationCallTimeoutMs: number;
+  /** How long one brief's writing may take before the rest of it is quoted. */
+  readonly briefGenerationBudgetMs: number;
+  /**
+   * The key that writes a brief's Clusters, or undefined when the deployment has
+   * not configured one — in which case every brief is built from the extractive
+   * summary, which is quotable by construction.
+   */
+  readonly openaiApiKey: string | undefined;
+  /** Where the written summaries are asked for. */
+  readonly openaiApiUrl: string;
   readonly cookieSecure: boolean;
   /**
    * Whether to register the development-only routes, such as the switch that
@@ -169,12 +221,39 @@ export function loadServerConfig(env: EnvSource): ServerConfig {
     ingestBackoffMaxMs: readInt(env, 'INGEST_BACKOFF_MAX_MS', 30 * 60 * 1000),
     briefsEnabled: readBool(env, 'BRIEFS_ENABLED', true),
     briefsIntervalMs: readInt(env, 'BRIEFS_INTERVAL_MS', 60 * 1000),
+    briefMaxClusters: readNonNegativeInt(env, 'BRIEF_MAX_CLUSTERS', BRIEF_MAX_CLUSTERS_DEFAULT),
+    briefGeneratedClusters: readNonNegativeInt(
+      env,
+      'BRIEF_GENERATED_CLUSTERS',
+      BRIEF_GENERATED_CLUSTERS_DEFAULT,
+    ),
+    briefGenerationCallTimeoutMs: readNonNegativeInt(
+      env,
+      'BRIEF_GENERATION_CALL_TIMEOUT_MS',
+      BRIEF_GENERATION_CALL_TIMEOUT_MS_DEFAULT,
+    ),
+    briefGenerationBudgetMs: readNonNegativeInt(
+      env,
+      'BRIEF_GENERATION_BUDGET_MS',
+      BRIEF_GENERATION_BUDGET_MS_DEFAULT,
+    ),
+    openaiApiKey: readOptionalString(env, 'OPENAI_API_KEY'),
+    openaiApiUrl: readString(env, 'OPENAI_API_URL', OPENAI_API_URL_DEFAULT),
     devToolsEnabled: readBool(env, 'DEV_TOOLS_ENABLED', !isProduction(env)),
     cookieSecure: readBool(env, 'COOKIE_SECURE', isProduction(env)),
     trustProxy: readBool(env, 'TRUST_PROXY', false),
     port: readInt(env, 'PORT', 3000),
     host: readString(env, 'HOST', '0.0.0.0'),
   };
+  if (config.briefGenerationCallTimeoutMs > config.briefGenerationBudgetMs) {
+    // The two bounds are one decision, so they are checked as one. A call that
+    // can outlive the budget makes the budget unreachable, and the difference
+    // between the settings becomes one that can be got wrong silently.
+    throw new Error(
+      'BRIEF_GENERATION_CALL_TIMEOUT_MS cannot be more than BRIEF_GENERATION_BUDGET_MS: ' +
+        'one call would be able to spend the whole budget on its own',
+    );
+  }
   if (config.oauthProvider === 'google') {
     if (config.googleOAuthClientId === undefined) {
       throw new Error('Missing required env var: GOOGLE_OAUTH_CLIENT_ID');

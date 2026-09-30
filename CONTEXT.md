@@ -50,6 +50,12 @@ _Avoid_: cluster TTL, retention window
 **Cluster summary**: The one-liner and the bullet points a Cluster is shown with. Every line is quoted from an Article in that Cluster, never written afresh, so nothing reaches a User that a Source did not write. A feed's own metadata about an item — the link and score a feed with no description gives instead of text — is not a statement a Source made about the story, so it is not quoted either, and the Article's headline is used instead.
 _Avoid_: abstract, digest, synopsis
 
+**Written summary**: A one-liner and bullet points written afresh for a Cluster, and constrained to cite only Articles inside it. It exists only in a BriefSnapshot and only for the leading Clusters of the plan: the citation constraint is what makes it quotable, and a Cluster's own Cluster summary is what every other surface shows and what a failed call falls back to. A LivingBrief never carries one, so a Cluster reads the same way in the app as it did in the last email. The code names the mechanism rather than the concept — `LLMSummaryClient`, `BRIEF_GENERATED_CLUSTERS` — and not a third thing.
+_Avoid_: AI summary, paraphrase
+
+**Generation report**: What writing a brief cost — the Clusters written, the calls made, and the bullets discarded for failing the citation constraint. Held on the EmailDelivery for every brief that was sent, and added up on the BriefJobRun for every pass of the job. It exists because a written summary and a quoted one are the same document to a reader, so nothing a User can see distinguishes a feature that is working from a deployment whose credential expired; the report is the only place that can be noticed. Never part of a BriefSnapshot, which is a document and is served forever.
+_Avoid_: stats, telemetry, metrics
+
 **BriefPlan**: A selection and ordering of Clusters for a Topic at a moment in time. The regenerable artifact that BriefSnapshots and LivingBriefs are derived from.
 _Avoid_: brief, digest
 
@@ -64,7 +70,6 @@ _Avoid_: digest, summary, newsletter
 
 **EmailDelivery**: A record that a BriefSnapshot was emailed to a User. Carries the per-Topic and global one-click unsubscribe tokens the brief went out with, and is what those tokens are looked up on. Distinct from the BriefSnapshot so a snapshot can be re-sent, re-linked, or unsubscribed from.
 _Avoid_: email log, sent mail
-
 **Unsubscribe**: One use of an unsubscribe link from a sent brief, recorded. Carries the UnsubscribeScope, the EmailDelivery the link arrived in, and the token that was spent. Single-use — the token is unique — and time-limited, so a link in a brief stays usable for as long as a reader would expect and no longer. The state the daily job honours is the unsubscribed-at date on the Topic or the User; the Unsubscribe is the record of the ask, and survives a resubscribe.
 _Avoid_: opt-out event, suppression record, bounce
 
@@ -77,7 +82,7 @@ _Avoid_: due time, cron time, send window
 **BriefRun**: The record that the daily job produced a BriefSnapshot for one of a User's Topics at one DeliverySlot. Written only once the brief has gone out, so a User the job failed to send to is still owed that DeliverySlot. Its existence is also what stops two passes answering the same DeliverySlot twice.
 _Avoid_: brief job log, delivery log
 
-**BriefJobRun**: One pass of the daily job: when it started and finished, how many briefs it sent, and how many it failed to send. A pass that finds nobody due reports zero of each rather than nothing at all, because a job that ran and sent nothing is a different thing from a job that is not running.
+**BriefJobRun**: One pass of the daily job: when it started and finished, how many briefs it sent, how many it failed to send, and the Generation report for everything it wrote. A pass that finds nobody due reports zero of each rather than nothing at all, because a job that ran and sent nothing is a different thing from a job that is not running.
 _Avoid_: run log, job log
 
 ### Engagement

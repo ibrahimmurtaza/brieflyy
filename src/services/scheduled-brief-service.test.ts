@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { ScheduledBriefService } from './scheduled-brief-service.js';
+import type { LLMSummaryClient } from '../domain/llm.js';
+import { RecordingSummaryClient } from '../testing/summary-client.js';
 import { BriefPlanService } from './brief-plan-service.js';
 import { BriefSnapshotRenderer } from './brief-snapshot-renderer.js';
 import { DrizzleAccountRepo } from '../repos/account-repo.js';
@@ -48,9 +50,14 @@ interface Harness {
   readonly settingsRepo: DrizzleDeliverySettingsRepo;
   readonly briefRunRepo: DrizzleBriefRunRepo;
   readonly clock: TestClock;
-count(table: string): number;
+  count(table: string): number;
+  /** One row, for asserting what was actually written rather than what was returned. */
+  firstRow<T>(sql: string): T | undefined;
+
   /** The same job with different options, for the paths they open up. */
   schedulerWith(transport: EmailTransport, overrides?: { retainedRuns?: number }): ScheduledBriefService;
+  /** The same job with a summary client, which is what a deployment with one has. */
+  schedulerWritingWith(client: LLMSummaryClient): ScheduledBriefService;
 }
 
 let harness: Harness;
@@ -68,8 +75,9 @@ beforeEach(() => {
   const briefRunRepo = new DrizzleBriefRunRepo(db);
   const briefJobRunRepo = new DrizzleBriefJobRunRepo(db);
 
-const schedulerWith = (
+  const schedulerOver = (
     over: EmailTransport,
+    client: LLMSummaryClient | undefined,
     overrides: { retainedRuns?: number } = {},
   ): ScheduledBriefService =>
     new ScheduledBriefService({
@@ -78,7 +86,12 @@ const schedulerWith = (
         briefPlanRepo: new DrizzleBriefPlanRepo(db),
         briefSnapshotRepo: new DrizzleBriefSnapshotRepo(db),
         emailDeliveryRepo: new DrizzleEmailDeliveryRepo(db),
-        renderer: new BriefSnapshotRenderer({ clusterRepo, topicRepo }),
+        renderer: new BriefSnapshotRenderer({
+          clusterRepo,
+          topicRepo,
+          clock: clock.clock,
+          ...(client ? { llmClient: client } : {}),
+        }),
         emailTransport: over,
         appBaseUrl: APP_BASE_URL,
         clock: clock.clock,
@@ -97,6 +110,14 @@ const schedulerWith = (
       ...overrides,
     });
 
+  const schedulerWith = (
+    over: EmailTransport,
+    overrides: { retainedRuns?: number } = {},
+  ): ScheduledBriefService => schedulerOver(over, undefined, overrides);
+
+  const schedulerWritingWith = (client: LLMSummaryClient): ScheduledBriefService =>
+    schedulerOver(transport, client);
+
   harness = {
     scheduler: schedulerWith(transport),
     transport,
@@ -108,7 +129,9 @@ const schedulerWith = (
     briefRunRepo,
     clock,
     count: (table: string): number => countRows(driver, table),
+    firstRow: <T,>(sql: string): T | undefined => driver.prepare(sql).get() as T | undefined,
     schedulerWith,
+    schedulerWritingWith,
   };
 });
 
@@ -289,7 +312,7 @@ describe('ScheduledBriefService.run', () => {
     expect(subjects).toEqual(['World news - Brieflyy', 'Elections - Brieflyy']);
   });
 
-it('leaves a User alone until their DeliveryTime comes round', async () => {
+  it('leaves a User alone until their DeliveryTime comes round', async () => {
     await seedUser({
       id: 'iris',
       deliveryTime: { hour: 23, minute: 0, timezone: 'UTC' },
@@ -354,7 +377,7 @@ await seedUser({
     }
   });
 
-it('keeps the DeliverySlot on the local day it belongs to across a daylight-saving change', async () => {
+  it('keeps the DeliverySlot on the local day it belongs to across a daylight-saving change', async () => {
     // 8 March 2026: America/New_York jumps 02:00 to 03:00. A User who asked for
     // 02:30 is owed a brief that day even though 02:30 never happened.
     await seedUser({
@@ -448,7 +471,7 @@ it('keeps the DeliverySlot on the local day it belongs to across a daylight-savi
     expect(harness.count('brief_snapshots')).toBe(1);
   });
 
-it('does not send a second brief for a period it has already answered', async () => {
+  it('does not send a second brief for a period it has already answered', async () => {
     await seedUser({ id: 'iris' });
     await seedTopic('iris', 'topic-one');
 
@@ -466,7 +489,7 @@ it('does not send a second brief for a period it has already answered', async ()
     expect(harness.count('brief_runs')).toBe(1);
   });
 
-it('recovers a run missed while the process was down', async () => {
+  it('recovers a run missed while the process was down', async () => {
     await seedUser({
       id: 'iris',
       deliveryTime: { hour: 8, minute: 0, timezone: 'UTC' },
@@ -582,7 +605,7 @@ it('recovers a run missed while the process was down', async () => {
     expect(run.sentCount).toBe(0);
   });
 
-it('sends a brief for a Topic with nothing on it, as asking for one by hand would', async () => {
+  it('sends a brief for a Topic with nothing on it, as asking for one by hand would', async () => {
     await seedUser({ id: 'iris' });
     // A Topic whose Sources have produced no Clusters yet — a brand new Topic, or
     // one the ingest pipeline has not reached. No Cluster fixture, so nothing to
@@ -689,10 +712,52 @@ describe('ScheduledBriefService.status', () => {
       finishedAt: new Date('2026-09-02T12:00:00Z'),
       sentCount: 1,
       failureCount: 0,
+      // Nothing asked and nothing written, because the harness has no summary
+      // client. Reported as three explicit zeros rather than left out, so an
+      // operator reading this pass can tell "the path did not run" from "nobody
+      // looked".
+      generation: { writtenClusters: 0, calls: 0, discardedBullets: 0 },
     });
   });
 
-it('counts a pass that found nobody due as a pass, with nothing sent', async () => {
+  it('records what writing the pass cost, and it survives the round trip', async () => {
+    // The whole reason the counters exist. A pass that sends briefs and writes
+    // none of them is a deployment whose credential expired, an endpoint that
+    // started refusing, or a model that stopped citing anything real — and all
+    // three produce a perfect brief, so nothing a User can see distinguishes
+    // them from a deployment that never asked for one.
+    await seedUser({ id: 'iris' });
+    await seedTopic('iris', 'topic-one');
+    await seedTopic('iris', 'topic-two');
+    harness.clock.set(new Date('2026-09-02T12:00:00Z'));
+    const client = new RecordingSummaryClient(() => ({
+      summary: 'A written line.',
+      bulletPoints: [{ text: 'A point.', articleUrl: 'https://example.com/a-1' }],
+      discardedBullets: 2,
+    }));
+
+    await harness.schedulerWritingWith(client).run();
+
+    const status = await harness.schedulerWritingWith(client).status();
+    // Two briefs, one Cluster each: two Clusters written, two calls, and four
+    // bullets thrown away for citing something that was not in the Cluster.
+    expect(status.lastRun?.generation).toEqual({
+      writtenClusters: 2,
+      calls: 2,
+      discardedBullets: 4,
+    });
+    // Read back from the row rather than from the return value, because the row
+    // is the only copy that outlives the process — a counter that lived in the
+    // returned object would be zero to anybody who looked afterwards.
+    const stored = harness.firstRow<{
+      written_clusters: number;
+      generation_calls: number;
+      discarded_bullets: number;
+    }>(`SELECT written_clusters, generation_calls, discarded_bullets FROM brief_job_runs LIMIT 1`);
+    expect(stored).toEqual({ written_clusters: 2, generation_calls: 2, discarded_bullets: 4 });
+  });
+
+  it('counts a pass that found nobody due as a pass, with nothing sent', async () => {
     await seedUser({
       id: 'iris',
       deliveryTime: { hour: 23, minute: 0, timezone: 'UTC' },

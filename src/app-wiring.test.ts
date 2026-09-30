@@ -61,7 +61,20 @@ function importClosure(entry: string): Set<string> {
   return seen;
 }
 
-const APP_CLOSURE = importClosure(join(SRC, 'app.ts'));
+/**
+ * Every module the application is built from.
+ *
+ * Two entries, because composition happens in two steps: the entrypoint
+ * resolves configuration and builds the seams, and the factory wires the
+ * services that hold them. A seam the entrypoint builds and hands over — the
+ * email transport, the summary client — is constructed by the application, and a
+ * guard that could only see the factory would report a wired service as unwired
+ * and ask for a service to be deferred after it had been built.
+ */
+const APP_CLOSURE = new Set([
+  ...importClosure(join(SRC, 'server.ts')),
+  ...importClosure(join(SRC, 'app.ts')),
+]);
 const APP_SOURCE = [...APP_CLOSURE]
   .map((file) => SOURCES.find((s) => s.file === file)?.text ?? '')
   .join('\n');

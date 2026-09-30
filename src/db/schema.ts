@@ -583,6 +583,12 @@ export const emailDeliveries = sqliteTable(
     // be one that unsubscribes the wrong person half the time.
     unsubscribeToken: text('unsubscribe_token').notNull(),
     globalUnsubscribeToken: text('global_unsubscribe_token').notNull(),
+    // What writing this brief cost. Per brief rather than per pass of the daily
+    // job, because a brief is also sent by hand from the Topic page, and a counter
+    // only the job kept would have nothing to say about those.
+    writtenClusters: integer('written_clusters').notNull().default(0),
+    generationCalls: integer('generation_calls').notNull().default(0),
+    discardedBullets: integer('discarded_bullets').notNull().default(0),
   },
   (t) => ({
     userSnapshotIdx: index('email_deliveries_user_snapshot_idx').on(
@@ -683,6 +689,13 @@ export const briefJobRuns = sqliteTable(
     finishedAt: integer('finished_at', { mode: 'timestamp_ms' }).notNull(),
     sentCount: integer('sent_count').notNull(),
     failureCount: integer('failure_count').notNull(),
+    // What writing the pass's briefs cost. Three counters rather than one flag,
+    // because "the written path did not run" and "it ran and produced nothing"
+    // and "it ran and was billed for it" are three different problems and an
+    // operator cannot tell them apart from a sent count.
+    writtenClusters: integer('written_clusters').notNull().default(0),
+    generationCalls: integer('generation_calls').notNull().default(0),
+    discardedBullets: integer('discarded_bullets').notNull().default(0),
   },
   (t) => ({
     startedAtIdx: index('brief_job_runs_started_at_idx').on(t.startedAt),
