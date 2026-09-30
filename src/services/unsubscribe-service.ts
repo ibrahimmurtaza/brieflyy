@@ -38,6 +38,21 @@ export type UnsubscribeOutcome =
 export type ResubscribeOutcome = { status: 'ok' } | { status: 'not_yours' };
 
 /**
+ * Whether this Topic's brief is currently being withheld.
+ *
+ * Both scopes, in one place, because a page offering to send a brief by hand and
+ * a route deciding whether to honour it have to agree: an offer the next page
+ * refuses is worse than no offer, and the two answers were once written out
+ * separately.
+ */
+export function isEmailStopped(input: {
+  readonly userUnsubscribedAt: Date | null;
+  readonly topicUnsubscribedAt: Date | null;
+}): boolean {
+  return input.userUnsubscribedAt !== null || input.topicUnsubscribedAt !== null;
+}
+
+/**
  * Stopping the mail.
  *
  * A brief is the only thing this product sends, and the unsubscribe links in one

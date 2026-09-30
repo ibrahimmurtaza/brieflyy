@@ -1,4 +1,5 @@
 import { escapeHtml } from '../domain/html.js';
+import { EMAIL_BRIEFS_PATH } from '../services/unsubscribe-links.js';
 import { STYLESHEET } from './styles.js';
 
 /**
@@ -53,7 +54,7 @@ export const PRIMARY_NAV: readonly NavLink[] = [
   { href: '/topics', label: 'Topics' },
   { href: '/pick-topics', label: 'Manage topics' },
   { href: '/archive/search', label: 'Archive' },
-  { href: '/settings/briefs', label: 'Email briefs' },
+  { href: EMAIL_BRIEFS_PATH, label: 'Email briefs' },
   { href: '/settings/delivery', label: 'Delivery time' },
 ];
 

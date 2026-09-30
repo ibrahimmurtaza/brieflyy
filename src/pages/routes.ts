@@ -17,7 +17,10 @@ import type { TopicRepo } from '../repos/topic-repo.js';
 import type { FeedbackRepo } from '../repos/feedback-repo.js';
 import type { BriefSnapshotRepo } from '../repos/brief-snapshot-repo.js';
 import type { BriefPlanService } from '../services/brief-plan-service.js';
-import type { UnsubscribeService } from '../services/unsubscribe-service.js';
+import {
+  isEmailStopped,
+  type UnsubscribeService,
+} from '../services/unsubscribe-service.js';
 import { EMAIL_BRIEFS_PATH } from '../services/unsubscribe-links.js';
 import { layout } from './layout.js';
 import {
@@ -370,7 +373,12 @@ export async function registerPageRoutes(
       // to be emailed and then presses the button asking to be emailed has not
       // unsubscribed, they have asked for one. So it is honoured — but the page
       // says what happened instead of silently sending.
-      if (req.auth.user.unsubscribedAt !== null || topic.unsubscribedAt !== null) {
+      if (
+        isEmailStopped({
+          userUnsubscribedAt: req.auth.user.unsubscribedAt,
+          topicUnsubscribedAt: topic.unsubscribedAt,
+        })
+      ) {
         return reply
           .code(302)
           .header('location', `${EMAIL_BRIEFS_PATH}?changed=blocked`)
@@ -520,8 +528,10 @@ export async function registerPageRoutes(
           briefJustSent: req.query.brief === 'sent',
           // The button to send a brief by hand is only honest while the User
           // still wants these emails; the route refuses either way.
-          emailsStopped:
-            req.auth.user.unsubscribedAt !== null || topic.unsubscribedAt !== null,
+          emailsStopped: isEmailStopped({
+            userUnsubscribedAt: req.auth.user.unsubscribedAt,
+            topicUnsubscribedAt: topic.unsubscribedAt,
+          }),
         }),
       );
     },

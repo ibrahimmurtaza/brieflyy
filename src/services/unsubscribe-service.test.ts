@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 import { UnsubscribeService } from './unsubscribe-service.js';
 import { DrizzleBriefPlanRepo } from '../repos/brief-plan-repo.js';
@@ -9,16 +12,16 @@ import { DrizzleUnsubscribeRepo } from '../repos/unsubscribe-repo.js';
 import { DrizzleUserRepo } from '../repos/user-repo.js';
 import { UNSUBSCRIBE_TOKEN_TTL_MS_DEFAULT } from '../config.js';
 import { countRows } from '../testing/db.js';
-import { createTestDb } from '../testing/test-db.js';
+import { createFileDb, createTestDb } from '../testing/test-db.js';
 import { topicOptOutAt, userOptOutAt } from '../testing/opt-outs.js';
 import { makeTopic, makeUser } from '../testing/fixtures.js';
+import { createDatabase, type SqliteDriver } from '../db/client.js';
 import {
   deterministicRandom,
   makeTestClock,
   resetDeterministic,
   type TestClock,
 } from '../testing/test-clocks.js';
-import type { SqliteDriver } from '../db/client.js';
 import type { TopicId, UserId } from '../domain/types.js';
 
 const SENT_AT = new Date('2026-09-02T12:00:00Z');
@@ -279,6 +282,116 @@ describe('UnsubscribeService, after a restart', () => {
     expect(await harness.afterRestart().globalOptOutAt('user-1')).toEqual(SENT_AT);
   });
 });
+
+/**
+ * The half of "survives a reload" that a second service object cannot show.
+ *
+ * The tests above build another service over the same open connection, which
+ * proves the service keeps nothing in memory — a real and worth-having property,
+ * but not the one the acceptance criterion names. State that outlives a
+ * connection would pass every one of them. So this closes the database, opens
+ * the same file again, and asks the opt-out questions of a service that has
+ * never seen the first one.
+ */
+describe('UnsubscribeService, on a database reopened from disk', () => {
+  const FILE = path.join(
+    tmpdir(),
+    `brieflyy-unsubscribe-reload-${process.pid}-${Date.now()}.db`,
+  );
+  let open: { driver: SqliteDriver } | null = null;
+
+  afterEach(() => {
+    open?.driver.close();
+    open = null;
+    for (const suffix of ['', '-wal', '-shm']) {
+      rmSync(`${FILE}${suffix}`, { force: true });
+    }
+  });
+
+  function openFromDisk(): { service: UnsubscribeService; driver: SqliteDriver } {
+    const { db, driver } = createFileDb(FILE);
+    open = { driver };
+    return {
+      driver,
+      service: new UnsubscribeService({
+        emailDeliveryRepo: new DrizzleEmailDeliveryRepo(db),
+        unsubscribeRepo: new DrizzleUnsubscribeRepo(db),
+        topicRepo: new DrizzleTopicRepo(db),
+        userRepo: new DrizzleUserRepo(db),
+        clock: makeTestClock(SENT_AT).clock,
+        random: deterministicRandom,
+      }),
+    };
+  }
+
+  it('still stops the Topic, and still refuses the token a second time', async () => {
+    const first = openFromDisk();
+    await seedBrief(first.driver);
+    expect(await first.service.unsubscribeFromTopic(TOPIC_TOKEN)).toMatchObject({
+      status: 'ok',
+    });
+    first.driver.close();
+    open = null;
+
+    const second = openFromDisk();
+
+    expect(topicOptOutAt(second.driver, 'topic-1')).toEqual(SENT_AT);
+    expect(await second.service.unsubscribeFromTopic(TOPIC_TOKEN)).toEqual({
+      status: 'invalid',
+      reason: 'already_used',
+    });
+  });
+
+  it('still knows the User opted out of everything', async () => {
+    const first = openFromDisk();
+    await seedBrief(first.driver);
+    await first.service.unsubscribeFromAll(GLOBAL_TOKEN);
+    first.driver.close();
+    open = null;
+
+    const second = openFromDisk();
+
+    expect(userOptOutAt(second.driver, 'user-1')).toEqual(SENT_AT);
+  });
+});
+
+/** The User, Topic and sent brief a token in a real email would have come from. */
+async function seedBrief(driver: SqliteDriver): Promise<void> {
+  const db = createDatabase({ driver });
+  const userRepo = new DrizzleUserRepo(db);
+  const topicRepo = new DrizzleTopicRepo(db);
+  await userRepo.insert(makeUser({ id: 'user-1' }));
+  await topicRepo.insert(
+    makeTopic({ id: 'topic-1', userId: 'user-1', title: 'World news' }),
+  );
+  await new DrizzleBriefPlanRepo(db).insert({
+    id: 'plan-1',
+    topicId: 'topic-1' as TopicId,
+    userId: 'user-1' as UserId,
+    createdAt: SENT_AT,
+    clusterIds: [],
+  });
+  await new DrizzleBriefSnapshotRepo(db).insert({
+    id: 'snapshot-1',
+    briefPlanId: 'plan-1',
+    userId: 'user-1' as UserId,
+    topicId: 'topic-1' as TopicId,
+    createdAt: SENT_AT,
+    html: '<p>sent</p>',
+    text: 'sent',
+    unsubscribeToken: TOPIC_TOKEN,
+    globalUnsubscribeToken: GLOBAL_TOKEN,
+  });
+  await new DrizzleEmailDeliveryRepo(db).insert({
+    id: 'delivery-1',
+    userId: 'user-1' as UserId,
+    briefSnapshotId: 'snapshot-1',
+    topicId: 'topic-1' as TopicId,
+    sentAt: SENT_AT,
+    unsubscribeToken: TOPIC_TOKEN,
+    globalUnsubscribeToken: GLOBAL_TOKEN,
+  });
+}
 
 describe('UnsubscribeService, resubscribing', () => {
   it('starts a Topic sending again', async () => {

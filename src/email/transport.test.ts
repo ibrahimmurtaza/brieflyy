@@ -1,8 +1,26 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ConsoleEmailTransport } from './console-transport.js';
 import { createEmailTransport } from './index.js';
 import { ResendEmailTransport } from './resend-transport.js';
+
+/** What the last `emails.send` was called with, as the provider sees it. */
+let sentParams: Record<string, unknown>[] = [];
+
+vi.mock('resend', () => ({
+  Resend: class {
+    readonly emails = {
+      send: async (params: Record<string, unknown>) => {
+        sentParams.push(params);
+        return { data: { id: 'resend-1' }, error: null };
+      },
+    };
+  },
+}));
+
+afterEach(() => {
+  sentParams = [];
+});
 
 describe('ConsoleEmailTransport', () => {
   it('records sent messages', async () => {
@@ -20,6 +38,40 @@ describe('ConsoleEmailTransport', () => {
     expect(transport.snapshot()).toHaveLength(1);
     expect(transport.snapshot()[0]!.to).toBe('x@example.com');
     expect(lines.join('\n')).toContain('x@example.com');
+  });
+});
+
+describe('ResendEmailTransport', () => {
+  const transport = () =>
+    new ResendEmailTransport({ apiKey: 're_test', defaultFrom: 'hi@brieflyy.dev' });
+
+  it('hands the one-click headers to the provider', async () => {
+    // The whole feature is these two headers reaching the provider. Every test
+    // that asserts on them goes through the console transport, which would
+    // happily keep them forever while the one that talks to Resend dropped them
+    // — and a client only ever sees what the provider sends.
+    await transport().send({
+      to: 'x@example.com',
+      subject: 'Hi',
+      text: 'body',
+      headers: {
+        'List-Unsubscribe': '<https://app.test/unsubscribe/topic?token=t>',
+        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+      },
+    });
+
+    expect(sentParams[0]?.['headers']).toEqual({
+      'List-Unsubscribe': '<https://app.test/unsubscribe/topic?token=t>',
+      'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+    });
+  });
+
+  it('sends no headers key at all when the message has none', async () => {
+    await transport().send({ to: 'x@example.com', subject: 'Hi', text: 'body' });
+
+    // Not an empty object: a provider treats a present-but-empty header map as
+    // a message carrying headers.
+    expect(sentParams[0]).not.toHaveProperty('headers');
   });
 });
 
