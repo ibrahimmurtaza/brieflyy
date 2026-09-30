@@ -79,11 +79,11 @@ describe('one story written two ways by two outlets', () => {
     expect((await tick()).statusCode).toBe(200);
 
     expect(h.count('articles')).toBe(2);
-    // One Story per Source, because that is the grain a Story is: what happened,
-    // as one outlet reported it. What puts the two in one Cluster is the other
-    // half of the pipeline — they name the same company and the same product, so
-    // their Entities overlap — which is why this test is about Entities at all.
-    expect(h.count('stories')).toBe(2);
+    // One Story, because a Story is the story rather than one outlet's account
+    // of it: these two Articles report the same thing, and only the spelling of
+    // the company differs. What still has to be earned is that they name the same
+    // Entity — which is why this test is about Entities at all.
+    expect(h.count('stories')).toBe(1);
     expect(h.count('clusters')).toBe(1);
   });
 

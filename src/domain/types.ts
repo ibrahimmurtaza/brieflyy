@@ -204,7 +204,15 @@ export interface PublishedRange {
 
 export interface Story {
   readonly id: StoryId;
-  readonly sourceId: SourceId;
+  /**
+   * Every Source this Story has Articles from.
+   *
+   * One event however many outlets reported it, so a list rather than the one
+   * Source it was first seen in — and read from the Articles themselves rather
+   * than from a column on the Story, which would name one of them and leave the
+   * rest to be inferred.
+   */
+  readonly sourceIds: readonly SourceId[];
   /** The signature this Story was formed from, fixed when it was created. */
   readonly signature: StorySignature;
   readonly firstSeenAt: Date;
@@ -240,7 +248,14 @@ export interface BriefSnapshot {
   readonly userId: UserId;
   readonly topicId: TopicId;
   readonly createdAt: Date;
+  /** The brief as it was sent to an email client, styled for the wire. */
   readonly html: string;
+  /**
+   * The same brief as plain text, stored rather than derived from `html`. A
+   * snapshot is what was sent, and the two halves of a message are two
+   * different renderings a reader can have been shown.
+   */
+  readonly text: string;
   readonly unsubscribeToken: string;
   readonly globalUnsubscribeToken: string;
 }

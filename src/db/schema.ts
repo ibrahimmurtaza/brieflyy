@@ -380,9 +380,6 @@ export const stories = sqliteTable(
   'stories',
   {
     id: text('id').primaryKey(),
-    sourceId: text('source_id')
-      .notNull()
-      .references(() => sources.id, { onDelete: 'cascade' }),
     /**
      * The signature this Story was formed from. It is set once, by the Article
      * that created the Story, and does not grow as copies arrive: a Story whose
@@ -407,7 +404,6 @@ export const stories = sqliteTable(
       .default(sql`0`),
   },
   (t) => ({
-    sourceIdx: index('stories_source_idx').on(t.sourceId),
     publishedIdx: index('stories_published_idx').on(t.lastPublishedAt),
   }),
 );
@@ -541,6 +537,13 @@ export const briefSnapshots = sqliteTable(
       .references(() => topics.id, { onDelete: 'cascade' }),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     html: text('html').notNull(),
+    /**
+     * The plain-text alternative to `html`, stored rather than derived. A
+     * snapshot is what was sent, so both halves of the message are kept: a
+     * client that was shown the text half is not served a different brief later
+     * because the Clusters moved on.
+     */
+    text: text('text').notNull().default(''),
     unsubscribeToken: text('unsubscribe_token').notNull(),
     globalUnsubscribeToken: text('global_unsubscribe_token').notNull(),
   },

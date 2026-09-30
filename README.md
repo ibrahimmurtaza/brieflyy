@@ -162,14 +162,24 @@ shape change needs one of:
   { table: 'articles', column: 'fingerprint',
     indexes: ['articles_fingerprint_idx'] }
   ```
-  Each entry is skipped once the column is gone. Removing a column is
-  one-way — a build that still writes it cannot open the database afterwards — so
-  retire a column only when nothing reads it, and say so in the commit: a column
-  left behind holding a superseded value reads like the current one.
+  Retiring the column is also how a constraint comes off: SQLite cannot relax a
+  `NOT NULL` in place, and a table rebuild is the alternative. `stories.source_id`
+  went this way rather than becoming nullable, because what it said is now derived
+  from the Articles in the Story and a column naming one of several Sources could
+  be filtered on again. Each entry is skipped once the column is gone. Removing a
+  column is one-way — a build that still writes it cannot open the database
+  afterwards — so retire a column only when nothing reads it, and say so in the
+  commit: a column left behind holding a superseded value reads like the current
+  one.
 
 Rebuilds, column migrations and retired columns run *before* `SCHEMA_SQL`, so the
 DDL that follows already matches the shape they produced; an index on a column an
 older table does not have would otherwise fail against the table as it stands.
+
+`schema-agreement.test.ts` compares columns, nullability, foreign keys and index
+uniqueness. A `NOT NULL` that only one of the two schemas has is a constraint that
+has stopped being true of the database while the code reading it still assumes it,
+so a shape change that touches nullability has to move both.
 
 ## Architecture
 

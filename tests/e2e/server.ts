@@ -36,7 +36,7 @@ import { DrizzleClusterRepo } from '../../src/repos/cluster-repo.js';
 import { DrizzleStoryRepo } from '../../src/repos/story-repo.js';
 import { DrizzleTopicRepo } from '../../src/repos/topic-repo.js';
 import { makeCluster, makeTopic } from '../../src/testing/fixtures.js';
-import type { SourceId, StoryId } from '../../src/domain/types.js';
+import type { SourceId, StoryId, TopicCategory, TopicOrigin } from '../../src/domain/types.js';
 import { E2E_BASE_URL, E2E_PORT } from './base-url.js';
 import { E2E_EMAIL, E2E_SESSION_ID } from './fixture-data.js';
 
@@ -102,16 +102,33 @@ const storyRepo = new DrizzleStoryRepo(db);
 const clusterRepo = new DrizzleClusterRepo(db);
 
 // The ids double as the slugs, because `makeTopic` derives one from the other.
-for (const [id, title, category] of [
-  ['world-news', 'World news', 'news'],
-  ['fusion-energy', 'Fusion energy', 'unspecified'],
-] as const) {
+//
+// `world-news` carries the Directory origin it would have in a real session:
+// added from a template, with `origin_template_id` pointing at the row, which is
+// the state the picker spec needs and the only one that exercises that foreign
+// key. `makeTopic` defaults to `freeform`, and the topic would still have shown
+// as held — the picker also matches on title, and this Topic's title is the
+// template's title. So the origin is not what makes the spec pass; it is what
+// makes the fixture true.
+//
+// `fusion-energy` is not a Directory template, so it stays freeform, and it is
+// what holds the spec's count at 1 rather than 2.
+for (const [id, title, category, origin] of [
+  [
+    'world-news',
+    'World news',
+    'news',
+    { kind: 'template', templateId: 'world-news' },
+  ],
+  ['fusion-energy', 'Fusion energy', 'unspecified', { kind: 'freeform' }],
+] as const satisfies readonly (readonly [string, string, TopicCategory, TopicOrigin])[]) {
   await topicRepo.insert(
     makeTopic({
       id,
       userId: USER_ID,
       title,
       category,
+      origin,
       createdAt: new Date(NOW.getTime() - 30 * DAY),
     }),
   );
@@ -130,7 +147,6 @@ insert(
 );
 await storyRepo.insert({
   id: 'e2e-story-1' as StoryId,
-  sourceId: SOURCES[0]![0],
   signature: EMPTY_SIGNATURE,
   firstSeenAt: new Date(NOW.getTime() - DAY),
   lastSeenAt: NOW,

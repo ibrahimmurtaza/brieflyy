@@ -1,9 +1,14 @@
 import { DEFAULT_CLUSTER_WINDOW_DAYS } from '../domain/cluster-window.js';
+import { EMPTY_SIGNATURE } from '../domain/story-signature.js';
 import type {
+  Article,
+  ArticleId,
   Cadence,
   Cluster,
   ClusterId,
   OnboardingState,
+  SourceId,
+  StoryId,
   Tier,
   Topic,
   TopicCategory,
@@ -95,5 +100,36 @@ export function makeCluster(input: ClusterFixture): Cluster {
     velocity: input.velocity ?? 1,
     sourceIds: input.sourceIds ?? [],
     state: input.state ?? 'active',
+  };
+}
+
+export interface ArticleFixture {
+  readonly id: string;
+  readonly body?: string;
+  readonly url?: string;
+  readonly title?: string;
+  readonly storyId?: string;
+}
+
+/**
+ * An Article from one Source, with the fields a test cares about left to it.
+ *
+ * An Article is what a Cluster's bullets are quoted from, so a test that renders
+ * a brief needs one whether or not it is about Articles — hence a fixture
+ * rather than a hand-built object per test.
+ */
+export function makeArticle(input: ArticleFixture): Article {
+  return {
+    id: input.id as ArticleId,
+    sourceId: 'src-a' as SourceId,
+    externalId: input.id,
+    url: input.url ?? `https://example.com/${input.id}`,
+    title: input.title ?? 'A headline',
+    body: input.body ?? '',
+    publishedAt: new Date('2026-09-02T10:00:00Z'),
+    ingestedAt: new Date('2026-09-02T10:00:00Z'),
+    entities: [],
+    signature: EMPTY_SIGNATURE,
+    storyId: (input.storyId ?? 'story-1') as StoryId,
   };
 }

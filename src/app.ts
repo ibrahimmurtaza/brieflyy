@@ -28,6 +28,9 @@ import { DrizzleClusterRepo } from './repos/cluster-repo.js';
 import { DrizzleTopicRepo } from './repos/topic-repo.js';
 import { DrizzleSourceRepo } from './repos/source-repo.js';
 import { DrizzleFeedbackRepo } from './repos/feedback-repo.js';
+import { DrizzleBriefPlanRepo } from './repos/brief-plan-repo.js';
+import { DrizzleBriefSnapshotRepo } from './repos/brief-snapshot-repo.js';
+import { DrizzleEmailDeliveryRepo } from './repos/email-delivery-repo.js';
 import { AuthService } from './auth/auth-service.js';
 import { registerAuthRoutes } from './auth/routes.js';
 import type { OAuthClient } from './oauth/client.js';
@@ -47,6 +50,8 @@ import {
 } from './ingest/registry-ingest-service.js';
 import { registerIngestRoutes } from './ingest/routes.js';
 import { ClusterFormationService } from './services/cluster-formation-service.js';
+import { BriefPlanService } from './services/brief-plan-service.js';
+import { BriefSnapshotRenderer } from './services/brief-snapshot-renderer.js';
 import { registerTierRoutes } from './billing/tier-routes.js';
 import type { FeedFetcher } from './ingest/feed-fetcher.js';
 
@@ -156,6 +161,9 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
   const storyRepo = new DrizzleStoryRepo(opts.db);
   const feedbackRepo = new DrizzleFeedbackRepo(opts.db);
   const deliverySettingsRepo = new DrizzleDeliverySettingsRepo(opts.db);
+  const briefPlanRepo = new DrizzleBriefPlanRepo(opts.db);
+  const briefSnapshotRepo = new DrizzleBriefSnapshotRepo(opts.db);
+  const emailDeliveryRepo = new DrizzleEmailDeliveryRepo(opts.db);
 
   await applyDirectorySeed(opts.db);
 
@@ -195,6 +203,23 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     clusterRepo,
     topicRepo,
     clock,
+  });
+
+  // A brief is planned, rendered, stored and sent as one step, so the service
+  // is built here rather than at the route. The LLM client is left out: with no
+  // `OPENAI_API_KEY` a brief falls back to the extractive path, which is
+  // quotable by construction. Wiring the generated path is a separate change.
+  const briefPlanService = new BriefPlanService({
+    clusterRepo,
+    briefPlanRepo,
+    briefSnapshotRepo,
+    emailDeliveryRepo,
+    renderer: new BriefSnapshotRenderer({ clusterRepo, topicRepo }),
+    // The same transport the magic link and the welcome email go out on.
+    emailTransport: opts.emailTransport,
+    appBaseUrl: opts.appBaseUrl,
+    clock,
+    random: opts.random ?? nodeRandom,
   });
 
   const ingestScheduler = await resolveIngestScheduler({
@@ -239,6 +264,8 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     topicRepo,
     sourceRepo,
     feedbackRepo,
+    briefPlanService,
+    briefSnapshotRepo,
   });
 
   if (ingestScheduler) {

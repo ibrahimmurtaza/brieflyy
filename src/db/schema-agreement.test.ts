@@ -81,6 +81,11 @@ function columnDeclarations(
   }));
 }
 
+/** Whether a declared column is declared `NOT NULL`. */
+function declaredNotNull(column: { readonly body: string }): boolean {
+  return column.body.includes('.notNull()');
+}
+
 function declaredIndexes(): DeclaredIndex[] {
   const out: DeclaredIndex[] = [];
   for (const table of tableNames()) {
@@ -221,6 +226,37 @@ describe('declared schema and applied DDL agree', () => {
       }
     }
     expect(missing).toEqual([]);
+  });
+
+  it('applies every declared column with the declared nullability', () => {
+    // The two schemas describing a column as nullable in one place and NOT NULL
+    // in the other is how a constraint on a table stops being true of the
+    // database and stays true of the code that reads it. `NOT NULL` is the
+    // stricter of the two, so it is the direction that bites: a column Drizzle
+    // will not write null into, on a table the application created with a
+    // nullable one, is a write that fails against the applied schema and not
+    // against the declared one.
+    const mismatches: string[] = [];
+    for (const table of TABLES) {
+      const applied = new Map(
+        appliedColumns(table).map((c) => [c.name, c.notNull === 1] as const),
+      );
+      for (const column of columnDeclarations(table)) {
+        // A primary key is not nullable in either schema's reading of it, so
+        // there is no disagreement here to detect: Drizzle says `primaryKey()`,
+        // the DDL spells it out as `PRIMARY KEY NOT NULL`.
+        if (column.body.includes('.primaryKey()')) continue;
+        const isNotNull = declaredNotNull(column);
+        const appliedNotNull = applied.get(column.sqlName);
+        if (appliedNotNull === undefined) continue;
+        if (appliedNotNull !== isNotNull) {
+          mismatches.push(
+            `${table}.${column.sqlName}: declared ${isNotNull ? 'NOT NULL' : 'nullable'} but applied ${appliedNotNull ? 'NOT NULL' : 'nullable'}`,
+          );
+        }
+      }
+    }
+    expect(mismatches).toEqual([]);
   });
 
   it('declares the mandatory foreign keys on clusters, brief snapshots and email deliveries', () => {

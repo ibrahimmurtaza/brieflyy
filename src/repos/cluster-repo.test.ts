@@ -100,7 +100,6 @@ describe('DrizzleClusterRepo', () => {
 
     await storyRepo.insert({
       id: storyId,
-      sourceId: source.id,
       signature: EMPTY_SIGNATURE,
       firstSeenAt: now,
       lastSeenAt: now,
@@ -174,7 +173,6 @@ describe('DrizzleClusterRepo', () => {
 
     await storyRepo.insert({
       id: storyId,
-      sourceId: source.id,
       signature: EMPTY_SIGNATURE,
       firstSeenAt: now,
       lastSeenAt: now,
@@ -234,7 +232,6 @@ describe('DrizzleClusterRepo', () => {
     const storyId = 'story-1' as StoryId;
     await storyRepo.insert({
       id: storyId,
-      sourceId: 'src-test',
       signature: EMPTY_SIGNATURE,
       firstSeenAt: now,
       lastSeenAt: now,

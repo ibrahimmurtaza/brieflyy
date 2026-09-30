@@ -132,6 +132,8 @@ async function givenStory(
     readonly hoursAgo: number;
     readonly title?: string;
     readonly sourceId?: SourceId;
+    /** A copy of the same event, carried by a second outlet in the same Story. */
+    readonly syndicatedFrom?: SourceId;
   },
 ): Promise<readonly EntityId[]> {
   const seenAt = new Date(NOW.getTime() - input.hoursAgo * HOUR);
@@ -151,28 +153,39 @@ async function givenStory(
   }
   await h.storyRepo.insert({
     id: input.storyId as StoryId,
-    sourceId: input.sourceId ?? SOURCE_ID,
     signature: EMPTY_SIGNATURE,
     firstSeenAt: seenAt,
     lastSeenAt: seenAt,
     published: { first: seenAt, last: seenAt }
   });
-  await h.articleRepo.insert({
-    article: {
-      id: `article-${input.storyId}` as ArticleId,
-      sourceId: input.sourceId ?? SOURCE_ID,
-      externalId: `ext-${input.storyId}`,
-      url: `https://example.com/${input.storyId}`,
-      title: input.title ?? `${input.body.split('.')[0]}.`,
-      body: input.body,
-      publishedAt: seenAt,
-      ingestedAt: seenAt,
-      entities: [],
-      signature: EMPTY_SIGNATURE,
-      storyId: input.storyId as StoryId,
-    },
-    entityIds,
-  });
+  // One Article, or two when the same story was also carried by another outlet:
+  // a syndicated copy is the same Story with a second Source in it, which is the
+  // shape this whole change exists to produce.
+  const outlets: readonly { readonly sourceId: SourceId; readonly suffix: string; readonly hoursLater: number }[] =
+    input.syndicatedFrom
+      ? [
+          { sourceId: input.sourceId ?? SOURCE_ID, suffix: '', hoursLater: 0 },
+          { sourceId: input.syndicatedFrom, suffix: '-copy', hoursLater: 1 },
+        ]
+      : [{ sourceId: input.sourceId ?? SOURCE_ID, suffix: '', hoursLater: 0 }];
+  for (const outlet of outlets) {
+    await h.articleRepo.insert({
+      article: {
+        id: `article-${input.storyId}${outlet.suffix}` as ArticleId,
+        sourceId: outlet.sourceId,
+        externalId: `ext-${input.storyId}${outlet.suffix}`,
+        url: `https://${outlet.sourceId}.example.com/${input.storyId}`,
+        title: input.title ?? `${input.body.split('.')[0]}.`,
+        body: input.body,
+        publishedAt: new Date(seenAt.getTime() + outlet.hoursLater * HOUR),
+        ingestedAt: seenAt,
+        entities: [],
+        signature: EMPTY_SIGNATURE,
+        storyId: input.storyId as StoryId,
+      },
+      entityIds,
+    });
+  }
   return entityIds;
 }
 
@@ -184,7 +197,11 @@ async function storyIdsByCluster(
   h: Harness,
   clusterId: string,
 ): Promise<readonly string[]> {
-  const articles = await h.clusterRepo.listArticlesByClusterId(clusterId);
+  const topic = await h.topicRepo.getById('topic-1');
+  const articles = await h.clusterRepo.listArticlesByClusterId(
+    clusterId,
+    topic?.sourceIds ?? [],
+  );
   return storyIdsOf(
     Array.from(
       new Set(articles.map((a) => a.storyId).filter((id): id is string => !!id)),
@@ -431,6 +448,53 @@ describe('ClusterFormationService', () => {
       'src-test',
     ]);
   });
+
+  it('lists both Sources of a Story two outlets reported the same story in', async () => {
+    // One Story holding Articles from two Sources is the shape this whole change
+    // exists to produce. A Cluster's source list is the union of its Articles'
+    // Sources, so a Story that spans outlets widens the Cluster rather than
+    // hiding one of them — and the outlet a User is filtered by is the one the
+    // copy actually came from, not the one that happened to be polled first.
+    const h = await buildHarness();
+    await addSource(h, 'src-other', 'Other Source');
+    await h.topicRepo.insertTopicSource('topic-1', 'src-other', 1);
+    await givenStory(h, {
+      storyId: 'story-acme',
+      entities: ['acme', 'foo'],
+      body: BODY.acme,
+      hoursAgo: 2,
+      syndicatedFrom: 'src-other',
+    });
+
+    const [cluster] = await h.service.formClustersForTopic('topic-1');
+
+    expect(cluster?.sourceIds).toEqual(['src-other', 'src-test']);
+    expect(cluster?.articleCount).toBe(2);
+  });
+
+  it('leaves out the copy from a Source the Topic does not follow', async () => {
+    // The Story is in scope — one outlet this Topic follows reported it — and
+    // the other outlet's copy of the same story is not. It was ingested for a
+    // different Topic, and quoting it here would put a Source the User never
+    // added into their brief, into their source filter, and into the grouping
+    // decision on what is one Cluster.
+    const h = await buildHarness();
+    await addSource(h, 'src-other', 'Other Source');
+    await givenStory(h, {
+      storyId: 'story-acme',
+      entities: ['acme', 'foo'],
+      body: BODY.acme,
+      hoursAgo: 2,
+      syndicatedFrom: 'src-other',
+    });
+
+    const [cluster] = await h.service.formClustersForTopic('topic-1');
+
+    expect(cluster?.sourceIds).toEqual(['src-test']);
+    expect(cluster?.articleCount).toBe(1);
+    expect(cluster?.summary).toBe(BODY.acme);
+  });
+
 
   it('gives an Active Cluster a velocity above the threshold', async () => {
     const h = await buildHarness();

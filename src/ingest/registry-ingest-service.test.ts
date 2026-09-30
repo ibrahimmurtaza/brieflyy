@@ -370,7 +370,7 @@ describe('RegistryIngestService', () => {
     await registry.ingestOnce();
     const stories = await registry.storiesForTopic(topicId);
     expect(stories.length).toBe(1);
-    expect(stories[0]?.sourceId).toBe('reuters');
+    expect(stories[0]?.sourceIds).toEqual(['reuters']);
     expect(stories[0]?.articleCount).toBe(1);
   });
 });

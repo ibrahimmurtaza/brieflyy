@@ -125,6 +125,51 @@ function statementsOf(article: Article): readonly string[] {
     : [...extractSentences(article.body), title];
 }
 
+/**
+ * The link to an Article that printed a stored statement, or null.
+ *
+ * A Cluster's bullets are stored as bare text: one sentence, no origin. That is
+ * right for the text, which is a verbatim span of an Article and therefore needs
+ * no attribution to be honest, and wrong for a surface that can link — a brief
+ * that quotes a Source without linking to it asks a reader to trust that the
+ * quotation is real.
+ *
+ * The statement is matched against the same statements `bulletsFrom` drew from,
+ * so the answer is a lookup rather than a guess: the sentence was produced from
+ * one of these Articles by the function above and is compared, normalised, to the
+ * very strings that function would produce. One Article can answer for several
+ * of its own sentences.
+ *
+ * When several Articles print the same sentence — which is the normal case and
+ * not an edge case, since a wire story is republished under several bylines —
+ * the first of them is the one returned. Which Article a bullet was originally
+ * drawn from is not recoverable from the sentence: `bulletsFrom` ranked by
+ * velocity and recency at formation time, and those are inputs this function
+ * does not have. So the claim this supports is the weaker one that is still
+ * true — a Source that printed the quoted sentence — rather than the stronger one
+ * a reader might assume, which is that it is the outlet that led the story.
+ *
+ * Null is a real answer and means "do not link this". A statement none of the
+ * Articles contains came from somewhere this function cannot see, and an Article
+ * the feed gave no usable link to has nothing to point at; in both cases naming
+ * an Article anyway would attribute a quotation to an outlet that did not print
+ * it, which is the one thing a brief quoting Sources must not do.
+ */
+export function articleUrlForStatement(
+  statement: string,
+  articles: readonly Article[],
+): string | null {
+  const wanted = normalize(statement);
+  if (wanted.length === 0) return null;
+  for (const article of articles) {
+    if (article.url.length === 0) continue;
+    if (statementsOf(article).some((candidate) => normalize(candidate) === wanted)) {
+      return article.url;
+    }
+  }
+  return null;
+}
+
 function normalize(text: string): string {
   return text.toLowerCase().replace(/\s+/g, ' ').trim();
 }

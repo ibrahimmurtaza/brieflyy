@@ -8,8 +8,10 @@ import Database from 'better-sqlite3';
 import { createDatabase, createInMemorySqliteDriver } from './client.js';
 import { applySchema, migrateToDatabaseFile } from './migrate.js';
 import { DrizzleTopicRepo } from '../repos/topic-repo.js';
+import { DrizzleStoryRepo } from '../repos/story-repo.js';
 import { decodeSignature, encodeSignature } from '../domain/story-signature.js';
 import { signatureOf, WIRE_COPIES } from '../testing/story-fixtures.js';
+import type { StoryId } from '../domain/types.js';
 
 const LEGACY_SCHEMA_SQL = `
 CREATE TABLE users (
@@ -253,6 +255,51 @@ CREATE TABLE article_entities (
 CREATE UNIQUE INDEX article_entities_pk ON article_entities (article_id, entity_id);
 `;
 
+/**
+ * A database from before a Story could span Sources: `stories.source_id` was a
+ * NOT NULL foreign key naming the one outlet a Story belonged to, and the index
+ * that looked Stories up by it. The signature and publication range are already
+ * there, so the only shape change is the column going.
+ */
+const PRE_CROSS_SOURCE_SQL = `
+CREATE TABLE sources (
+  id TEXT PRIMARY KEY NOT NULL,
+  slug TEXT NOT NULL,
+  name TEXT NOT NULL,
+  homepage_url TEXT NOT NULL,
+  feed_url TEXT,
+  last_polled_at INTEGER,
+  last_success_at INTEGER
+);
+CREATE UNIQUE INDEX sources_slug_unique ON sources (slug);
+CREATE TABLE articles (
+  id TEXT PRIMARY KEY NOT NULL,
+  source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+  external_id TEXT NOT NULL,
+  url TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  published_at INTEGER NOT NULL,
+  ingested_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+  signature TEXT NOT NULL DEFAULT '{}',
+  story_id TEXT
+);
+CREATE UNIQUE INDEX articles_source_external_unique ON articles (source_id, external_id);
+CREATE INDEX articles_source_idx ON articles (source_id);
+CREATE INDEX articles_story_idx ON articles (story_id);
+CREATE TABLE stories (
+  id TEXT PRIMARY KEY NOT NULL,
+  source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+  signature TEXT NOT NULL DEFAULT '{}',
+  first_seen_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL,
+  first_published_at INTEGER NOT NULL DEFAULT 0,
+  last_published_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX stories_source_idx ON stories (source_id);
+CREATE INDEX stories_published_idx ON stories (last_published_at);
+`;
+
 function foreignKeys(
   driver: Database.Database,
   table: string,
@@ -321,6 +368,45 @@ CREATE TABLE magic_links (
 );
 CREATE UNIQUE INDEX magic_links_token_hash_unique ON magic_links (token_hash);
 CREATE INDEX magic_links_account_idx ON magic_links (account_id);
+`;
+
+/** A database from before a BriefSnapshot carried a plain-text alternative. */
+const NO_SNAPSHOT_TEXT_SCHEMA_SQL = `
+CREATE TABLE users (
+  id TEXT PRIMARY KEY NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+  onboarding_state TEXT NOT NULL DEFAULT 'not_started'
+);
+CREATE TABLE topics (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  slug TEXT NOT NULL,
+  title TEXT NOT NULL,
+  blurb TEXT NOT NULL,
+  category TEXT NOT NULL,
+  origin_kind TEXT NOT NULL,
+  origin_template_id TEXT,
+  cadence TEXT NOT NULL DEFAULT 'daily',
+  created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+);
+CREATE TABLE brief_plans (
+  id TEXT PRIMARY KEY NOT NULL,
+  topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  cluster_ids TEXT NOT NULL DEFAULT ''
+);
+CREATE UNIQUE INDEX brief_plans_topic_user_idx ON brief_plans (topic_id, user_id, created_at);
+CREATE TABLE brief_snapshots (
+  id TEXT PRIMARY KEY NOT NULL,
+  brief_plan_id TEXT NOT NULL REFERENCES brief_plans(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  html TEXT NOT NULL,
+  unsubscribe_token TEXT NOT NULL,
+  global_unsubscribe_token TEXT NOT NULL
+);
 `;
 
 describe('applySchema', () => {
@@ -435,6 +521,41 @@ describe('applySchema', () => {
     );
   });
 
+  it('adds brief_snapshots.text to a database created before the column existed', () => {
+    // `EmailMessage.text` is required, so a snapshot that stored only HTML could
+    // not be sent at all. The column arrives empty on the snapshots written
+    // before it, which is the truth about them: they have no text alternative.
+    const driver = createInMemorySqliteDriver();
+    driver.exec(NO_SNAPSHOT_TEXT_SCHEMA_SQL);
+    driver.prepare(`INSERT INTO users (id) VALUES (?)`).run('user-1');
+    driver
+      .prepare(
+        `INSERT INTO topics (id, user_id, slug, title, blurb, category, origin_kind, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run('topic-1', 'user-1', 'ai', 'AI', 'AI news', 'technology', 'freeform', 1);
+    driver
+      .prepare(
+        `INSERT INTO brief_plans (id, topic_id, user_id, created_at, cluster_ids) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run('plan-1', 'topic-1', 'user-1', 1, 'cluster-1');
+    driver
+      .prepare(
+        `INSERT INTO brief_snapshots (id, brief_plan_id, user_id, topic_id, created_at, html, unsubscribe_token, global_unsubscribe_token)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run('snap-1', 'plan-1', 'user-1', 'topic-1', 1, '<p>sent</p>', 'u1', 'g1');
+
+    applySchema(driver);
+
+    const row = driver
+      .prepare(`SELECT html, text FROM brief_snapshots WHERE id = ?`)
+      .get('snap-1') as { html: string; text: string } | undefined;
+    // The brief that was sent is still there, and it says it has no text part.
+    expect(row?.html).toBe('<p>sent</p>');
+    expect(row?.text).toBe('');
+  });
+
   it('keeps the rows of a table it rebuilds', () => {
     const driver = createInMemorySqliteDriver();
     driver.exec(PRE_FK_SCHEMA_SQL);
@@ -503,10 +624,10 @@ describe('applySchema', () => {
     const insertStory = (id: string, at: number): void => {
       driver
         .prepare(
-          `INSERT INTO stories (id, source_id, signature, first_seen_at, last_seen_at, first_published_at, last_published_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO stories (id, signature, first_seen_at, last_seen_at, first_published_at, last_published_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
         )
-        .run(id, 'src-1', '{"words":["acme"],"phrases":["acme launched"]}', at, at, at, at);
+        .run(id, '{"words":["acme"],"phrases":["acme launched"]}', at, at, at, at);
     };
     insertStory('story-1', 1);
     expect(() => insertStory('story-2', 2)).not.toThrow();
@@ -598,6 +719,73 @@ describe('applySchema', () => {
           .get('a-1') as { story_id: string }
       ).story_id,
     ).toBe('story-1');
+  });
+
+  it('drops the Source a Story was tied to, keeping the Story and what is in it', async () => {
+    // `source_id` was NOT NULL and a foreign key, so it could not be relaxed
+    // into optionality: SQLite cannot relax a constraint in place, and a column
+    // left behind would go on naming one Source for a Story that can now hold
+    // Articles from several. The fact it held is not lost — it is read off the
+    // Articles, which is where the Sources of a Story come from now.
+    const driver = createInMemorySqliteDriver();
+    driver.exec(PRE_CROSS_SOURCE_SQL);
+    driver
+      .prepare(
+        `INSERT INTO sources (id, slug, name, homepage_url) VALUES (?, ?, ?, ?)`,
+      )
+      .run('src-1', 'outlet', 'Outlet', 'https://example.com');
+    driver
+      .prepare(
+        `INSERT INTO stories (id, source_id, signature, first_seen_at, last_seen_at, first_published_at, last_published_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run('story-1', 'src-1', '{}', 1000, 1000, 1000, 1000);
+    driver
+      .prepare(
+        `INSERT INTO articles (id, source_id, external_id, url, title, body, published_at, ingested_at, signature, story_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        'a-1',
+        'src-1',
+        'ext-1',
+        'https://example.com/1',
+        'A headline',
+        WIRE_COPIES[0]!.body,
+        1000,
+        1000,
+        '{}',
+        'story-1',
+      );
+
+    applySchema(driver);
+
+    const columns = (
+      driver.prepare(`SELECT name FROM pragma_table_info(?)`).all('stories') as {
+        name: string;
+      }[]
+    ).map((c) => c.name);
+    expect(columns).not.toContain('source_id');
+    // The foreign key went with it: a Story is no longer something a Source owns.
+    expect(foreignKeys(driver, 'stories')).toEqual([]);
+    // And the index that existed only to look Stories up by that Source.
+    expect(
+      driver
+        .prepare(
+          `SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'stories_source_idx'`,
+        )
+        .all(),
+    ).toEqual([]);
+
+    // The Story survived, and it still says which outlet reported it.
+    const story = await new DrizzleStoryRepo(
+      createDatabase({ driver }),
+    ).getById('story-1' as StoryId);
+    expect(story?.articleCount).toBe(1);
+    expect(story?.sourceIds).toEqual(['src-1']);
+
+    // And it can still be matched against, which is the reason it was kept.
+    expect(() => applySchema(driver)).not.toThrow();
   });
 
   it('derives a signature and a published range for a Story written before the columns existed', () => {

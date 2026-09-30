@@ -4,7 +4,6 @@ import type { FastifyInstance } from 'fastify';
 import { createApp } from '../app.js';
 import { applyDirectorySeed } from '../directory/seed.js';
 import { ConsoleEmailTransport } from '../email/console-transport.js';
-import { BriefSnapshotRenderer } from '../services/brief-snapshot-renderer.js';
 import { DrizzleArticleRepo } from '../repos/article-repo.js';
 import { DrizzleClusterRepo } from '../repos/cluster-repo.js';
 import { DrizzleStoryRepo } from '../repos/story-repo.js';
@@ -102,6 +101,8 @@ interface Harness {
   readonly cookie: string;
   readonly driver: ReturnType<typeof createTestDb>['driver'];
   readonly topicSlug: string;
+  /** The one transport the application was built with, magic links included. */
+  readonly transport: ConsoleEmailTransport;
 }
 
 async function buildApp(): Promise<Harness> {
@@ -142,7 +143,7 @@ async function buildApp(): Promise<Harness> {
   );
   await topicRepo.insertTopicSource('topic-1' as TopicId, 'the-guardian', 0);
 
-  return { app, cookie, driver, topicSlug: 'topic-1' };
+  return { app, cookie, driver, topicSlug: 'topic-1', transport };
 }
 
 describe('the ingest loop running end to end', () => {
@@ -448,7 +449,7 @@ describe('hostile feed content', () => {
       }),
     );
     await topicRepo.insertTopicSource('topic-1' as TopicId, 'the-guardian', 0);
-    harness = { app, cookie, driver, topicSlug: 'topic-1' };
+    harness = { app, cookie, driver, topicSlug: 'topic-1', transport };
   });
 
   afterEach(async () => {
@@ -574,18 +575,24 @@ describe('hostile feed content', () => {
       [storyRow.id as never],
     );
 
-    const renderer = new BriefSnapshotRenderer({ clusterRepo });
-    const html = await renderer.render(
-      {
-        id: 'plan-1',
-        topicId: 'topic-1' as never,
-        userId: 'u' as never,
-        createdAt: POLL_AT,
-        clusterIds: ['cluster-hostile'],
-      },
-      'https://app.brieflyy.test',
-    );
-
-    assertNothingExecutable(html);
+    // The delivered email rather than a hand-built document: the brief a User
+    // receives is the one that has to survive hostile feed content, and the
+    // plain-text half is checked too because it is the copy a client that
+    // ignores HTML is left with.
+    await harness.app.inject({
+      method: 'POST',
+      url: '/topics/topic-1/send-brief',
+      headers: { cookie: harness.cookie },
+    });
+    const delivered = harness.transport.snapshot().at(-1);
+    expect(delivered?.subject).toBe('World news - Brieflyy');
+    assertNothingExecutable(delivered?.html ?? '');
+    // The text half is held to the link rule and not the tag rule, and the
+    // difference is the point of it: a feed wrote those characters, so they are
+    // quoted back as the visible text they are, and a client showing this part
+    // is showing text rather than interpreting it. What would still be a defect
+    // here is a link out to a scheme that runs on click.
+    expect(delivered?.text).not.toMatch(/(^|\s)javascript:/i);
+    expect(delivered?.text).not.toMatch(/(^|\s)data:/i);
   });
 });

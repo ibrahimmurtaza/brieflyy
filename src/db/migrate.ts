@@ -172,14 +172,12 @@ CREATE INDEX IF NOT EXISTS article_entities_entity_idx ON article_entities (enti
 
 CREATE TABLE IF NOT EXISTS stories (
   id TEXT PRIMARY KEY NOT NULL,
-  source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
   signature TEXT NOT NULL DEFAULT '{}',
   first_seen_at INTEGER NOT NULL,
   last_seen_at INTEGER NOT NULL,
   first_published_at INTEGER NOT NULL DEFAULT 0,
   last_published_at INTEGER NOT NULL DEFAULT 0
 );
-CREATE INDEX IF NOT EXISTS stories_source_idx ON stories (source_id);
 CREATE INDEX IF NOT EXISTS stories_published_idx ON stories (last_published_at);
 
 CREATE TABLE IF NOT EXISTS clusters (
@@ -231,6 +229,7 @@ CREATE TABLE IF NOT EXISTS brief_snapshots (
   topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
   created_at INTEGER NOT NULL,
   html TEXT NOT NULL,
+  text TEXT NOT NULL DEFAULT '',
   unsubscribe_token TEXT NOT NULL,
   global_unsubscribe_token TEXT NOT NULL
 );
@@ -441,6 +440,7 @@ const TABLE_REBUILDS: readonly TableRebuild[] = [
       'topic_id',
       'created_at',
       'html',
+      'text',
       'unsubscribe_token',
       'global_unsubscribe_token',
     ],
@@ -451,6 +451,7 @@ const TABLE_REBUILDS: readonly TableRebuild[] = [
   topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
   created_at INTEGER NOT NULL,
   html TEXT NOT NULL,
+  text TEXT NOT NULL DEFAULT '',
   unsubscribe_token TEXT NOT NULL,
   global_unsubscribe_token TEXT NOT NULL
 )`,
@@ -590,6 +591,15 @@ const COLUMN_MIGRATIONS: readonly ColumnMigration[] = [
     column: 'canonical_key',
     ddl: `ALTER TABLE entities ADD COLUMN canonical_key TEXT NOT NULL DEFAULT ''`,
   },
+  {
+    // The plain-text half of a BriefSnapshot. `EmailMessage.text` is required,
+    // so a snapshot holding only HTML could not be sent at all — which is part
+    // of why nothing had ever sent one. The default says the truth about the
+    // rows written before the column existed: they have no text alternative.
+    table: 'brief_snapshots',
+    column: 'text',
+    ddl: `ALTER TABLE brief_snapshots ADD COLUMN text TEXT NOT NULL DEFAULT ''`,
+  },
 ];
 
 /**
@@ -602,6 +612,13 @@ const COLUMN_MIGRATIONS: readonly ColumnMigration[] = [
  * were one Story, so leaving them on an existing database would leave a column
  * nothing reads and that a later reader could reasonably take for the identity of
  * a Story.
+ *
+ * `stories.source_id` is retired for the same reason and the opposite way round:
+ * it was a `NOT NULL` foreign key naming the one Source a Story belonged to,
+ * which is the constraint that stopped syndicated coverage of one event from
+ * being one Story. Which Sources a Story belongs to is now read off the Articles
+ * in it, so the column names one of several and can be re-scoped to a single
+ * Source by accident — the exact bug it enforced. The foreign key goes with it.
  */
 const RETIRED_COLUMNS: readonly {
   readonly table: string;
@@ -614,6 +631,7 @@ const RETIRED_COLUMNS: readonly {
     column: 'fingerprint',
     indexes: ['stories_source_fingerprint_idx'],
   },
+  { table: 'stories', column: 'source_id', indexes: ['stories_source_idx'] },
 ];
 
 function applyRetiredColumns(driver: SqliteDriver): void {

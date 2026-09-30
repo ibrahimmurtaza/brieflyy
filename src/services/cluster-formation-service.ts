@@ -126,7 +126,7 @@ export class ClusterFormationService {
     });
 
     const clusters: Cluster[] = [];
-    for (const group of await this.groupStories(stories)) {
+    for (const group of await this.groupStories(topic, stories)) {
       const cluster = await this.finalizeCluster(topic, group, now);
       await this.deps.clusterRepo.insert(
         cluster,
@@ -154,10 +154,13 @@ export class ClusterFormationService {
    * pull them apart.
    */
   private async groupStories(
+    topic: Topic,
     stories: readonly Story[],
   ): Promise<readonly (readonly Story[])[]> {
     if (stories.length === 0) return [];
-    const entityIdsByStory = await this.entityIdsByStory(stories);
+    const entityIdsByStory = entityIdsOf(
+      await this.inScopeArticlesByStory(topic, stories),
+    );
 
     const parent = stories.map((_, index) => index);
     const find = (index: number): number => {
@@ -200,17 +203,25 @@ export class ClusterFormationService {
     );
   }
 
-  private async entityIdsByStory(
+  /**
+   * The Articles of these Stories that the Topic follows, one list per Story.
+   *
+   * A Story can span Sources now, and one of them is usually not on this Topic's
+   * list — the same syndicated report arrives for every Topic, and each one is
+   * built from the Sources it follows. Grouping on Entities the User cannot see
+   * would fuse two Stories because of a mention from an outlet they never added,
+   * and a Cluster summary is only ever quoted from Articles in the Cluster, so
+   * the ones out of scope have to be out of the Cluster too. Which is also what
+   * keeps a Cluster's Source list a list of Sources the User follows.
+   */
+  private async inScopeArticlesByStory(
+    topic: Topic,
     stories: readonly Story[],
-  ): Promise<readonly (readonly EntityId[])[]> {
+  ): Promise<readonly (readonly Article[])[]> {
     return Promise.all(
       stories.map(async (story) => {
         const articles = await this.deps.articleRepo.listByStory(story.id);
-        const ids = new Set<EntityId>();
-        for (const article of articles) {
-          for (const entity of article.entities) ids.add(entity.id);
-        }
-        return [...ids];
+        return articles.filter((a) => topic.sourceIds.includes(a.sourceId));
       }),
     );
   }
@@ -234,10 +245,8 @@ export class ClusterFormationService {
     stories: readonly Story[],
     now: Date,
   ): Promise<Cluster> {
-    const articles: Article[] = [];
-    for (const story of stories) {
-      articles.push(...(await this.deps.articleRepo.listByStory(story.id)));
-    }
+    const perStory = await this.inScopeArticlesByStory(topic, stories);
+    const articles: Article[] = perStory.flat();
     const ranked = rankArticles(articles);
     const representative = ranked[0];
 
@@ -268,6 +277,24 @@ export class ClusterFormationService {
         velocity >= CLUSTER_ACTIVE_VELOCITY_THRESHOLD ? 'active' : 'archive',
     };
   }
+}
+
+/**
+ * Which Entities each Story carries, as the union over its Articles.
+ *
+ * A Story's Entities are the ones its Articles name, and an Article with none
+ * contributes nothing rather than an empty set that would overlap everything.
+ */
+function entityIdsOf(
+  perStory: readonly (readonly Article[])[],
+): readonly (readonly EntityId[])[] {
+  return perStory.map((articles) => {
+    const ids = new Set<EntityId>();
+    for (const article of articles) {
+      for (const entity of article.entities) ids.add(entity.id);
+    }
+    return [...ids];
+  });
 }
 
 /**

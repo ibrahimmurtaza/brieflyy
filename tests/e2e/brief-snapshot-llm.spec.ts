@@ -38,7 +38,7 @@ function createMockClusterRepo() {
         state: 'active',
       },
     ],
-    listArticlesByClusterId: async () => [
+    listArticlesByClusterId: async (_clusterId, _sourceIds) => [
       {
         id: 'a-1',
         sourceId: 'src-ai',
@@ -56,14 +56,20 @@ function createMockClusterRepo() {
   } as any;
 }
 
+/** The Topic the brief is named after and links into the app by. */
+const mockTopicRepo = {
+  getById: async () => ({ id: 't-e2e', slug: 'ai-launch', title: 'AI launch' }),
+} as any;
+
 test('BriefSnapshot with LLM summary renders clickable bullet links', async ({ page }) => {
   const renderer = new BriefSnapshotRenderer({
     clusterRepo: createMockClusterRepo(),
+    topicRepo: mockTopicRepo,
     llmClient: new MockLLMClient() as any,
     maxLlmClusters: 5,
   });
 
-  const html = await renderer.render(
+  const { html } = await renderer.render(
     { id: 'bp-e2e', topicId: 't-e2e', userId: 'u-e2e', createdAt: new Date(), clusterIds: ['c-llm-1'] } as any,
     'https://app',
   );
@@ -76,6 +82,53 @@ test('BriefSnapshot with LLM summary renders clickable bullet links', async ({ p
   const link = page.locator('li a[href="https://example.com/article-ai"]');
   await expect(link).toBeVisible();
   await expect(link).toHaveAttribute('target', '_blank');
+  await expect(link).toHaveAttribute('rel', 'noopener');
+
+  unlinkSync(filePath);
+});
+
+test('an extractive bullet is a real link too, not just the generated ones', async ({ page }) => {
+  // The generated path is handed the Article each bullet came from. The
+  // extractive path stores bare sentences and has to look the origin up itself,
+  // and a browser is the only place "is this actually clickable" gets answered
+  // rather than asserted about a string.
+  const renderer = new BriefSnapshotRenderer({
+    clusterRepo: {
+      ...createMockClusterRepo(),
+      listByTopicId: async () => [
+        {
+          id: 'c-llm-1',
+          topicId: 't-e2e',
+          title: 'AI Launch Cluster',
+          summary: 'Extractive',
+          // The mock Article's own title, which is a statement it offers when
+          // its body has none, so the lookup has something real to find.
+          bulletPoints: ['AI Launch'],
+          createdAt: new Date(),
+          lastSeenAt: new Date(),
+          articleCount: 1,
+          velocity: 1,
+          sourceIds: ['src-ai'],
+          state: 'active',
+        },
+      ],
+    },
+    topicRepo: mockTopicRepo,
+  });
+
+  const { html } = await renderer.render(
+    { id: 'bp-e2e', topicId: 't-e2e', userId: 'u-e2e', createdAt: new Date(), clusterIds: ['c-llm-1'] } as any,
+    'https://app',
+  );
+
+  const filePath = join(tmpdir(), `brief-snapshot-extractive-e2e-${Date.now()}.html`);
+  writeFileSync(filePath, html);
+
+  await page.goto(`file://${filePath}`);
+
+  const link = page.locator('li a[href="https://example.com/article-ai"]');
+  await expect(link).toBeVisible();
+  await expect(link).toHaveText('AI Launch');
   await expect(link).toHaveAttribute('rel', 'noopener');
 
   unlinkSync(filePath);
