@@ -377,7 +377,10 @@ export async function registerPageRoutes(
       const revealableCount = active.filter((c) => !feedbackHiddenIds.has(c.id)).length;
       const clusterArticles = new Map<string, readonly import('../domain/types.js').Article[]>();
       for (const c of activeClusters) {
-        clusterArticles.set(c.id, await opts.clusterRepo.listArticlesByClusterId(c.id));
+        clusterArticles.set(
+          c.id,
+          await opts.clusterRepo.listArticlesByClusterId(c.id, topic.sourceIds),
+        );
       }
       const sourcesById = new Map(
         (await opts.sourceRepo.list()).map((s) => [s.id, s] as const),

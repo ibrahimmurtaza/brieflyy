@@ -19,7 +19,7 @@ import { DrizzleClusterRepo } from '../repos/cluster-repo.js';
 import { DrizzleStoryRepo } from '../repos/story-repo.js';
 import { DrizzleTopicRepo } from '../repos/topic-repo.js';
 import { EMPTY_SIGNATURE } from '../domain/story-signature.js';
-import type { SourceId, StoryId } from '../domain/types.js';
+import type { SourceId, StoryId, TopicId } from '../domain/types.js';
 
 const NOW = new Date('2026-09-02T12:00:00Z');
 const APP_BASE_URL = 'https://app.brieflyy.test';
@@ -72,6 +72,9 @@ async function signInWithTopic(input: { readonly email?: string } = {}): Promise
   const topicRepo = new DrizzleTopicRepo(db);
   const userId = (driver.prepare(`SELECT id FROM users LIMIT 1`).get() as { id: string }).id;
   await topicRepo.insert(makeTopic({ id: 'topic-1', userId, title: 'World news' }));
+  // The Topic follows the outlet its Article came from, which is what lets the
+  // Cluster hold it: a Topic with no Sources has nothing to show.
+  await topicRepo.insertTopicSource('topic-1' as TopicId, 'the-guardian', 0);
 
   // A Cluster with an Article behind it, because that is the only state a real
   // one is ever in, and the brief's bullets are quoted from those Articles —
@@ -79,7 +82,6 @@ async function signInWithTopic(input: { readonly email?: string } = {}): Promise
   // and the interesting assertions would be vacuous.
   await new DrizzleStoryRepo(db).insert({
     id: 'story-1' as StoryId,
-    sourceId: 'the-guardian' as SourceId,
     signature: EMPTY_SIGNATURE,
     firstSeenAt: NOW,
     lastSeenAt: NOW,

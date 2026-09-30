@@ -66,7 +66,10 @@ export class BriefSnapshotRenderer {
       // bullets to.
       articlesByCluster.set(
         cluster.id as string,
-        await this.deps.clusterRepo.listArticlesByClusterId(cluster.id as string),
+        await this.deps.clusterRepo.listArticlesByClusterId(
+          cluster.id as string,
+          topic.sourceIds,
+        ),
       );
     }
 

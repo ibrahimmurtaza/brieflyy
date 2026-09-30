@@ -26,7 +26,21 @@ export interface ClusterRepo {
   findById(id: ClusterId): Promise<Cluster | null>;
   listByTopicId(topicId: string): Promise<readonly Cluster[]>;
   listArticlesByTopicId(topicId: string): Promise<readonly Article[]>;
-  listArticlesByClusterId(clusterId: string): Promise<readonly Article[]>;
+  /**
+   * The Articles of a Cluster, from the Sources its Topic follows.
+   *
+   * A Story can span Sources, so a Story grouped into a Cluster can hold Articles
+   * this Topic does not follow — ingested for a different Topic, or a different
+   * User. Those Articles are not in this Cluster: formation left them out of it,
+   * along with their Source, and a Cluster summary is only ever quoted from
+   * Articles the Cluster has. Passing the Topic's Sources rather than defaulting
+   * to every Article is what keeps the read path saying the same thing the
+   * Cluster was built from.
+   */
+  listArticlesByClusterId(
+    clusterId: string,
+    sourceIds: readonly SourceId[],
+  ): Promise<readonly Article[]>;
   /**
    * Write a Cluster and the Stories it groups, replacing any Cluster already
    * under the same id.
@@ -138,7 +152,11 @@ export class DrizzleClusterRepo implements ClusterRepo {
     );
   }
 
-  async listArticlesByClusterId(clusterId: string): Promise<readonly Article[]> {
+  async listArticlesByClusterId(
+    clusterId: string,
+    sourceIds: readonly SourceId[],
+  ): Promise<readonly Article[]> {
+    if (sourceIds.length === 0) return [];
     const storyRows = (await this.db
       .select()
       .from(clusterStories)
@@ -148,7 +166,12 @@ export class DrizzleClusterRepo implements ClusterRepo {
     const articleRows = (await this.db
       .select()
       .from(articles)
-      .where(inArray(articles.storyId, storyIds))
+      .where(
+        and(
+          inArray(articles.storyId, storyIds),
+          inArray(articles.sourceId, sourceIds),
+        ),
+      )
       .orderBy(asc(articles.publishedAt))) as readonly ArticleRow[];
     if (articleRows.length === 0) return [];
     const byArticle = await this.loadEntitiesByArticleId(articleRows.map((r) => r.id));

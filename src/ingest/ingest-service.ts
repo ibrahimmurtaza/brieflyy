@@ -137,7 +137,6 @@ export class IngestService {
       const signature = normalizeSignature(extractSignature(entry.body));
 
       const candidates = await this.storyRepo.listCandidates({
-        sourceId: source.id,
         publishedAt: entry.publishedAt,
         windowMs: INGEST_WINDOW_MS,
       });
@@ -154,7 +153,6 @@ export class IngestService {
         storyId = this.random.uuid() as StoryId;
         await this.storyRepo.insert({
           id: storyId,
-          sourceId: source.id,
           signature,
           firstSeenAt: polledAt,
           lastSeenAt: polledAt,

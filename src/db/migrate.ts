@@ -172,14 +172,12 @@ CREATE INDEX IF NOT EXISTS article_entities_entity_idx ON article_entities (enti
 
 CREATE TABLE IF NOT EXISTS stories (
   id TEXT PRIMARY KEY NOT NULL,
-  source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
   signature TEXT NOT NULL DEFAULT '{}',
   first_seen_at INTEGER NOT NULL,
   last_seen_at INTEGER NOT NULL,
   first_published_at INTEGER NOT NULL DEFAULT 0,
   last_published_at INTEGER NOT NULL DEFAULT 0
 );
-CREATE INDEX IF NOT EXISTS stories_source_idx ON stories (source_id);
 CREATE INDEX IF NOT EXISTS stories_published_idx ON stories (last_published_at);
 
 CREATE TABLE IF NOT EXISTS clusters (
@@ -614,6 +612,13 @@ const COLUMN_MIGRATIONS: readonly ColumnMigration[] = [
  * were one Story, so leaving them on an existing database would leave a column
  * nothing reads and that a later reader could reasonably take for the identity of
  * a Story.
+ *
+ * `stories.source_id` is retired for the same reason and the opposite way round:
+ * it was a `NOT NULL` foreign key naming the one Source a Story belonged to,
+ * which is the constraint that stopped syndicated coverage of one event from
+ * being one Story. Which Sources a Story belongs to is now read off the Articles
+ * in it, so the column names one of several and can be re-scoped to a single
+ * Source by accident — the exact bug it enforced. The foreign key goes with it.
  */
 const RETIRED_COLUMNS: readonly {
   readonly table: string;
@@ -626,6 +631,7 @@ const RETIRED_COLUMNS: readonly {
     column: 'fingerprint',
     indexes: ['stories_source_fingerprint_idx'],
   },
+  { table: 'stories', column: 'source_id', indexes: ['stories_source_idx'] },
 ];
 
 function applyRetiredColumns(driver: SqliteDriver): void {

@@ -38,7 +38,7 @@ function createMockClusterRepo() {
         state: 'active',
       },
     ],
-    listArticlesByClusterId: async () => [
+    listArticlesByClusterId: async (_clusterId, _sourceIds) => [
       {
         id: 'a-1',
         sourceId: 'src-ai',

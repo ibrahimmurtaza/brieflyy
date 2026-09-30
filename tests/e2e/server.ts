@@ -130,7 +130,6 @@ insert(
 );
 await storyRepo.insert({
   id: 'e2e-story-1' as StoryId,
-  sourceId: SOURCES[0]![0],
   signature: EMPTY_SIGNATURE,
   firstSeenAt: new Date(NOW.getTime() - DAY),
   lastSeenAt: NOW,

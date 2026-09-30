@@ -100,7 +100,6 @@ async function givenStory(
   const storyId = input.id as StoryId;
   await h.storyRepo.insert({
     id: storyId,
-    sourceId: input.sourceId ?? ('reuters' as SourceId),
     signature: EMPTY_SIGNATURE,
     firstSeenAt: NOW,
     lastSeenAt: NOW,

@@ -204,7 +204,15 @@ export interface PublishedRange {
 
 export interface Story {
   readonly id: StoryId;
-  readonly sourceId: SourceId;
+  /**
+   * Every Source this Story has Articles from.
+   *
+   * One event however many outlets reported it, so a list rather than the one
+   * Source it was first seen in — and read from the Articles themselves rather
+   * than from a column on the Story, which would name one of them and leave the
+   * rest to be inferred.
+   */
+  readonly sourceIds: readonly SourceId[];
   /** The signature this Story was formed from, fixed when it was created. */
   readonly signature: StorySignature;
   readonly firstSeenAt: Date;

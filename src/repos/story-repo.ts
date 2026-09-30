@@ -13,19 +13,21 @@ import type {
 
 export interface StoryRepo {
   listCandidates(input: {
-    readonly sourceId: SourceId;
     /** When the Article being placed was published. */
     readonly publishedAt: Date;
     /** How far the Article's date may sit from a Story's own range. */
     readonly windowMs: number;
   }): Promise<readonly Story[]>;
+  /**
+   * The Stories at least one of these Sources has Articles in, seen since
+   * `windowStart`.
+   */
   listBySourceIdsInWindow(input: {
     readonly sourceIds: readonly SourceId[];
     readonly windowStart: Date;
   }): Promise<readonly Story[]>;
   insert(input: {
     readonly id: StoryId;
-    readonly sourceId: SourceId;
     readonly signature: StorySignature;
     readonly firstSeenAt: Date;
     readonly lastSeenAt: Date;
@@ -57,9 +59,17 @@ export class DrizzleStoryRepo implements StoryRepo {
    * same bug as measuring the window from the poll. These bounds instead admit
    * only Articles that keep the range inside the window, so every Story is within
    * one window of its own oldest Article by construction.
+   *
+   * There is no Source in the lookup, and that is the point rather than a
+   * simplification: an Article is compared with every Story published near it,
+   * whichever outlet that Story's copies came from. Scoping the candidates to one
+   * Source made syndicated coverage of one story arrive as one Story per outlet,
+   * which is the case a Story exists to collapse. The cost is that the candidate
+   * set is now every Story in the window rather than one feed's, so it grows with
+   * how much the whole registry published in three days; the window itself is
+   * unchanged, and its upper bound is the indexed one.
    */
   async listCandidates(input: {
-    readonly sourceId: SourceId;
     readonly publishedAt: Date;
     readonly windowMs: number;
   }): Promise<readonly Story[]> {
@@ -70,7 +80,6 @@ export class DrizzleStoryRepo implements StoryRepo {
       .from(stories)
       .where(
         and(
-          eq(stories.sourceId, input.sourceId),
           gte(stories.firstPublishedAt, earliest),
           lte(stories.lastPublishedAt, latest),
         ),
@@ -79,39 +88,46 @@ export class DrizzleStoryRepo implements StoryRepo {
     return this.hydrateMany(rows);
   }
 
+  /**
+   * The Stories a set of Sources has Articles in.
+   *
+   * Which Sources a Story belongs to is read off its Articles rather than off a
+   * column on the Story, so the join is the lookup: a Story is in scope for a
+   * Topic when any Source the Topic follows reported it. Filtering on a single
+   * Source per Story would drop a syndicated Story from every Topic that follows
+   * an outlet other than the one that happened to be polled first.
+   */
   async listBySourceIdsInWindow(input: {
     readonly sourceIds: readonly SourceId[];
     readonly windowStart: Date;
   }): Promise<readonly Story[]> {
     if (input.sourceIds.length === 0) return [];
-    const rows = (await this.db
-      .select()
+    const selected = await this.db
+      .selectDistinct({ story: stories })
       .from(stories)
+      .innerJoin(articles, eq(articles.storyId, stories.id))
       .where(
         and(
-          inArray(stories.sourceId, input.sourceIds),
+          inArray(articles.sourceId, input.sourceIds),
           gte(stories.lastSeenAt, input.windowStart),
         ),
       )
-      .orderBy(asc(stories.lastSeenAt))) as readonly StoryRow[];
-    return this.hydrateMany(rows);
-  }
-
-  private async hydrate(row: StoryRow): Promise<Story> {
-    const articleCount = await this.countArticles(row.id as StoryId);
-    return this.toStory(row, articleCount);
+      .orderBy(asc(stories.lastSeenAt));
+    return this.hydrateMany(selected.map((row) => row.story));
   }
 
   /**
-   * Hydrate a set of Stories, counting their Articles in one query rather than
-   * one per Story. Ingest reads the candidates near every Article it places, so
-   * a per-Story count turns a busy poll into thousands of queries.
+   * Hydrate a set of Stories, counting their Articles and collecting the Sources
+   * they came from in one query rather than one or two per Story. Ingest reads
+   * the candidates near every Article it places, so a per-Story count turns a
+   * busy poll into thousands of queries.
    */
   private async hydrateMany(rows: readonly StoryRow[]): Promise<Story[]> {
     if (rows.length === 0) return [];
-    const counts = await this.db
+    const tallies = await this.db
       .select({
         storyId: articles.storyId,
+        sourceId: articles.sourceId,
         total: sql<number>`count(*)`,
       })
       .from(articles)
@@ -121,15 +137,32 @@ export class DrizzleStoryRepo implements StoryRepo {
           rows.map((r) => r.id),
         ),
       )
-      .groupBy(articles.storyId);
-    const byStory = new Map(counts.map((c) => [c.storyId, c.total]));
-    return rows.map((row) => this.toStory(row, byStory.get(row.id) ?? 0));
+      .groupBy(articles.storyId, articles.sourceId);
+    const counts = new Map<string, number>();
+    const sourceIds = new Map<string, Set<SourceId>>();
+    for (const tally of tallies) {
+      if (tally.storyId === null) continue;
+      counts.set(
+        tally.storyId,
+        (counts.get(tally.storyId) ?? 0) + tally.total,
+      );
+      const sources = sourceIds.get(tally.storyId) ?? new Set<SourceId>();
+      sources.add(tally.sourceId as SourceId);
+      sourceIds.set(tally.storyId, sources);
+    }
+    return rows.map((row) =>
+      this.toStory(row, counts.get(row.id) ?? 0, sourceIds.get(row.id) ?? new Set()),
+    );
   }
 
-  private toStory(row: StoryRow, articleCount: number): Story {
+  private toStory(
+    row: StoryRow,
+    articleCount: number,
+    sourceIds: ReadonlySet<SourceId>,
+  ): Story {
     return {
       id: row.id as StoryId,
-      sourceId: row.sourceId as SourceId,
+      sourceIds: [...sourceIds].sort(),
       signature: decodeSignature(row.signature),
       firstSeenAt: row.firstSeenAt,
       lastSeenAt: row.lastSeenAt,
@@ -140,7 +173,6 @@ export class DrizzleStoryRepo implements StoryRepo {
 
   async insert(input: {
     readonly id: StoryId;
-    readonly sourceId: SourceId;
     readonly signature: StorySignature;
     readonly firstSeenAt: Date;
     readonly lastSeenAt: Date;
@@ -148,16 +180,18 @@ export class DrizzleStoryRepo implements StoryRepo {
   }): Promise<Story> {
     await this.db.insert(stories).values({
       id: input.id,
-      sourceId: input.sourceId,
       signature: encodeSignature(input.signature),
       firstSeenAt: input.firstSeenAt,
       lastSeenAt: input.lastSeenAt,
       firstPublishedAt: input.published.first,
       lastPublishedAt: input.published.last,
     });
+    // The Story has no Articles yet, and it has no Source of its own: the Source
+    // it belongs to is a fact about the Articles in it, and the first one is
+    // written a line later.
     const story: Story = {
       id: input.id,
-      sourceId: input.sourceId,
+      sourceIds: [],
       signature: input.signature,
       firstSeenAt: input.firstSeenAt,
       lastSeenAt: input.lastSeenAt,
@@ -204,8 +238,8 @@ export class DrizzleStoryRepo implements StoryRepo {
       .select()
       .from(stories)
       .where(eq(stories.id, id))) as readonly StoryRow[];
-    const row = rows[0];
-    if (!row) return null;
-    return this.hydrate(row);
+    if (rows.length === 0) return null;
+    const [story] = await this.hydrateMany(rows);
+    return story ?? null;
   }
 }

@@ -380,9 +380,6 @@ export const stories = sqliteTable(
   'stories',
   {
     id: text('id').primaryKey(),
-    sourceId: text('source_id')
-      .notNull()
-      .references(() => sources.id, { onDelete: 'cascade' }),
     /**
      * The signature this Story was formed from. It is set once, by the Article
      * that created the Story, and does not grow as copies arrive: a Story whose
@@ -407,7 +404,6 @@ export const stories = sqliteTable(
       .default(sql`0`),
   },
   (t) => ({
-    sourceIdx: index('stories_source_idx').on(t.sourceId),
     publishedIdx: index('stories_published_idx').on(t.lastPublishedAt),
   }),
 );
