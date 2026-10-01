@@ -1,5 +1,5 @@
 import { escapeHtml } from '../domain/html.js';
-import { layout, type PageWidth } from './layout.js';
+import { layout, type PageWidth, type ShellAccount } from './layout.js';
 
 export interface StatusFact {
   readonly label: string;
@@ -20,6 +20,14 @@ export interface StatusTable {
 export interface StatusDashboardInput {
   readonly title: string;
   readonly width?: PageWidth;
+  /**
+   * Who is signed in, so the dashboard is a page of the application rather than a
+   * document that happens to use its stylesheet. These are the observability
+   * views of the two background jobs: an operator who opens one has come from
+   * somewhere in the product, and a page with no navigation and no sign-out is
+   * where an operator gets stranded.
+   */
+  readonly account: ShellAccount;
   readonly facts: readonly StatusFact[];
   /** Omit when there is nothing tabular to show. */
   readonly table?: { readonly heading: string } & StatusTable;
@@ -68,6 +76,7 @@ ${input.table.rows
   return layout({
     title: input.title,
     width: input.width ?? 'reading',
+    account: input.account,
     body: `    <h1>${escapeHtml(input.title)}</h1>
     <dl>
 ${facts}

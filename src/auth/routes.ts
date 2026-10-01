@@ -295,6 +295,8 @@ function oauthFailurePage(message: string): string {
   return layout({
     title: 'Sign-in failed',
     width: 'narrow',
+    // Reached on the way in, so there is no signed-in User to put a header on.
+    account: null,
     body: `    <h1>Sign-in failed</h1>
     <div class="error-summary" role="alert">
       <p>${escapeHtml(message)}</p>
@@ -307,6 +309,8 @@ function invalidLinkPage(message: string): string {
   return layout({
     title: 'Invalid link',
     width: 'narrow',
+    // Reached on the way in, so there is no signed-in User to put a header on.
+    account: null,
     body: `    <h1>Invalid sign-in link</h1>
     <div class="error-summary" role="alert">
       <p>${escapeHtml(message)}</p>

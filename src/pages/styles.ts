@@ -183,6 +183,21 @@ small { font-size: var(--text-sm); }
 }
 .skip-link:focus { transform: translateY(0); }
 
+/* A label no sighted reader needs but every control needs. Kept in the document
+   rather than replaced by aria-label so the select it labels is still named when
+   it is read out of context, which an aria-label on the control alone is not. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* --------------------------------------------------------------------- shell */
 .site-header {
   border-bottom: 1px solid var(--color-rule);
@@ -227,7 +242,28 @@ small { font-size: var(--text-sm); }
 .site-nav a:hover { color: var(--color-link); text-decoration: underline; }
 .site-nav a[aria-current="page"] { color: var(--color-text); font-weight: 600; }
 
-.account { display: flex; align-items: center; gap: var(--space-3); }
+/* The account summary. Three facts — who is signed in, what they pay for, and
+   when mail next arrives — in the one place that is on every page, so none of
+   them has to be restated by a screen that would otherwise get one of them
+   wrong. Laid out as named areas rather than by source order so the two lines
+   stay two lines at any width. */
+.account {
+  display: grid;
+  grid-template-columns: auto auto;
+  grid-template-areas:
+    "who   logout"
+    "brief logout";
+  align-items: center;
+  justify-content: end;
+  gap: var(--space-1) var(--space-4);
+}
+.account__who {
+  grid-area: who;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
 .account__email {
   font-size: var(--text-xs);
   color: var(--color-text-muted);
@@ -236,6 +272,26 @@ small { font-size: var(--text-sm); }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.account__tier {
+  font-size: var(--text-xs);
+  color: var(--color-chip-fg);
+  background: var(--color-chip-bg);
+  border-radius: var(--radius-pill);
+  padding: 0 var(--space-2);
+  white-space: nowrap;
+}
+/* The next brief names the User's own timezone, and an IANA name can be long
+   enough to be wider than a phone, so it wraps rather than pushing the header
+   into a horizontal scroll. */
+.account__brief {
+  grid-area: brief;
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.account .logout { grid-area: logout; }
 
 .page { flex: 1 0 auto; width: 100%; margin: 0 auto; padding: var(--space-6) var(--space-4) var(--space-8); }
 .page--narrow { max-width: var(--page-narrow); }
@@ -439,6 +495,13 @@ section > h2 { font-size: var(--text-sm); text-transform: uppercase; letter-spac
   letter-spacing: 0.02em;
   color: var(--color-text-muted);
 }
+/* A Directory card the User acts on, rather than one whole card is. The picker's
+   card is a <label>, so the card itself is the target and the text sits beside a
+   checkbox in the first column; here the control is a button and the text owns
+   the card, so the second column has nothing to hold and is removed rather than
+   left for the title to squeeze into. */
+.card--entry { grid-template-columns: 1fr; cursor: default; }
+.card--entry .card__note { grid-column: 1; }
 
 .freeform { margin-top: var(--space-5); }
 .existing { list-style: none; padding: 0; margin: 0 0 var(--space-4); }
@@ -493,6 +556,25 @@ form.feedback button {
 }
 form.feedback button:hover { background: var(--color-surface); }
 form.feedback button[aria-pressed="true"] { border-color: var(--color-primary); background: var(--color-notice-surface); color: var(--color-notice-text); }
+/* The Hide-source control is a second form rather than a fifth button, because it
+   has to say *which* Source and *how far* the ask reaches — and a button that
+   cannot say either of those is what made the global scope unreachable in the first
+   place.
+   Its selects are sized by the control rather than by the longest Source name, so
+   a long name cannot push the button off the row. */
+form.hide-source { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0 0 var(--space-3); }
+form.hide-source button[aria-pressed="true"] { border-color: var(--color-primary); background: var(--color-notice-surface); color: var(--color-notice-text); }
+form.hide-source select {
+  min-height: 2rem;
+  max-width: 12rem;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--color-text);
+  background: var(--color-canvas);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+}
+.hide-source__state { flex-basis: 100%; margin: 0; font-size: var(--text-sm); }
 .hide-btn {
   display: inline-flex;
   align-items: center;
@@ -549,6 +631,23 @@ form.feedback button[aria-pressed="true"] { border-color: var(--color-primary); 
   /* Hour, minute and timezone only fit on one row once there is room for the
      timezone's full name; below this they stack. */
   .row { grid-template-columns: 5rem 5rem 1fr; }
+}
+
+@media (max-width: 39.99rem) {
+  /* The account summary drops below the navigation and each of its parts takes a
+     line of its own. Beside the navigation it competes for width with five links
+     the User has to read, and the email in particular ends up ellipsised to
+     nothing. */
+  .account {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "who"
+      "brief"
+      "logout";
+    justify-items: start;
+  }
+  .account__brief { text-align: left; }
+  .account__email { max-width: 100%; }
 }
 
 @media (min-width: 64rem) {

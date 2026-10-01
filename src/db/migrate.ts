@@ -209,10 +209,12 @@ CREATE TABLE IF NOT EXISTS feedback_events (
   cluster_id TEXT NOT NULL REFERENCES clusters(id) ON DELETE CASCADE,
   feedback_type TEXT NOT NULL,
   scope TEXT,
+  source_id TEXT REFERENCES sources(id) ON DELETE CASCADE,
   timestamp INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
 );
 CREATE INDEX IF NOT EXISTS feedback_events_user_cluster_type_idx ON feedback_events (user_id, cluster_id, feedback_type);
 CREATE INDEX IF NOT EXISTS feedback_events_user_cluster_idx ON feedback_events (user_id, cluster_id);
+CREATE INDEX IF NOT EXISTS feedback_events_user_source_idx ON feedback_events (user_id, source_id);
 
 CREATE TABLE IF NOT EXISTS brief_plans (
   id TEXT PRIMARY KEY NOT NULL,
@@ -521,6 +523,38 @@ const TABLE_REBUILDS: readonly TableRebuild[] = [
   sent_at INTEGER NOT NULL,
   unsubscribe_token TEXT NOT NULL,
   global_unsubscribe_token TEXT NOT NULL
+)`,
+  },
+  {
+    // Hide-source names the Source the User asked to stop seeing, so the column
+    // carries a foreign key and SQLite cannot add one to a live table: the table
+    // is rebuilt. Rows written before the column existed have no Source on them,
+    // which is the truth about them — they hid a whole Cluster rather than an
+    // outlet, so there is nothing to derive. They are no longer read as a hide at
+    // all; see `hiddenSourcesById` in `src/domain/feedback.ts`.
+    table: 'feedback_events',
+    foreignKeys: [
+      { column: 'user_id', table: 'users' },
+      { column: 'cluster_id', table: 'clusters' },
+      { column: 'source_id', table: 'sources' },
+    ],
+    columns: [
+      'id',
+      'user_id',
+      'cluster_id',
+      'feedback_type',
+      'scope',
+      'source_id',
+      'timestamp',
+    ],
+    createSql: `CREATE TABLE IF NOT EXISTS feedback_events (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  cluster_id TEXT NOT NULL REFERENCES clusters(id) ON DELETE CASCADE,
+  feedback_type TEXT NOT NULL,
+  scope TEXT,
+  source_id TEXT REFERENCES sources(id) ON DELETE CASCADE,
+  timestamp INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
 )`,
   },
   {

@@ -3,7 +3,8 @@ import { z } from 'zod';
 
 import { escapeHtml } from '../domain/html.js';
 import { deliveryTimePage } from '../pages/routes.js';
-import { layout } from '../pages/layout.js';
+import { layout, type ShellAccount } from '../pages/layout.js';
+import { shellAccountFor } from '../pages/shell.js';
 import {
   AUTHENTICATED_ROUTE_CONFIG,
   PUBLIC_ROUTE_CONFIG,
@@ -45,6 +46,7 @@ export async function registerOnboardingRoutes(
   opts: OnboardingRoutesOptions,
 ): Promise<void> {
   const { onboardingService } = opts;
+  const shellFor = shellAccountFor(onboardingService);
 
   fastify.get('/api/onboarding/templates', PUBLIC_ROUTE_CONFIG, async (_req, reply) => {
     const templates = await onboardingService.listTemplates();
@@ -70,7 +72,7 @@ export async function registerOnboardingRoutes(
       return reply
         .code(400)
         .type('text/html')
-        .send(pickTopicsErrorPage({ email: req.auth.account.email, message: 'Please pick exactly 3 topics.' }));
+        .send(pickTopicsErrorPage({ account: await shellFor(req), message: 'Please pick exactly 3 topics.' }));
     }
     const outcome: SelectTopicsOutcome = await onboardingService.selectTopics({
       userId: req.auth.user.id,
@@ -83,12 +85,17 @@ export async function registerOnboardingRoutes(
       return reply.code(302).header('location', '/onboarding/delivery-time').send();
     }
     if (outcome.reason === 'paywall_tier_limit') {
-      return reply.code(402).type('text/html').send(paywallPage(req.auth.account.email));
+      return reply.code(402).type('text/html').send(paywallPage(await shellFor(req)));
     }
     return reply
       .code(400)
       .type('text/html')
-      .send(pickTopicsErrorPage({ email: req.auth.account.email, message: humanReason(outcome.reason, 'onboarding') }));
+      .send(
+        pickTopicsErrorPage({
+          account: await shellFor(req),
+          message: humanTopicSelectionReason(outcome.reason, 'onboarding'),
+        }),
+      );
   });
 
   fastify.post('/pick-topics', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
@@ -101,7 +108,7 @@ export async function registerOnboardingRoutes(
       return reply
         .code(400)
         .type('text/html')
-        .send(pickTopicsErrorPage({ email: req.auth.account.email, message: 'Pick at least one topic.', backHref: '/pick-topics' }));
+        .send(pickTopicsErrorPage({ account: await shellFor(req), message: 'Pick at least one topic.', backHref: '/pick-topics' }));
     }
     const outcome = await onboardingService.addTopics({
       userId: req.auth.user.id,
@@ -114,13 +121,17 @@ export async function registerOnboardingRoutes(
       return reply.code(302).header('location', '/topics').send();
     }
     if (outcome.reason === 'paywall_tier_limit') {
-      return reply.code(402).type('text/html').send(paywallPage(req.auth.account.email));
+      return reply.code(402).type('text/html').send(paywallPage(await shellFor(req)));
     }
     return reply
       .code(400)
       .type('text/html')
       .send(
-        pickTopicsErrorPage({ email: req.auth.account.email, message: humanReason(outcome.reason, 'manage'), backHref: '/pick-topics' }),
+        pickTopicsErrorPage({
+          account: await shellFor(req),
+          message: humanTopicSelectionReason(outcome.reason, 'manage'),
+          backHref: '/pick-topics',
+        }),
       );
   });
 
@@ -146,7 +157,7 @@ export async function registerOnboardingRoutes(
         .type('text/html')
         .send(
           notFoundHtml(
-            req.auth.account.email,
+            await shellFor(req),
             'That topic is not yours, or no longer exists.',
           ),
         );
@@ -166,7 +177,7 @@ export async function registerOnboardingRoutes(
         .type('text/html')
         .send(
           deliveryTimeErrorPage({
-            email: req.auth.account.email,
+            account: await shellFor(req),
             message: 'Please pick a valid time and timezone.',
             submitted,
             mode: 'onboarding',
@@ -192,7 +203,7 @@ export async function registerOnboardingRoutes(
       .type('text/html')
       .send(
         deliveryTimeErrorPage({
-          email: req.auth.account.email,
+          account: await shellFor(req),
           message: humanDeliveryTimeReason(outcome.reason),
           submitted,
           mode: 'onboarding',
@@ -213,7 +224,7 @@ export async function registerOnboardingRoutes(
         .type('text/html')
         .send(
           deliveryTimeErrorPage({
-            email: req.auth.account.email,
+            account: await shellFor(req),
             message: 'Please pick a valid time and timezone.',
             submitted,
             mode: 'settings',
@@ -234,7 +245,7 @@ export async function registerOnboardingRoutes(
       .type('text/html')
       .send(
         deliveryTimeErrorPage({
-          email: req.auth.account.email,
+          account: await shellFor(req),
           message: humanDeliveryTimeReason(outcome.reason),
           submitted,
           mode: 'settings',
@@ -300,13 +311,13 @@ function humanDeliveryTimeReason(
  * reader nothing. The status code is still 400; only the document changed.
  */
 function deliveryTimeErrorPage(input: {
-  email: string;
+  account: ShellAccount;
   message: string;
   submitted: { hour: string; minute: string; timezone: string };
   mode: 'onboarding' | 'settings';
 }): string {
   return deliveryTimePage({
-    email: input.email,
+    account: input.account,
     mode: input.mode,
     isSet: input.mode === 'settings',
     firstBriefAt: null,
@@ -325,7 +336,16 @@ function toInt(value: string, fallback: number): number {
   return Number.isInteger(n) ? n : fallback;
 }
 
-function humanReason(
+/**
+ * What an outcome reason reads as to a User.
+ *
+ * Exported because two screens now refuse the same submission for the same
+ * reasons, and a User who is told "You already have one of those topics" on one
+ * screen and something else on another has been given two answers to one
+ * question. The reasons belong to `OnboardingService`; the wording belongs to
+ * whoever is showing the refusal, and there are now two of those.
+ */
+export function humanTopicSelectionReason(
   reason: Exclude<SelectTopicsOutcome, { status: 'ok' }>['reason'],
   mode: 'onboarding' | 'manage',
 ): string {
@@ -354,14 +374,14 @@ function humanReason(
   }
 }
 
-function paywallPage(email: string): string {
+function paywallPage(account: ShellAccount): string {
   // Reached from a refused submission, so the User is known. Passing the account
   // puts the same navigation every other signed-in page has around it, instead
   // of stranding them on a page with two buttons.
   return layout({
     title: 'Upgrade to add more topics',
     width: 'narrow',
-    account: email,
+    account,
     body: `    <h1>You have reached the free-topic limit</h1>
     <p>Free Brieflyy supports up to 3 topics. Upgrade to add unlimited topics, indefinite archive retention, and the full trends view.</p>
     <p><strong>$15 / month</strong></p>
@@ -372,11 +392,11 @@ function paywallPage(email: string): string {
   });
 }
 
-function notFoundHtml(email: string, message: string): string {
+function notFoundHtml(account: ShellAccount, message: string): string {
   return layout({
     title: 'Topic not found',
     width: 'narrow',
-    account: email,
+    account,
     body: `    <h1>Topic not found</h1>
     <div class="error-summary" role="alert">
       <p>${escapeHtml(message)}</p>
@@ -386,7 +406,7 @@ function notFoundHtml(email: string, message: string): string {
 }
 
 function pickTopicsErrorPage(input: {
-  email: string;
+  account: ShellAccount;
   message: string;
   backHref?: string;
 }): string {
@@ -394,7 +414,7 @@ function pickTopicsErrorPage(input: {
   return layout({
     title: 'Topic selection',
     width: 'narrow',
-    account: input.email,
+    account: input.account,
     body: `    <h1>Topic selection</h1>
     <div class="error-summary" role="alert">
       <p>${escapeHtml(input.message)}</p>

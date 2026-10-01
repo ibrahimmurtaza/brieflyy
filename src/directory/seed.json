@@ -30,11 +30,144 @@
       "defaultSourceSlugs": ["the-guardian", "bbc-news", "npr-news", "sky-news"]
     },
     {
+      "slug": "breaking-news",
+      "title": "Breaking news",
+      "blurb": "What is happening now, before it settles.",
+      "category": "news",
+      "defaultSourceSlugs": ["bbc-news", "sky-news", "npr-news"]
+    },
+    {
+      "slug": "uk-news",
+      "title": "UK news",
+      "blurb": "Parliament, the courts, and the country around them.",
+      "category": "news",
+      "defaultSourceSlugs": ["bbc-news", "the-guardian", "sky-news"]
+    },
+    {
+      "slug": "us-news",
+      "title": "US news",
+      "blurb": "The states, the cities, and the country between them.",
+      "category": "news",
+      "defaultSourceSlugs": ["npr-news", "the-guardian", "bbc-news"]
+    },
+    {
+      "slug": "europe-news",
+      "title": "Europe",
+      "blurb": "The union and its members, east to west.",
+      "category": "news",
+      "defaultSourceSlugs": ["bbc-news", "the-guardian"]
+    },
+    {
+      "slug": "asia-pacific",
+      "title": "Asia-Pacific",
+      "blurb": "The region, from India to the Pacific.",
+      "category": "news",
+      "defaultSourceSlugs": ["bbc-news", "the-guardian", "npr-news"]
+    },
+    {
+      "slug": "middle-east",
+      "title": "Middle East",
+      "blurb": "Wars, diplomacy and energy across the region.",
+      "category": "news",
+      "defaultSourceSlugs": ["the-guardian", "bbc-news", "sky-news"]
+    },
+    {
+      "slug": "africa-news",
+      "title": "Africa",
+      "blurb": "The continent's politics, economies and conflicts.",
+      "category": "news",
+      "defaultSourceSlugs": ["bbc-news", "the-guardian"]
+    },
+    {
+      "slug": "latin-america",
+      "title": "Latin America",
+      "blurb": "The region's politics, economies and neighbours.",
+      "category": "news",
+      "defaultSourceSlugs": ["the-guardian", "bbc-news", "npr-news"]
+    },
+    {
+      "slug": "conflict-and-war",
+      "title": "Conflict and war",
+      "blurb": "Fighting, ceasefires and the diplomacy around them.",
+      "category": "news",
+      "defaultSourceSlugs": ["the-guardian", "bbc-news", "sky-news"]
+    },
+    {
+      "slug": "migration",
+      "title": "Migration",
+      "blurb": "Who is moving, and the routes and rules around it.",
+      "category": "news",
+      "defaultSourceSlugs": ["the-guardian", "bbc-news"]
+    },
+    {
+      "slug": "media-industry",
+      "title": "The media industry",
+      "blurb": "Newsrooms, platforms, and how the story is told.",
+      "category": "news",
+      "defaultSourceSlugs": ["the-guardian", "npr-news", "wired"]
+    },
+    {
       "slug": "us-politics",
       "title": "US politics",
       "blurb": "Washington, the White House, and the legislative agenda.",
       "category": "policy",
       "defaultSourceSlugs": ["politico", "npr-news", "the-guardian", "bbc-news"]
+    },
+    {
+      "slug": "tech-policy",
+      "title": "Tech policy",
+      "blurb": "Antitrust, regulation, and the politics of the platforms.",
+      "category": "policy",
+      "defaultSourceSlugs": ["politico", "the-verge", "wired"]
+    },
+    {
+      "slug": "elections",
+      "title": "Elections",
+      "blurb": "Campaigns, counts and what the result changes.",
+      "category": "policy",
+      "defaultSourceSlugs": ["politico", "npr-news", "bbc-news"]
+    },
+    {
+      "slug": "foreign-policy",
+      "title": "Foreign policy",
+      "blurb": "Alliances, treaties and the trade behind them.",
+      "category": "policy",
+      "defaultSourceSlugs": ["politico", "the-guardian", "bbc-news"]
+    },
+    {
+      "slug": "courts-and-justice",
+      "title": "Courts and justice",
+      "blurb": "Cases, rulings and what the courts decide.",
+      "category": "policy",
+      "defaultSourceSlugs": ["politico", "the-guardian", "bbc-news"]
+    },
+    {
+      "slug": "public-spending",
+      "title": "Public spending",
+      "blurb": "Budgets, deficits and where the money goes.",
+      "category": "policy",
+      "defaultSourceSlugs": ["politico", "cnbc", "marketwatch"]
+    },
+    {
+      "slug": "education-policy",
+      "title": "Education policy",
+      "blurb": "Schools, universities and the rules that govern them.",
+      "category": "policy",
+      "defaultSourceSlugs": ["politico", "the-guardian", "bbc-news"]
+    },
+    {
+      "slug": "regulation",
+      "title": "Regulation",
+      "blurb": "The rules being written, and the ones taking effect.",
+      "category": "policy",
+      "defaultSourceSlugs": ["politico", "the-verge", "cnbc"]
+    },
+    {
+      "slug": "defence-policy",
+      "title": "Defence policy",
+      "blurb": "Procurement, alliances and the armed forces.",
+      "category": "policy",
+      "defaultSourceSlugs": ["politico", "the-guardian", "bbc-news"]
     },
     {
       "slug": "tech-industry",
@@ -51,18 +184,88 @@
       "defaultSourceSlugs": ["arstechnica", "the-verge", "cnbc-technology", "quanta-magazine"]
     },
     {
-      "slug": "startups",
-      "title": "Startups",
-      "blurb": "Funding rounds, exits, and the early-stage scene.",
-      "category": "business",
-      "defaultSourceSlugs": ["techcrunch", "the-verge", "cnbc"]
+      "slug": "developer-culture",
+      "title": "Developer culture",
+      "blurb": "Languages, tools, and the discussions shaping how we build.",
+      "category": "technology",
+      "defaultSourceSlugs": ["hacker-news", "arstechnica"]
     },
     {
-      "slug": "markets",
-      "title": "Markets",
-      "blurb": "Equities, macro, and what moved today.",
-      "category": "business",
-      "defaultSourceSlugs": ["cnbc-finance", "marketwatch", "cnbc"]
+      "slug": "semiconductors",
+      "title": "Semiconductors",
+      "blurb": "Fabs, chips and the supply chain behind them.",
+      "category": "technology",
+      "defaultSourceSlugs": ["arstechnica", "wired", "cnbc-technology"]
+    },
+    {
+      "slug": "cybersecurity",
+      "title": "Cybersecurity",
+      "blurb": "Breaches, ransomware, and the trade in stolen data.",
+      "category": "technology",
+      "defaultSourceSlugs": ["wired", "arstechnica", "the-verge"]
+    },
+    {
+      "slug": "smartphones",
+      "title": "Smartphones",
+      "blurb": "Handsets, the companies that make them, and the chips in them.",
+      "category": "technology",
+      "defaultSourceSlugs": ["the-verge", "engadget", "wired"]
+    },
+    {
+      "slug": "software",
+      "title": "Software",
+      "blurb": "Products, releases and the businesses behind them.",
+      "category": "technology",
+      "defaultSourceSlugs": ["arstechnica", "the-verge", "wired"]
+    },
+    {
+      "slug": "cloud-and-infrastructure",
+      "title": "Cloud & infrastructure",
+      "blurb": "Data centres, the networks between them, and the outages.",
+      "category": "technology",
+      "defaultSourceSlugs": ["arstechnica", "wired", "the-verge"]
+    },
+    {
+      "slug": "social-media",
+      "title": "Social media",
+      "blurb": "The platforms, and what happens on them.",
+      "category": "technology",
+      "defaultSourceSlugs": ["the-verge", "wired", "engadget"]
+    },
+    {
+      "slug": "gaming",
+      "title": "Gaming",
+      "blurb": "Consoles, releases, and the business of play.",
+      "category": "technology",
+      "defaultSourceSlugs": ["the-verge", "engadget", "hacker-news"]
+    },
+    {
+      "slug": "space",
+      "title": "Space",
+      "blurb": "Launches, satellites and the agencies behind them.",
+      "category": "technology",
+      "defaultSourceSlugs": ["arstechnica", "the-verge", "engadget"]
+    },
+    {
+      "slug": "robotics",
+      "title": "Robotics",
+      "blurb": "Machines that move, and what they are being built for.",
+      "category": "technology",
+      "defaultSourceSlugs": ["arstechnica", "the-verge", "wired"]
+    },
+    {
+      "slug": "consumer-tech",
+      "title": "Consumer tech",
+      "blurb": "The gadgets people buy, and whether they are worth it.",
+      "category": "technology",
+      "defaultSourceSlugs": ["engadget", "the-verge", "wired"]
+    },
+    {
+      "slug": "tech-ethics",
+      "title": "Tech ethics",
+      "blurb": "What the systems decide, and who they decide it for.",
+      "category": "technology",
+      "defaultSourceSlugs": ["wired", "the-verge", "quanta-magazine"]
     },
     {
       "slug": "natural-sciences",
@@ -79,18 +282,137 @@
       "defaultSourceSlugs": ["phys-org", "scientific-american", "the-guardian", "bbc-news"]
     },
     {
-      "slug": "tech-policy",
-      "title": "Tech policy",
-      "blurb": "Antitrust, regulation, and the politics of the platforms.",
-      "category": "policy",
-      "defaultSourceSlugs": ["politico", "the-verge", "wired"]
+      "slug": "space-science",
+      "title": "Space science",
+      "blurb": "What telescopes and spacecraft have found.",
+      "category": "science",
+      "defaultSourceSlugs": ["nature", "scientific-american", "quanta-magazine"]
     },
     {
-      "slug": "developer-culture",
-      "title": "Developer culture",
-      "blurb": "Languages, tools, and the discussions shaping how we build.",
-      "category": "technology",
-      "defaultSourceSlugs": ["hacker-news", "arstechnica"]
+      "slug": "biology",
+      "title": "Biology",
+      "blurb": "Living things, and what has been learned about them.",
+      "category": "science",
+      "defaultSourceSlugs": ["nature", "science-news", "phys-org"]
+    },
+    {
+      "slug": "medicine-and-health",
+      "title": "Medicine & health",
+      "blurb": "Trials, treatments, and the systems that deliver them.",
+      "category": "science",
+      "defaultSourceSlugs": ["science-news", "nature", "scientific-american"]
+    },
+    {
+      "slug": "physics",
+      "title": "Physics",
+      "blurb": "Particles, fields, and the experiments that probe them.",
+      "category": "science",
+      "defaultSourceSlugs": ["phys-org", "nature", "quanta-magazine"]
+    },
+    {
+      "slug": "astronomy",
+      "title": "Astronomy",
+      "blurb": "Observatories, exoplanets, and the early universe.",
+      "category": "science",
+      "defaultSourceSlugs": ["nature", "scientific-american", "phys-org"]
+    },
+    {
+      "slug": "earth-science",
+      "title": "Earth science",
+      "blurb": "Oceans, quakes, volcanoes and the ground itself.",
+      "category": "science",
+      "defaultSourceSlugs": ["phys-org", "science-news", "scientific-american"]
+    },
+    {
+      "slug": "neuroscience",
+      "title": "Neuroscience",
+      "blurb": "The brain, and how what is known about it is known.",
+      "category": "science",
+      "defaultSourceSlugs": ["nature", "scientific-american", "science-news"]
+    },
+    {
+      "slug": "mathematics",
+      "title": "Mathematics",
+      "blurb": "Proofs, problems, and the tools built out of them.",
+      "category": "science",
+      "defaultSourceSlugs": ["quanta-magazine", "scientific-american", "nature"]
+    },
+    {
+      "slug": "startups",
+      "title": "Startups",
+      "blurb": "Funding rounds, exits, and the early-stage scene.",
+      "category": "business",
+      "defaultSourceSlugs": ["techcrunch", "the-verge", "cnbc"]
+    },
+    {
+      "slug": "markets",
+      "title": "Markets",
+      "blurb": "Equities, macro, and what moved today.",
+      "category": "business",
+      "defaultSourceSlugs": ["cnbc-finance", "marketwatch", "cnbc"]
+    },
+    {
+      "slug": "banking",
+      "title": "Banking",
+      "blurb": "Banks, credit, and the rules they answer to.",
+      "category": "business",
+      "defaultSourceSlugs": ["cnbc-finance", "marketwatch", "cnbc"]
+    },
+    {
+      "slug": "ecommerce",
+      "title": "E-commerce",
+      "blurb": "Online retail, marketplaces and delivery.",
+      "category": "business",
+      "defaultSourceSlugs": ["cnbc", "marketwatch", "techcrunch"]
+    },
+    {
+      "slug": "labour-and-jobs",
+      "title": "Labour & jobs",
+      "blurb": "Hiring, layoffs, wages and the shape of work.",
+      "category": "business",
+      "defaultSourceSlugs": ["cnbc", "marketwatch", "npr-news"]
+    },
+    {
+      "slug": "real-estate",
+      "title": "Real estate",
+      "blurb": "Housing, commercial property, and the rates around them.",
+      "category": "business",
+      "defaultSourceSlugs": ["marketwatch", "cnbc-finance"]
+    },
+    {
+      "slug": "crypto",
+      "title": "Crypto",
+      "blurb": "Tokens, exchanges, and the regulation catching up.",
+      "category": "business",
+      "defaultSourceSlugs": ["cnbc-finance", "cnbc", "techcrunch"]
+    },
+    {
+      "slug": "retail",
+      "title": "Retail",
+      "blurb": "Chains, high streets, and consumer demand.",
+      "category": "business",
+      "defaultSourceSlugs": ["cnbc", "marketwatch", "npr-news"]
+    },
+    {
+      "slug": "private-equity",
+      "title": "Private equity",
+      "blurb": "Buyouts, exits, and the firms behind them.",
+      "category": "business",
+      "defaultSourceSlugs": ["cnbc-finance", "marketwatch", "techcrunch"]
+    },
+    {
+      "slug": "media-business",
+      "title": "Media business",
+      "blurb": "Deals, earnings and ownership across the industry.",
+      "category": "business",
+      "defaultSourceSlugs": ["cnbc", "marketwatch", "the-guardian"]
+    },
+    {
+      "slug": "energy-markets",
+      "title": "Energy markets",
+      "blurb": "Oil, gas, power and the price of each.",
+      "category": "business",
+      "defaultSourceSlugs": ["cnbc-finance", "marketwatch", "cnbc"]
     }
   ]
 }

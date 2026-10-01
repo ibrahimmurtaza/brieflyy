@@ -90,10 +90,10 @@ _Avoid_: run log, job log
 **FeedbackType**: An enum of the explicit signals a User can give — `ThumbsUp`, `ThumbsDown`, `HideSource`, `MoreLikeThis`, `LessLikeThis`.
 _Avoid_: reaction type, vote type
 
-**Feedback**: An explicit signal a User gives on a Cluster, of a single FeedbackType. Recorded once per Cluster and propagated to the underlying Stories and Articles for ranking.
-_Avoid_: reaction, vote, signal
+**Feedback**: An explicit signal a User gives on a Cluster, of a single FeedbackType. Read back as the latest signal per Cluster: pressing a button that is already the one in force changes nothing, and pressing its opposite supersedes it. A verdict and a preference are separate — "was this worth reading" and "what should I see next" — so a User can carry both on one Cluster. Propagated to the underlying Stories and Articles, which is what it ranks by; see ADR-0004.
+_Avoid_: reaction, vote. "Signal" is kept for one Feedback, which is how ADR-0004 and the FeedbackType entries already use it.
 
-**FeedbackEvent**: The persisted record of a single piece of Feedback. Carries the FeedbackType, target Cluster, target Scope (this topic only vs global, for HideSource), and timestamp.
+**FeedbackEvent**: The persisted record of a single piece of Feedback. Carries the FeedbackType, target Cluster, target Scope (this topic only vs global, for HideSource), the Source a HideSource is about, and timestamp. Its Cluster is where the User pressed the button, not what they were saying about; a Cluster can carry several Sources, and HideSource is a statement about one of them.
 _Avoid_: feedback log, reaction record
 
 **Cadence**: A Topic-level schedule — daily, weekly, or never. Evaluated against the User's DeliveryTime. Only daily is implemented, because a weekly Cadence needs a day of the week that a Topic does not have.
@@ -123,11 +123,14 @@ _Avoid_: history, log
 **Directory**: The curated set of TopicTemplates Brieflyy ships. A User selecting a Directory entry clones it into a per-user Topic.
 _Avoid_: catalog, library
 
-**DiscoverTab**: The in-app surface showing Directory entries, "topics like yours" Recommendations, and "trending this week" — used to find and add Topics.
+**DiscoverTab**: The in-app surface showing Directory entries, "topics like yours" Recommendations, and "trending this week" — used to find and add Topics. One Directory entry is cloned at a time, not three. See ADR-0014.
 _Avoid_: explore, browse
 
-**Recommendation**: A suggested Topic surfaced in DiscoverTab, derived from the User's existing Topics' Entity and Source overlap.
+**Recommendation**: A suggested Topic surfaced in DiscoverTab, derived from the User's existing Topics' Entity and Source overlap. Each distinct Entity and each distinct Source shared counts once.
 _Avoid_: suggestion, related topic
+
+**Mention volume**: How many Articles a Source published inside the measured window. What "trending" is computed from; a Directory entry's mention volume is the sum over its Sources, each counted once. See ADR-0014.
+_Avoid_: popularity, buzz, score
 
 ### Monetization
 

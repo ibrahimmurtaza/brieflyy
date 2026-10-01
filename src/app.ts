@@ -40,6 +40,8 @@ import type { OAuthClient } from './oauth/client.js';
 import { OnboardingService } from './onboarding/onboarding-service.js';
 import { registerOnboardingRoutes } from './onboarding/routes.js';
 import { registerPageRoutes } from './pages/routes.js';
+import { registerDiscoverRoutes } from './discover/routes.js';
+import { DrizzleDiscoverRepo } from './repos/discover-repo.js';
 import type { EmailTransport } from './email/transport.js';
 import type { LLMSummaryClient } from './domain/llm.js';
 import type { Clock } from './domain/clock.js';
@@ -61,6 +63,7 @@ import {
   DEFAULT_BRIEF_INTERVAL_MS,
 } from './services/scheduled-brief-service.js';
 import { registerBriefStatusRoutes } from './services/brief-status-routes.js';
+import { FeedbackService } from './services/feedback-service.js';
 import { UnsubscribeService } from './services/unsubscribe-service.js';
 import { registerUnsubscribeRoutes } from './services/unsubscribe-routes.js';
 import { registerTierRoutes } from './billing/tier-routes.js';
@@ -212,6 +215,10 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
   const briefRunRepo = new DrizzleBriefRunRepo(opts.db);
   const briefJobRunRepo = new DrizzleBriefJobRunRepo(opts.db);
   const unsubscribeRepo = new DrizzleUnsubscribeRepo(opts.db);
+  // What the DiscoverTab measures. Built here rather than at the route because the
+  // measurements are the same for every User and only the lookup that reads them
+  // is per-request.
+  const discoverRepo = new DrizzleDiscoverRepo(opts.db);
 
   await applyDirectorySeed(opts.db);
 
@@ -308,6 +315,22 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     intervalMs: opts.briefIntervalMs ?? DEFAULT_BRIEF_INTERVAL_MS,
   });
 
+  // What a User's signals on a Cluster are and what they are worth. Built here
+  // because the page that renders a brief and the route that records a signal are
+  // two readers of the same rule, and a route that wrote through the repository
+  // instead would store signals the page could not show.
+  const feedbackService = new FeedbackService({
+    feedbackRepo,
+    clusterRepo,
+    articleRepo,
+    topicRepo,
+    clock,
+    // The same random source the sessions and unsubscribe tokens use, so an event
+    // id cannot collide with another row's the way a recipe built out of the clock
+    // could.
+    random: opts.random ?? nodeRandom,
+  });
+
   // What the unsubscribe links in a brief are for. Built here because the routes
   // and the scheduler are two readers of the same opt-outs, and a second service
   // with its own copy of the rule would be a rule that could disagree with the
@@ -362,23 +385,34 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     clusterRepo,
     topicRepo,
     sourceRepo,
-    feedbackRepo,
+    feedbackService,
     briefPlanService,
     briefSnapshotRepo,
     unsubscribeService,
   });
 
+  await registerDiscoverRoutes(app, {
+    discoverRepo,
+    onboardingService,
+    clock,
+  });
+
   // Registered with the rest of the routes rather than with the pages: these are
   // the links a brief carries, and they are public.
-  await registerUnsubscribeRoutes(app, { unsubscribeService, topicRepo });
+  await registerUnsubscribeRoutes(app, {
+    unsubscribeService,
+    topicRepo,
+    onboardingService,
+  });
 
   if (ingestScheduler) {
-    await registerIngestRoutes(app, { scheduler: ingestScheduler });
+    await registerIngestRoutes(app, { scheduler: ingestScheduler, onboardingService });
   }
 
   await registerBriefStatusRoutes(app, {
     scheduler: scheduledBriefService,
     emailTransport: opts.emailTransport,
+    onboardingService,
   });
 
   if (opts.briefJobAutoStart === true) {
@@ -408,7 +442,7 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
   }
 
   if (opts.devToolsEnabled === true) {
-    await registerTierRoutes(app, { userRepo });
+    await registerTierRoutes(app, { userRepo, onboardingService });
   }
 
   return app;

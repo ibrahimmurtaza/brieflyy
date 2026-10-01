@@ -6,7 +6,6 @@ import {
   MIN_CLUSTER_WINDOW_DAYS,
 } from '../domain/cluster-window.js';
 import { resolveTier, topicCapFor } from '../domain/tier.js';
-import { partsInTz } from '../domain/timezone.js';
 import { escapeHtml } from '../domain/html.js';
 import { titleKey } from '../domain/slug.js';
 import { INITIAL_TOPIC_COUNT } from '../onboarding/onboarding-service.js';
@@ -14,7 +13,15 @@ import type { OnboardingService } from '../onboarding/onboarding-service.js';
 import type { ClusterRepo } from '../repos/cluster-repo.js';
 import type { SourceRepo } from '../repos/source-repo.js';
 import type { TopicRepo } from '../repos/topic-repo.js';
-import type { FeedbackRepo } from '../repos/feedback-repo.js';
+import type { FeedbackService } from '../services/feedback-service.js';
+import {
+  clusterRelevance,
+  orderByRelevance,
+  FEEDBACK_SCOPES,
+  type ClusterSignals,
+  type HiddenSource,
+} from '../domain/feedback.js';
+import type { ClusterId, FeedbackScope, FeedbackType, SourceId } from '../domain/types.js';
 import type { BriefSnapshotRepo } from '../repos/brief-snapshot-repo.js';
 import type { BriefPlanService } from '../services/brief-plan-service.js';
 import {
@@ -22,7 +29,10 @@ import {
   type UnsubscribeService,
 } from '../services/unsubscribe-service.js';
 import { EMAIL_BRIEFS_PATH } from '../services/unsubscribe-links.js';
-import { layout } from './layout.js';
+import { layout, planLine, type ShellAccount } from './layout.js';
+import { formatHumanTime } from './human-time.js';
+import { resolveShellAccount, shellAccountFor } from './shell.js';
+import { pad2 } from '../domain/timezone.js';
 import {
   AUTHENTICATED_ROUTE_CONFIG,
   PUBLIC_ROUTE_CONFIG,
@@ -35,7 +45,16 @@ export interface PageRoutesOptions {
   readonly clusterRepo: ClusterRepo;
   readonly topicRepo: TopicRepo;
   readonly sourceRepo: SourceRepo;
-  readonly feedbackRepo?: FeedbackRepo;
+  /**
+   * How a User's signals are recorded and read back. Held rather than reached for
+   * through the repository so the page and the write share one answer to "what has
+   * this User already said" — the write path that bypassed the service was how a
+   * signal ended up stored as something the page could not show.
+   *
+   * Required, unlike the two below: a LivingBrief without it renders buttons that
+   * record nothing and never light up, which is the state this work started from.
+   */
+  readonly feedbackService: FeedbackService;
   /**
    * How a User asks for a brief of one of their Topics right now, and where the
    * brief that was sent is served from. Optional only so a caller that has
@@ -56,6 +75,32 @@ export async function registerPageRoutes(
   opts: PageRoutesOptions,
 ): Promise<void> {
   const { onboardingService } = opts;
+  const shellFor = shellAccountFor(onboardingService);
+
+  /**
+   * An address that leads nowhere, rendered as a page rather than as Fastify's
+   * JSON.
+   *
+   * A signed-in User who follows a dead link lands inside the application and can
+   * carry on from there; an anonymous one is offered the way in. The answer used
+   * to be `{"message":"Route GET:/x not found","statusCode":404}`, which is
+   * neither a page nor a way out of wherever the User was when they clicked it.
+   *
+   * `/api/` is the one exception, and it follows the rule the rest of the
+   * application already uses: a JSON surface answers JSON, even when the address
+   * is wrong. Handing a machine a document is the same class of mistake as
+   * handing a page a JSON error.
+   */
+  fastify.setNotFoundHandler(async (req, reply) => {
+    if (req.url.startsWith('/api/')) {
+      return reply.code(404).send({ error: 'not_found' });
+    }
+    // A 404 is not a guarded route, so the session is resolved by the same hook
+    // every other request goes through and `req.auth` may or may not be there.
+    const auth = req.auth;
+    const account = auth ? await resolveShellAccount(auth, onboardingService) : null;
+    return reply.code(404).type('text/html; charset=utf-8').send(unknownUrlPage(account));
+  });
 
   fastify.get('/signup', PUBLIC_ROUTE_CONFIG, async (_req, reply) => {
     return reply.type('text/html').send(signupPage());
@@ -78,7 +123,7 @@ export async function registerPageRoutes(
       .type('text/html')
       .send(
         pickTopicsPage({
-          email: req.auth.account.email,
+          account: await shellFor(req),
           templates,
           existing,
           atCap,
@@ -98,7 +143,7 @@ export async function registerPageRoutes(
       .type('text/html')
       .send(
         pickTopicsPage({
-          email: req.auth.account.email,
+          account: await shellFor(req),
           templates,
           existing,
           atCap,
@@ -121,7 +166,7 @@ export async function registerPageRoutes(
     const first = await onboardingService.firstBriefAt(req.auth.user.id);
     return reply.type('text/html').send(
       deliveryTimePage({
-        email: req.auth.account.email,
+        account: await shellFor(req),
         existing: existing ?? DEFAULT_DELIVERY_TIME,
         firstBriefAt: first,
         // A prefilled suggestion is not a saved time, so the page must not
@@ -143,7 +188,7 @@ export async function registerPageRoutes(
     const first = await onboardingService.firstBriefAt(req.auth.user.id);
     return reply.type('text/html').send(
       welcomePage({
-        email: req.auth.account.email,
+        account: await shellFor(req),
         deliveryTime: settings,
         firstBriefAt: first,
       }),
@@ -166,7 +211,7 @@ export async function registerPageRoutes(
       }
       return reply.type('text/html').send(
         deliveryTimePage({
-          email: req.auth.account.email,
+          account: await shellFor(req),
           existing,
           isSet: true,
           firstBriefAt: null,
@@ -197,7 +242,7 @@ export async function registerPageRoutes(
       const settings = await opts.onboardingService.getDeliveryTime(userId);
       return reply.type('text/html').send(
         emailBriefsPage({
-          email: req.auth.account.email,
+          account: await shellFor(req),
           topics,
           optedOutAt: req.auth.user.unsubscribedAt,
           // The User's own timezone, so a date on this page is a date they would
@@ -228,7 +273,7 @@ export async function registerPageRoutes(
         return reply
           .code(404)
           .type('text/html')
-          .send(notFoundPage(req.auth.account.email));
+          .send(notFoundPage(await shellFor(req)));
       }
       const outcome = await opts.unsubscribeService.resubscribeTopic(
         req.auth.user.id,
@@ -242,7 +287,7 @@ export async function registerPageRoutes(
         : reply
             .code(404)
             .type('text/html')
-            .send(notFoundPage(req.auth.account.email));
+            .send(notFoundPage(await shellFor(req)));
     },
   );
 
@@ -269,7 +314,7 @@ export async function registerPageRoutes(
       .type('text/html')
       .send(
         upgradePage({
-          email: req.auth.account.email,
+          account: await shellFor(req),
           topicCount: topics.length,
           tier: resolveTier(req.auth.user),
         }),
@@ -280,7 +325,7 @@ export async function registerPageRoutes(
     if (!requireAuthPage(req, reply)) return reply;
     return reply
       .type('text/html')
-      .send(archiveSearchPage({ email: req.auth.account.email }));
+      .send(archiveSearchPage({ account: await shellFor(req) }));
   });
 
   fastify.get('/', PUBLIC_ROUTE_CONFIG, async (_req, reply) => {
@@ -295,7 +340,7 @@ export async function registerPageRoutes(
       .type('text/html')
       .send(
         homePage({
-          email: req.auth.account.email,
+          account: await shellFor(req),
           topics,
           tier: resolveTier(req.auth.user),
           atCap: topics.length >= cap,
@@ -303,24 +348,65 @@ export async function registerPageRoutes(
       );
   });
 
-  fastify.post<{ Params: { slug: string }; Body: { clusterId?: string; type?: string; scope?: string } }>(
+  fastify.post<{
+    Params: { slug: string };
+    Body: Record<string, unknown>;
+  }>(
     '/topics/:slug/feedback',
     AUTHENTICATED_ROUTE_CONFIG,
     async (req, reply) => {
-      if (!opts.feedbackRepo || !requireAuthPage(req, reply)) return reply;
-      const clusterId = req.body.clusterId ? String(req.body.clusterId) : '';
-      const feedbackType = (req.body.type ? String(req.body.type) : 'thumbs_up') as 'thumbs_up' | 'thumbs_down' | 'hide_source' | 'more_like_this' | 'less_like_this';
-      if (!clusterId || !feedbackType) {
-        return reply.code(400).type('text/html').send('Invalid feedback');
+      if (!requireAuthPage(req, reply)) return reply;
+      const topic = await opts.topicRepo.findBySlug(req.auth.user.id, req.params.slug);
+      if (!topic) {
+        return reply
+          .code(404)
+          .type('text/html')
+          .send(notFoundPage(await shellFor(req)));
       }
-      await opts.feedbackRepo.insert({
-        id: `fe-${req.auth.user.id}-${clusterId}-${feedbackType}-${Date.now()}`,
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const clusterId = readField(body, 'clusterId');
+      if (!clusterId) {
+        return reply.code(400).type('text/html').send(
+          feedbackErrorPage({
+            account: await shellFor(req),
+            message: 'That submission named no story.',
+            topicSlug: req.params.slug,
+          }),
+        );
+      }
+      // Handed to the service as plain strings and validated there, rather than
+      // narrowed here. A `type` or `scope` that is not one the glossary names is
+      // a submission to refuse, and refusing it is the service's one answer to
+      // "is this a signal" — checking it twice, with the two copies able to
+      // disagree, would be the thing to avoid. `scope` is passed through even when
+      // it is not one of the two, so an unusable scope is refused rather than
+      // quietly stored as `this_topic`.
+      const rawType = readField(body, 'type');
+      const rawScope = readField(body, 'scope');
+      const rawSourceId = readField(body, 'sourceId');
+      const outcome = await opts.feedbackService.recordFeedback({
         userId: req.auth.user.id,
-        clusterId,
-        feedbackType,
-        scope: feedbackType === 'hide_source' ? (req.body.scope === 'global' ? 'global' : 'this_topic') : null,
-        timestamp: new Date(),
+        topicId: topic.id,
+        clusterId: clusterId as ClusterId,
+        feedbackType: (rawType ?? '') as FeedbackType,
+        ...(rawScope === undefined ? {} : { scope: rawScope as FeedbackScope }),
+        ...(rawSourceId ? { sourceId: rawSourceId as SourceId } : {}),
       });
+      if (outcome.status !== 'recorded' && outcome.status !== 'unchanged') {
+        return reply
+          .code(400)
+          .type('text/html')
+          .send(
+            feedbackErrorPage({
+              account: await shellFor(req),
+              message: humanFeedbackReason(outcome.status),
+              topicSlug: req.params.slug,
+            }),
+          );
+      }
+      // Read back through a redirect rather than answered from the submission, so
+      // what the User sees after pressing a button is the same page a reload would
+      // give them, and a signal that changed the order shows the new order.
       return reply.code(302).header('location', `/topics/${req.params.slug}`).send();
     },
   );
@@ -338,7 +424,7 @@ export async function registerPageRoutes(
         return reply
           .code(404)
           .type('text/html')
-          .send(notFoundPage(req.auth.account.email));
+          .send(notFoundPage(await shellFor(req)));
       }
       // Parsed rather than trusted: a value the User typed that is not a number
       // becomes NaN and falls back to the default, and one outside the range
@@ -366,7 +452,7 @@ export async function registerPageRoutes(
         return reply
           .code(404)
           .type('text/html')
-          .send(notFoundPage(req.auth.account.email));
+          .send(notFoundPage(await shellFor(req)));
       }
       // The daily job already skips a User or a Topic that has unsubscribed, and
       // this is the one path that could get around it: a User who has asked not
@@ -413,7 +499,7 @@ export async function registerPageRoutes(
         return reply
           .code(404)
           .type('text/html')
-          .send(notFoundPage(req.auth.account.email, 'That brief'));
+          .send(notFoundPage(await shellFor(req), 'That brief'));
       }
       // The stored document, served as stored. A BriefSnapshot is what was
       // emailed, so rendering it again from today's Clusters would show a
@@ -436,15 +522,18 @@ export async function registerPageRoutes(
         return reply
           .code(404)
           .type('text/html')
-          .send(notFoundPage(req.auth.account.email));
+          .send(notFoundPage(await shellFor(req)));
       }
       const clusters = await opts.clusterRepo.listByTopicId(topic.id);
+      // What this User has already said, read once. Every answer the page gives
+      // about their signals comes from this one call: which buttons are lit, which
+      // Sources to leave out, and how the Clusters are ordered.
+      const feedback = await opts.feedbackService.feedbackFor(req.auth.user.id, topic.id);
+
       // The Active set before any filter is applied. A filter that happens to
       // match nothing is a different situation from a Topic with no Clusters at
       // all, and the page has to be able to tell them apart.
-      const active = clusters
-        .filter((c) => c.state === 'active')
-        .sort((a, b) => b.lastSeenAt.getTime() - a.lastSeenAt.getTime());
+      const active = clusters.filter((c) => c.state === 'active');
       const sourceFilter = req.query.source ? String(req.query.source) : null;
       let activeClusters = active;
       if (sourceFilter) {
@@ -452,47 +541,48 @@ export async function registerPageRoutes(
       }
 
       // Two ways a Cluster gets hidden, kept apart because only one of them is
-      // undone by dropping the query string. A Feedback hide is stored per User
-      // and outlives the request that set it.
+      // undone by dropping the query string. A `?hide=` belongs to this request;
+      // a Feedback hide is stored per User and outlives it — though what Feedback
+      // hides is a *Source*, applied to the Articles below rather than to the
+      // whole Cluster, which is the difference between disliking one outlet and
+      // losing every outlet's account of the same story.
       const queryHidden = new Set(
         (req.query.hide ? String(req.query.hide) : '')
           .split(',')
           .filter((s) => s.length > 0),
       );
-      const feedbackHiddenIds = new Set<string>();
-      const verdicts = new Map<string, 'thumbs_up' | 'thumbs_down'>();
-      if (opts.feedbackRepo) {
-        const userEvents = await opts.feedbackRepo.listByUser(req.auth.user.id);
-        const hideEvents = userEvents.filter((e) => e.feedbackType === 'hide_source');
-        for (const ev of hideEvents) {
-          if (ev.scope === 'global' || (ev.scope === 'this_topic' && ev.clusterId)) {
-            feedbackHiddenIds.add(ev.clusterId);
-          }
-        }
-        // The latest verdict per Cluster, so a thumb that was changed to a
-        // thumb down shows the change rather than leaving both buttons lit.
-        // `listByUser` is ordered newest first, so the first one seen wins.
-        for (const ev of userEvents) {
-          if (ev.feedbackType !== 'thumbs_up' && ev.feedbackType !== 'thumbs_down') continue;
-          if (verdicts.has(ev.clusterId)) continue;
-          verdicts.set(ev.clusterId, ev.feedbackType);
-        }
-      }
-      activeClusters = activeClusters.filter(
-        (c) => !queryHidden.has(c.id) && !feedbackHiddenIds.has(c.id),
-      );
+      activeClusters = activeClusters.filter((c) => !queryHidden.has(c.id));
       // What the "show all" link will actually put back on the page: it drops
-      // the Source filter and a `hide=` the User typed, but nothing stored in
-      // Feedback. Counting from `active` instead would promise Clusters the
-      // link does not bring back.
-      const revealableCount = active.filter((c) => !feedbackHiddenIds.has(c.id)).length;
+      // the Source filter and a `hide=` the User typed, but nothing a User has
+      // hidden through Feedback. Counting from `active` instead would promise
+      // Clusters the link does not bring back.
+      const revealableCount = active.length;
+
+      // Hidden Sources are dropped before relevance is measured, not after: an Article
+      // the page has removed is not evidence about what the User wants to read
+      // next, and ranking on Articles that are then taken away would order the
+      // brief by something the User cannot see.
+      const hiddenSourceIds = feedback.hiddenSourceIds;
       const clusterArticles = new Map<string, readonly import('../domain/types.js').Article[]>();
+      const relevance = new Map<ClusterId, number>();
+      const clustersWithoutArticles = new Set<string>();
       for (const c of activeClusters) {
-        clusterArticles.set(
-          c.id,
-          await opts.clusterRepo.listArticlesByClusterId(c.id, topic.sourceIds),
-        );
+        const visible = (
+          await opts.clusterRepo.listArticlesByClusterId(c.id, topic.sourceIds)
+        ).filter((a) => !hiddenSourceIds.has(a.sourceId));
+        clusterArticles.set(c.id, visible);
+        relevance.set(c.id, clusterRelevance(visible, feedback.weightByArticleId));
+        // A Cluster left with no Articles at all — every one of them from a Source
+        // this User has hidden — has nothing of this Topic left to show, so it
+        // goes. Naming the Source is what makes this a Source-level exclusion: a
+        // Cluster carried by two outlets keeps the other one's reporting.
+        if (visible.length === 0) clustersWithoutArticles.add(c.id);
       }
+      activeClusters = activeClusters.filter((c) => !clustersWithoutArticles.has(c.id));
+      // Relevance before recency, so a signal moves a Cluster relative to what the
+      // User has already answered for. A User who has given none sees exactly the
+      // recency order this page has always used.
+      activeClusters = [...orderByRelevance(activeClusters, relevance)];
       const sourcesById = new Map(
         (await opts.sourceRepo.list()).map((s) => [s.id, s] as const),
       );
@@ -500,7 +590,12 @@ export async function registerPageRoutes(
       // carry, so the link a User clicks is one that can still show something.
       const visibleSources = new Set<string>();
       for (const c of active) {
-        for (const sid of c.sourceIds) visibleSources.add(sid);
+        for (const sid of c.sourceIds) {
+          // A Source the User has hidden is not offered as a filter either: the
+          // link would land on a page with nothing in it, which is a dead end
+          // rather than a filter.
+          if (!hiddenSourceIds.has(sid)) visibleSources.add(sid);
+        }
       }
       // The BriefSnapshots of this Topic that have been emailed, newest first.
       // The LivingBrief regenerates, so this list is the only way back to the
@@ -512,18 +607,22 @@ export async function registerPageRoutes(
         : [];
       return reply.type('text/html').send(
         topicPage({
-          email: req.auth.account.email,
+          account: await shellFor(req),
           topic,
           topicSlug: req.params.slug,
           clusters: activeClusters,
           clusterCount: clusters.length,
           activeClusterCount: active.length,
           revealableClusterCount: revealableCount,
+          hiddenSourceNames: [...hiddenSourceIds]
+            .map((sid) => sourcesById.get(sid)?.name ?? sid)
+            .sort(),
           sourceFilter,
           sourcesById,
           visibleSourceIds: visibleSources,
           clusterArticles,
-          verdicts,
+          signals: feedback.signalsByCluster,
+          hiddenSources: feedback.hiddenSources,
           snapshots,
           briefJustSent: req.query.brief === 'sent',
           // The button to send a brief by hand is only honest while the User
@@ -542,6 +641,9 @@ function signupPage(): string {
   return layout({
     title: 'Sign in',
     width: 'narrow',
+    // The one page that is the shell with nothing in it: there is no signed-in
+    // User yet to put a navigation, an account or a sign-out control on it.
+    account: null,
     body: `    <h1>Sign in to Brieflyy</h1>
     <p class="lede">Enter your email and we'll send you a magic link.</p>
     <form id="signup" novalidate>
@@ -602,7 +704,7 @@ function signupPage(): string {
 }
 
 function pickTopicsPage(input: {
-  email: string;
+  account: ShellAccount;
   templates: readonly TopicTemplate[];
   existing: readonly Topic[];
   atCap: boolean;
@@ -722,7 +824,7 @@ function pickTopicsPage(input: {
   return layout({
     title: onboarding ? 'Pick your topics' : 'Your topics',
     width: 'reading',
-    account: input.email,
+    account: input.account,
     // Only the management screen is "Manage topics". In onboarding the same
     // page is "Pick your topics", and following the nav link there redirects
     // back to it, so marking it current would be a small lie.
@@ -819,7 +921,7 @@ function formatClockTime(t: DeliveryTimeValue): string {
  * back with their hour, minute and timezone still filled in.
  */
 export function deliveryTimePage(input: {
-  email: string;
+  account: ShellAccount;
   existing: DeliveryTimeValue;
   isSet: boolean;
   firstBriefAt: Date | null;
@@ -888,7 +990,7 @@ ${formHtml}
   return layout({
     title: isOnboarding ? 'Pick your delivery time' : 'Delivery time',
     width: 'form',
-    account: input.email,
+    account: input.account,
     activeHref: '/settings/delivery',
     body: `    <h1>${isOnboarding ? 'Pick your delivery time' : 'Delivery time'}</h1>
     <p class="lede">${
@@ -919,7 +1021,7 @@ ${body}`,
  * page says so rather than quietly restoring it.
  */
 export function emailBriefsPage(input: {
-  email: string;
+  account: ShellAccount;
   topics: readonly Topic[];
   /** When the User opted out of every brief, or null while they want them. */
   optedOutAt: Date | null;
@@ -994,7 +1096,7 @@ ${rows}
   return layout({
     title: 'Email briefs',
     width: 'form',
-    account: input.email,
+    account: input.account,
     activeHref: EMAIL_BRIEFS_PATH,
     body: `    <h1>Email briefs</h1>
     <p class="lede">What Brieflyy sends you, and how to stop it.</p>
@@ -1099,7 +1201,7 @@ function timeZoneOptions(selected: string): string {
 }
 
 function welcomePage(input: {
-  email: string;
+  account: ShellAccount;
   deliveryTime: { hour: number; minute: number; timezone: string };
   firstBriefAt: Date | null;
 }): string {
@@ -1111,9 +1213,9 @@ function welcomePage(input: {
   return layout({
     title: "You're set up",
     width: 'form',
-    account: input.email,
+    account: input.account,
     body: `    <h1>You're set up</h1>
-    <p class="lede">Welcome, ${escapeHtml(input.email)}.</p>
+    <p class="lede">Welcome, ${escapeHtml(input.account.email)}.</p>
     <div class="callout">
       <p><strong>Your first brief arrives ${escapeHtml(when)}</strong></p>
       <p>(${tz}, daily at ${time}).</p>
@@ -1123,7 +1225,11 @@ function welcomePage(input: {
   });
 }
 
-function upgradePage(input: { email: string; topicCount: number; tier: Tier }): string {
+function upgradePage(input: {
+  account: ShellAccount;
+  topicCount: number;
+  tier: Tier;
+}): string {
   const used = input.topicCount === 1 ? '1 topic' : `${input.topicCount} topics`;
   // A paid user reaching this page already has what it is selling, so say that
   // rather than pitching them a plan they are on.
@@ -1140,7 +1246,7 @@ function upgradePage(input: { email: string; topicCount: number; tier: Tier }): 
   return layout({
     title: 'Upgrade to paid',
     width: 'form',
-    account: input.email,
+    account: input.account,
     body: `    <h1>${headline}</h1>
     ${priceHtml}
     <p>Paid Brieflyy includes unlimited topics, indefinite archive retention, and the full trends view.</p>
@@ -1159,11 +1265,11 @@ function upgradePage(input: { email: string; topicCount: number; tier: Tier }): 
  * page with no way out of the application. It is now an honest, styled
  * placeholder that says so and can be left.
  */
-function archiveSearchPage(input: { email: string }): string {
+function archiveSearchPage(input: { account: ShellAccount }): string {
   return layout({
     title: 'Archive search',
     width: 'form',
-    account: input.email,
+    account: input.account,
     activeHref: '/archive/search',
     body: `    <h1>Archive search</h1>
     <p class="lede">Search everything Brieflyy has delivered to you, by word or topic.</p>
@@ -1175,45 +1281,21 @@ function archiveSearchPage(input: { email: string }): string {
   });
 }
 
-function pad2(n: number): string {
-  return n < 10 ? `0${n}` : `${n}`;
-}
-
-const MONTH_NAMES = [
-  'Jan',
-  'Feb',
-  'Mar',
-  'Apr',
-  'May',
-  'Jun',
-  'Jul',
-  'Aug',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dec',
-];
-
-function formatHumanTime(date: Date, timezone: string): string {
-  const parts = partsInTz(date, timezone);
-  const weekday = parts.weekday;
-  const day = parts.day;
-  const month = MONTH_NAMES[parts.month - 1] ?? '';
-  const hour = pad2(parts.hour);
-  const minute = pad2(parts.minute);
-  return `${weekday}, ${day} ${month} at ${hour}:${minute}`;
-}
-
 function homePage(input: {
-  email: string;
+  account: ShellAccount;
   topics: readonly Topic[];
   tier: Tier;
   atCap: boolean;
 }): string {
   const cap = topicCapFor(input.tier);
-  const plan = Number.isFinite(cap)
-    ? `Free plan &middot; ${input.topics.length} of ${cap} topics`
-    : `Paid plan &middot; ${input.topics.length} topics`;
+  // The tier's own name from the shell's table, so the topic list and the header
+  // it sits above cannot come to spell it differently. The DiscoverTab counts the
+  // same three facts through the same helper.
+  const plan = planLine({
+    tier: input.tier,
+    heldCount: input.topics.length,
+    cap,
+  });
   // A user who cannot add another topic is told so on the page they land on,
   // not only on the picker they have to go and find.
   const atCapHtml = input.atCap
@@ -1240,7 +1322,7 @@ function homePage(input: {
   return layout({
     title: 'Your topics',
     width: 'default',
-    account: input.email,
+    account: input.account,
     activeHref: '/topics',
     body: `    <h1>Your topics</h1>
     <p class="lede">Pick a topic to open its living brief.</p>
@@ -1254,7 +1336,7 @@ ${rows}
 }
 
 function topicPage(input: {
-  email: string;
+  account: ShellAccount;
   topic: Topic;
   topicSlug: string;
   clusters: readonly Cluster[];
@@ -1277,12 +1359,29 @@ function topicPage(input: {
    * because the link can only undo a filter, not Feedback.
    */
   revealableClusterCount: number;
+  /**
+   * The names of the Sources hidden from this Topic. Named rather than counted
+   * because an empty page that says "3 sources" leaves the User with nothing to
+   * act on, and this is the one empty page a link here cannot undo.
+   */
+  hiddenSourceNames: readonly string[];
   sourceFilter: string | null;
   sourcesById: Map<string, { id: string; name: string }>;
   visibleSourceIds: Set<string>;
   clusterArticles?: Map<string, readonly import('../domain/types.js').Article[]>;
-  /** The User's latest thumbs verdict per Cluster, so a control can show it. */
-  verdicts: Map<string, 'thumbs_up' | 'thumbs_down'>;
+  /**
+   * The signals this User's feedback says each Cluster carries, so every button
+   * can show whether it is the one in force. A Cluster absent from the map is not
+   * a bug: a User who has pressed nothing, and one whose every signal has been
+   * replaced, both have nothing lit, and saying so is what the `aria-pressed`
+   * values mean.
+   */
+  readonly signals: ReadonlyMap<ClusterId, ClusterSignals>;
+  /**
+   * The Sources this User has hidden and the scope of each, so the hide control
+   * can offer the scope it would use and show which Sources are already gone.
+   */
+  readonly hiddenSources: ReadonlyMap<SourceId, HiddenSource>;
   /** The BriefSnapshots of this Topic already emailed, newest first. */
   readonly snapshots?: readonly import('../domain/types.js').BriefSnapshot[];
   /** Set when the User has just asked for one and it was sent. */
@@ -1316,19 +1415,40 @@ ${bulletPoints}
           return `<li><span class="outlet">${escapeHtml(outlet)}:</span> <a href="${escapeHtml(a.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(a.title || 'Source article')}</a></li>`;
         })
         .join('\n        ');
-      const verdict = input.verdicts.get(c.id) ?? null;
+      const signals = input.signals.get(c.id)?.activeTypes ?? new Set<FeedbackType>();
       // Two controls that look alike behave differently: this one is undone by
       // dropping the query string, the Feedback one is stored. Labelling them
       // the same meant a User picked the irreversible one without knowing.
       const hideLink = `<a href="?hide=${encodeURIComponent(String(c.id))}" class="hide-btn">Dismiss</a>`;
+      // The four Cluster signals, each marked with whether it is the one in
+      // force. The accessible names are the signal's own rather than a neighbour's:
+      // the thumbs used to answer to the same name as the more/less buttons, so a
+      // screen reader offered two controls called "More like this" and could not
+      // say which was which.
+      const signalButtons = ([
+        ['thumbs_up', 'Thumbs up'],
+        ['thumbs_down', 'Thumbs down'],
+        ['more_like_this', 'More like this'],
+        ['less_like_this', 'Less like this'],
+      ] as const)
+        .map(([type, label]) => {
+          const glyph = type === 'thumbs_up' ? '&#128077;' : type === 'thumbs_down' ? '&#128078;' : '';
+          return `        <button${glyph ? '' : ' class="secondary"'} type="submit" name="type" value="${type}" aria-label="${label}" aria-pressed="${signals.has(type)}">${glyph || escapeHtml(label)}</button>`;
+        })
+        .join('\n');
       const feedbackButtons = `<form class="feedback" method="POST" action="${action}">
         <input type="hidden" name="clusterId" value="${escapeHtml(c.id)}">
-        <button type="submit" name="type" value="thumbs_up" aria-label="More like this" aria-pressed="${verdict === 'thumbs_up'}">&#128077;</button>
-        <button type="submit" name="type" value="thumbs_down" aria-label="Less like this" aria-pressed="${verdict === 'thumbs_down'}">&#128078;</button>
-        <button class="secondary" type="submit" name="type" value="more_like_this">More like this</button>
-        <button class="secondary" type="submit" name="type" value="less_like_this">Less like this</button>
-        <button class="secondary" type="submit" name="type" value="hide_source">Hide this source</button>
+${signalButtons}
       </form>`;
+      const hideForm = hideSourceForm({
+        action,
+        clusterId: c.id,
+        sources: c.sourceIds.map((sid) => ({
+          id: sid,
+          name: input.sourcesById.get(sid)?.name ?? sid,
+          hiddenScope: input.hiddenSources.get(sid)?.scope ?? null,
+        })),
+      });
       const sources = c.sourceIds
         .filter((sid) => input.visibleSourceIds.has(sid))
         .map((sid) => {
@@ -1342,6 +1462,7 @@ ${bulletPoints}
         <div class="hide-row">${feedbackButtons}${hideLink}</div>
         ${bullets}
         <p class="sources">${sources || '<span class="muted">No sources</span>'}</p>
+        ${hideForm}
         ${articleLinks ? `<ul class="articles">
         ${articleLinks}
         </ul>` : ''}
@@ -1361,7 +1482,7 @@ ${bulletPoints}
   return layout({
     title: input.topic.title,
     width: 'reading',
-    account: input.email,
+    account: input.account,
     activeHref: '/topics',
     body: `    <h1>${safeTitle}</h1>
     <p class="lede">${category}${count}</p>
@@ -1372,6 +1493,85 @@ ${rows}
 ${windowForm}`,
   });
 }
+
+/**
+ * The Hide-source control: which Source, and how far the ask reaches.
+ *
+ * Two things were wrong with the single "Hide this source" button it replaces.
+ * It named no Source, so there was nothing on the event to say which outlet was
+ * meant and the only thing to act on was the Cluster — hiding one outlet's
+ * reporting took every other outlet's reporting of the same story with it. And it
+ * had no scope on it, so `global` could never be reached: the field was never
+ * rendered, so every hide the route stored was `this_topic`.
+ *
+ * The two selects say both out loud. The scope's selected option is the scope in
+ * force for that Source, so a choice made on one page load is the one the next
+ * page load shows — the choice persists because it is read back off the stored
+ * signal rather than kept in the page.
+ */
+function hideSourceForm(input: {
+  readonly action: string;
+  readonly clusterId: string;
+  readonly sources: readonly {
+    readonly id: string;
+    readonly name: string;
+    readonly hiddenScope: FeedbackScope | null;
+  }[];
+}): string {
+  if (input.sources.length === 0) return '';
+  // A Source already hidden is still offered, marked as hidden and with its stored
+  // scope selected. Offering it is what makes the scope changeable: a User who hid
+  // an outlet everywhere and then wants it back on one Topic has to be able to say
+  // so here, and a control that only offered Sources they had not touched could
+  // not express it. The stored scope is what the control submits again, so the
+  // choice made on one page load is the one the next page load shows.
+  const first = input.sources.find((s) => s.hiddenScope !== null) ?? input.sources[0]!;
+  const scope = first.hiddenScope ?? 'this_topic';
+  const sourceOptions = input.sources
+    .map(
+      (s) =>
+        `          <option value="${escapeHtml(s.id)}"${s.id === first.id ? ' selected' : ''}>${escapeHtml(s.name)}${s.hiddenScope === null ? '' : ' (hidden)'}</option>`,
+    )
+    .join('\n');
+  const scopeOptions = FEEDBACK_SCOPES.map(
+    (value) =>
+      `          <option value="${value}"${scope === value ? ' selected' : ''}>${FEEDBACK_SCOPE_LABELS[value]}</option>`,
+  )
+    .join('\n');
+  const hidden = input.sources
+    .filter((s) => s.hiddenScope !== null)
+    .map(
+      (s) =>
+        `${escapeHtml(s.name)}: ${s.hiddenScope === 'global' ? 'hidden on all your topics' : 'hidden on this topic'}`,
+    )
+    .join('; ');
+  return `    <form class="feedback hide-source" method="POST" action="${input.action}">
+      <input type="hidden" name="clusterId" value="${escapeHtml(input.clusterId)}">
+      <input type="hidden" name="type" value="hide_source">
+      <label class="visually-hidden" for="source-${escapeHtml(input.clusterId)}">Source to hide</label>
+      <select id="source-${escapeHtml(input.clusterId)}" name="sourceId">
+${sourceOptions}
+      </select>
+      <label class="visually-hidden" for="scope-${escapeHtml(input.clusterId)}">Where to hide it</label>
+      <select id="scope-${escapeHtml(input.clusterId)}" name="scope">
+${scopeOptions}
+      </select>
+      <button class="secondary" type="submit" aria-pressed="${first.hiddenScope !== null}">Hide source</button>
+      ${hidden === '' ? '' : `<p class="muted hide-source__state">${hidden}</p>`}
+    </form>`;
+}
+
+/**
+ * How a Scope reads on the page.
+ *
+ * One table rather than a list at each place a scope is named, so the label a User
+ * sees and the value the service checks cannot drift apart — the same reason
+ * `FEEDBACK_SCOPES` in the domain is a value and not only a type.
+ */
+const FEEDBACK_SCOPE_LABELS: Readonly<Record<FeedbackScope, string>> = {
+  this_topic: 'This topic',
+  global: 'All your topics',
+};
 
 /** How many emailed BriefSnapshots the LivingBrief offers a way back to. */
 const SNAPSHOTS_ON_TOPIC_PAGE = 5;
@@ -1395,7 +1595,7 @@ function newestFirst(
  * indistinguishable from the scheduler being broken.
  */
 function sendBriefSection(input: {
-  email: string;
+  account: ShellAccount;
   topicSlug: string;
   snapshots?: readonly import('../domain/types.js').BriefSnapshot[];
   briefJustSent?: boolean;
@@ -1420,7 +1620,7 @@ ${sent.join('\n')}
     </section>`
     : '';
   const notice = input.briefJustSent
-    ? `    <div class="callout callout--success" role="status">Your brief has been sent to ${escapeHtml(input.email)}.</div>`
+    ? `    <div class="callout callout--success" role="status">Your brief has been sent to ${escapeHtml(input.account.email)}.</div>`
     : '';
   // The route refuses to send while the mail is stopped, so the button must not
   // be offered: a control that always ends in a refusal is worse than one that
@@ -1440,12 +1640,14 @@ ${list}`;
 /**
  * What the page says when it has no Clusters to render.
  *
- * Three different situations, and conflating any two of them misleads the User
+ * Four different situations, and conflating any two of them misleads the User
  * about their own Topic. An empty Topic has nothing yet. A Topic whose Clusters
- * have all gone Archived has something, just nothing current. And a Topic whose
- * Clusters a Source filter or a Hide has removed still has Clusters — saying
+ * have all gone Archived has something, just nothing current. A Topic whose
+ * Clusters a Source filter or a Dismiss has removed still has Clusters — saying
  * "no stories yet" there would tell them their ingest is broken when it is
- * working exactly as asked.
+ * working exactly as asked. And a Topic whose Clusters are left with nothing to
+ * show because every Source behind them has been hidden is a fourth thing
+ * again, and the one a link on this page cannot undo.
  *
  * Each of them also says what to do next. Describing an empty screen without
  * offering a way out of it leaves the User with nothing to act on, which is the
@@ -1460,19 +1662,24 @@ function emptyStateBlock(input: {
   readonly activeClusterCount: number;
   readonly revealableClusterCount: number;
   readonly topicSlug: string;
+  /** The names of the Sources hidden from this Topic, named rather than counted. */
+  readonly hiddenSourceNames: readonly string[];
 }): string {
   if (input.clusters.length > 0) return '';
+  // Checked before the filter, because it outranks it: a Source filter that
+  // matches nothing is a transient thing the link undoes, whereas a hidden Source
+  // is why there is nothing left to filter, and offering "Show all N" here would
+  // promise Clusters the link cannot bring back.
+  if (input.hiddenSourceNames.length > 0) {
+    const names = input.hiddenSourceNames.map((n) => escapeHtml(n)).join(' and ');
+    return `    <div class="empty-state">
+      <p class="muted">Nothing is showing because you hid ${names}, and every Article this topic had left came from ${input.hiddenSourceNames.length === 1 ? 'it' : 'them'}.</p>
+      <p class="empty-state__actions"><a href="/topics">All your topics</a></p>
+    </div>`;
+  }
   if (input.revealableClusterCount > 0) {
     return `    <div class="empty-state">
       <p class="muted">No clusters match the current filter. <a href="/topics/${escapeHtml(input.topicSlug)}">Show all ${input.revealableClusterCount} active cluster${input.revealableClusterCount === 1 ? '' : 's'}</a></p>
-    </div>`;
-  }
-  // Everything still Active is hidden by stored Feedback, which no link on this
-  // page can undo. Saying "show all 0 clusters" here would be a dead end.
-  if (input.activeClusterCount > 0) {
-    return `    <div class="empty-state">
-      <p class="muted">Nothing is showing because you hid all ${input.activeClusterCount} active cluster${input.activeClusterCount === 1 ? '' : 's'} on this topic.</p>
-      <p class="empty-state__actions"><a href="/topics">All your topics</a></p>
     </div>`;
   }
   if (input.clusterCount > 0) {
@@ -1535,16 +1742,88 @@ function clusterWindowForm(input: {
     </form>`;
 }
 
-function notFoundPage(email: string, what = 'That topic'): string {
-  // The slug the User asked for used to be reflected back into the page. It is
-  // escaped, so it was never a vulnerability, but it is a URL path echoed for
-  // no product reason, and the copy below says the same thing without it.
+/** A field off a form submission, read as a plain string or nothing. */
+function readField(body: Record<string, unknown>, key: string): string | undefined {
+  const value = body[key];
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+/**
+ * What the page says when a signal could not be recorded.
+ *
+ * The submission is refused rather than stored, so the reasons name the thing
+ * that was wrong: a type that is not one of the five signals, a hide with no
+ * Source, a Cluster from another Topic. Each one keeps a way back to the brief
+ * rather than stranding the User on an error page.
+ */
+function feedbackErrorPage(input: {
+  readonly account: ShellAccount;
+  readonly message: string;
+  readonly topicSlug: string;
+}): string {
+  return layout({
+    title: 'Feedback not saved',
+    width: 'form',
+    account: input.account,
+    body: `    <h1>Feedback not saved</h1>
+    <p>${escapeHtml(input.message)}</p>
+    <p class="actions"><a class="button" href="/topics/${escapeHtml(input.topicSlug)}">Back to your brief</a></p>`,
+  });
+}
+
+/** Why a signal was refused, in words rather than in a status name. */
+function humanFeedbackReason(status: string): string {
+  switch (status) {
+    case 'invalid_type':
+      return 'That is not one of the signals a brief offers.';
+    case 'invalid_scope':
+      return 'Hiding a source applies to this topic or to all your topics.';
+    case 'missing_source':
+      return 'Choose which source to hide.';
+    case 'unknown_source':
+      return 'That source is not one of this topic.';
+    default:
+      return 'That story is no longer part of this topic.';
+  }
+}
+
+/**
+ * A thing the User named that is not there — a Topic of theirs, a brief of theirs.
+ *
+ * Distinct from `unknownUrlPage` because this one can say what was being looked
+ * for. The slug used to be reflected back into the page; it is escaped, so it was
+ * never a vulnerability, but it is a URL path echoed for no product reason, and
+ * the copy below says the same thing without it.
+ */
+function notFoundPage(account: ShellAccount, what = 'That topic'): string {
   return layout({
     title: 'Not found',
     width: 'form',
-    account: email,
+    account,
     body: `    <h1>Not found</h1>
     <p>${escapeHtml(what)} does not exist, or it is not one of yours.</p>
     <p class="actions"><a class="button" href="/topics">Back to your topics</a></p>`,
+  });
+}
+
+/**
+ * An address nothing is registered at.
+ *
+ * Two shapes, because the two situations are not the same: a signed-in User who
+ * followed a dead link needs to get back into the application, and an anonymous
+ * visitor needs the way in. Giving an anonymous visitor the signed-in navigation
+ * would offer them links to pages they cannot reach, which is a page that looks
+ * like a way out and is not one.
+ */
+function unknownUrlPage(account: ShellAccount | null): string {
+  return layout({
+    title: 'Page not found',
+    width: 'form',
+    account,
+    body: `    <h1>Page not found</h1>
+    <p>There is nothing at this address.</p>
+    <p class="actions"><a class="button" href="${
+      account === null ? '/signup' : '/topics'
+    }">${account === null ? 'Sign in' : 'Back to your topics'}</a></p>`,
   });
 }

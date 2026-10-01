@@ -3,17 +3,22 @@ import type { FastifyInstance } from 'fastify';
 import { AUTHENTICATED_ROUTE_CONFIG, requireAuth } from '../http/access.js';
 import { escapeHtml } from '../domain/html.js';
 import { factValue, renderStatusDashboard } from '../pages/status-dashboard.js';
+import type { ShellAccount } from '../pages/layout.js';
+import { resolveShellAccount } from '../pages/shell.js';
+import type { OnboardingService } from '../onboarding/onboarding-service.js';
 import type { IngestScheduler } from './ingest-scheduler.js';
 
 export interface IngestRoutesOptions {
   readonly scheduler: IngestScheduler;
+  /** What the shell's header says about the signed-in operator. */
+  readonly onboardingService: OnboardingService;
 }
 
 export async function registerIngestRoutes(
   fastify: FastifyInstance,
   opts: IngestRoutesOptions,
 ): Promise<void> {
-  const { scheduler } = opts;
+  const { scheduler, onboardingService } = opts;
 
   fastify.get(
     '/api/ingest/status',
@@ -41,7 +46,7 @@ export async function registerIngestRoutes(
   fastify.get('/admin/ingest', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
     if (!requireAuth(req, reply)) return reply;
     const status = await scheduler.statusHydrated();
-    const html = renderDashboard(status);
+    const html = renderDashboard(status, await resolveShellAccount(req.auth, onboardingService));
     return reply.type('text/html; charset=utf-8').send(html);
   });
 
@@ -66,9 +71,13 @@ export async function registerIngestRoutes(
   });
 }
 
-function renderDashboard(status: Awaited<ReturnType<IngestScheduler['statusHydrated']>>): string {
+function renderDashboard(
+  status: Awaited<ReturnType<IngestScheduler['statusHydrated']>>,
+  account: ShellAccount,
+): string {
   return renderStatusDashboard({
     title: 'Ingest scheduler',
+    account,
     facts: [
       { label: 'Running', value: factValue(status.running) },
       {

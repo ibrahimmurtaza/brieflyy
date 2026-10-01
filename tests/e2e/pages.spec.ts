@@ -52,6 +52,7 @@ test.describe('every page a signed-in User can reach', () => {
     ['/settings/delivery', 'Delivery time'],
     ['/archive/search', 'Archive search'],
     ['/upgrade', 'Upgrade to paid'],
+    ['/discover', 'Discover'],
   ];
 
   for (const [url, heading] of PAGES) {
@@ -71,7 +72,7 @@ test.describe('every page a signed-in User can reach', () => {
 
 test.describe('the shell', () => {
   test('every signed-in page has the same navigation, and it can be left', async ({ signedInPage: page }) => {
-    for (const url of ['/topics', '/pick-topics', '/archive/search', '/upgrade', '/settings/briefs', '/settings/delivery']) {
+    for (const url of ['/topics', '/pick-topics', '/discover', '/archive/search', '/upgrade', '/settings/briefs', '/settings/delivery']) {
       await page.goto(url);
       const nav = page.getByRole('navigation', { name: 'Primary' });
       await expect(nav, `${url} has no primary navigation`).toBeVisible();
@@ -86,7 +87,7 @@ test.describe('the shell', () => {
     // "Manage topics" lived on /topics and on the LivingBrief before the shell
     // existed, and went missing with the per-page navigation they carried. This
     // is the check that says it is not allowed to go missing again.
-    for (const url of ['/topics', '/topics/world-news', '/settings/briefs', '/settings/delivery', '/upgrade', '/archive/search']) {
+    for (const url of ['/topics', '/topics/world-news', '/settings/briefs', '/settings/delivery', '/upgrade', '/archive/search', '/discover']) {
       await page.goto(url);
       const link = page
         .getByRole('navigation', { name: 'Primary' })
@@ -121,6 +122,38 @@ test.describe('the shell', () => {
   test('the account email is in the header, not opening the page', async ({ signedInPage: page }) => {
     await page.goto('/topics');
     await expect(page.locator('.account__email')).toHaveText('iris@example.com');
+  });
+
+  test('the header says which tier the User is on, and when the next brief lands', async ({ signedInPage: page }) => {
+    // The three facts a User cannot work out for themselves without leaving the
+    // page: who is signed in, what they pay for, and when mail next arrives.
+    await page.goto('/topics');
+    const account = page.locator('.account');
+    await expect(account.locator('.account__tier')).toHaveText('Free plan');
+    // In the User's own zone, because the fixture server stores
+    // `America/New_York` and a clock time with no frame is a claim without one.
+    await expect(account.locator('.account__brief')).toContainText('Next brief');
+    await expect(account.locator('.account__brief')).toContainText('America/New_York');
+    await expect(account.locator('.account__brief')).toContainText('08:00');
+  });
+
+  test('an address that does not exist is a page inside the shell', async ({ signedInPage: page }) => {
+    const response = await page.goto('/there-is-no-such-page');
+    expect(response?.status()).toBe(404);
+    // A dead link used to answer with Fastify's JSON, which is neither a page nor
+    // a way out of wherever the User was when they clicked it.
+    await expect(page.getByRole('heading', { level: 1, name: 'Page not found' })).toBeVisible();
+    await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Back to your topics' })).toBeVisible();
+  });
+
+  test('an anonymous visitor who lands on a dead address is offered the way in', async ({ page }) => {
+    const response = await page.goto('/there-is-no-such-page');
+    expect(response?.status()).toBe(404);
+    await expect(page.getByRole('link', { name: 'Sign in' })).toBeVisible();
+    // And no navigation to pages they cannot reach.
+    await expect(page.getByRole('navigation', { name: 'Primary' })).toHaveCount(0);
   });
 });
 
@@ -206,9 +239,41 @@ test.describe('the LivingBrief', () => {
 
   test('every cluster control has an accessible name and a reachable target', async ({ signedInPage: page }) => {
     await page.goto('/topics/world-news');
-    for (const name of ['More like this', 'Less like this', 'Hide this source', 'Dismiss']) {
+    for (const name of ['Thumbs up', 'Thumbs down', 'More like this', 'Less like this', 'Hide source', 'Dismiss']) {
       await expect(page.getByRole('button', { name, exact: true }).or(page.getByRole('link', { name })).first()).toBeVisible();
     }
+  });
+
+  // Read-only on purpose. Every project runs against one seeded server and one
+  // database, and these specs run in parallel, so a test that recorded a signal
+  // would change the brief the other two viewports are asserting about. What a
+  // signal *does* is covered at the HTTP seam in `src/pages/topic-page.test.ts`,
+  // where each test has its own database.
+  test('says what a signal would do, before any has been given', async ({ signedInPage: page }) => {
+    await page.goto('/topics/world-news');
+
+    for (const name of ['Thumbs up', 'Thumbs down', 'More like this', 'Less like this']) {
+      await expect(page.getByRole('button', { name, exact: true })).toHaveAttribute(
+        'aria-pressed',
+        'false',
+      );
+    }
+  });
+
+  test('the hide control names which source and how far the ask reaches', async ({ signedInPage: page }) => {
+    await page.goto('/topics/world-news');
+
+    const hide = page.locator('form.hide-source').first();
+    await expect(hide.getByRole('combobox', { name: 'Source to hide' })).toBeVisible();
+    const scope = hide.getByRole('combobox', { name: 'Where to hide it' });
+    await expect(scope).toBeVisible();
+    await expect(scope.locator('option')).toHaveText(['This topic', 'All your topics']);
+    // The fifth signal shows its state the same way the other four do, so a User
+    // who has already hidden something can see that from the button.
+    await expect(hide.getByRole('button', { name: 'Hide source' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
   });
 
   test('filtering by a Source marks that Source as the live one', async ({ signedInPage: page }) => {

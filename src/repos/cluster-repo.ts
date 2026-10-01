@@ -50,6 +50,16 @@ export interface ClusterRepo {
    * already there. Inserting instead would fail on the primary key and take the
    * whole cycle with it.
    */
+  /**
+   * The Stories a Cluster groups, which is the hop from a signal about a Cluster
+   * to the Articles it has to reach.
+   *
+   * Unfiltered by Source, unlike `listArticlesByClusterId`: propagating a signal
+   * is not a question about what a Topic shows, and an Article from an outlet
+   * this Topic does not follow is still one of the Articles whose weight decides
+   * where another Cluster lands.
+   */
+  listStoryIdsByClusterId(clusterId: ClusterId): Promise<readonly StoryId[]>;
   insert(cluster: Cluster, storyIds?: readonly StoryId[]): Promise<void>;
   /**
    * Archive every Cluster of a Topic that is not in `keepIds`, and report how
@@ -150,6 +160,14 @@ export class DrizzleClusterRepo implements ClusterRepo {
     return articleRows.map((row) =>
       rowToArticle(row, byArticle.get(row.id) ?? []),
     );
+  }
+
+  async listStoryIdsByClusterId(clusterId: ClusterId): Promise<readonly StoryId[]> {
+    const rows = (await this.db
+      .select({ storyId: clusterStories.storyId })
+      .from(clusterStories)
+      .where(eq(clusterStories.clusterId, clusterId))) as { storyId: string }[];
+    return rows.map((r) => r.storyId as StoryId);
   }
 
   async listArticlesByClusterId(

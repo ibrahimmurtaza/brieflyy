@@ -657,6 +657,38 @@ describe('applySchema', () => {
     expect(clustersTopicIdx).toBeDefined();
   });
 
+  it('rebuilds feedback events so a hide can name the Source it is about', () => {
+    // SQLite cannot add a foreign key to a live table, so the column carrying the
+    // Source a hide is about needs the rebuild rather than an ALTER TABLE. Without
+    // it the column would exist and name no Source the registry holds.
+    const driver = createInMemorySqliteDriver();
+    driver.exec(PRE_FK_SCHEMA_SQL);
+    driver.prepare(`INSERT INTO users (id) VALUES (?)`).run('user-1');
+    driver.prepare(
+      `INSERT INTO topics (id, user_id, slug, title, blurb, category, origin_kind, created_at)
+       VALUES ('topic-1', 'user-1', 'world-news', 'World news', '', 'news', 'freeform', 0)`,
+    ).run();
+    driver.prepare(
+      `INSERT INTO clusters (id, topic_id, title, summary, bullet_points, created_at, last_seen_at, article_count, velocity, source_ids)
+       VALUES ('cluster-1', 'topic-1', 'Foo', 'Foo happened', '[]', 0, 0, 1, 1.0, 'reuters')`,
+    ).run();
+    driver.prepare(
+      `INSERT INTO feedback_events (id, user_id, cluster_id, feedback_type, scope, timestamp)
+       VALUES ('fe-1', 'user-1', 'cluster-1', 'hide_source', 'this_topic', 0)`,
+    ).run();
+
+    applySchema(driver);
+
+    expect(foreignKeys(driver, 'feedback_events')).toContainEqual({
+      from: 'source_id',
+      table: 'sources',
+    });
+    // The rows are kept: an audit trail that a migration dropped would take a
+    // User's signals with it, and the rebuild is the only thing that changed.
+    const kept = driver.prepare(`SELECT COUNT(*) AS n FROM feedback_events`).get() as { n: number };
+    expect(kept.n).toBe(1);
+  });
+
   it('leaves dependent tables pointing at a rebuilt table', () => {
     const driver = createInMemorySqliteDriver();
     driver.exec(PRE_FK_SCHEMA_SQL);

@@ -4,8 +4,9 @@ import type { Clock } from '../domain/clock.js';
 import { DEFAULT_CLUSTER_WINDOW_DAYS } from '../domain/cluster-window.js';
 import type { RandomSource } from '../domain/crypto.js';
 import { slugify, titleKey } from '../domain/slug.js';
-import { computeFirstBriefAt, isValidIanaTimezone, isValidDeliveryHour, isValidDeliveryMinute, type DeliveryTime } from '../domain/timezone.js';
+import { computeFirstBriefAt, deliveryTimeOf, isValidIanaTimezone, isValidDeliveryHour, isValidDeliveryMinute, type DeliveryTime } from '../domain/timezone.js';
 import { DEFAULT_TIER, resolveTier, topicCapFor } from '../domain/tier.js';
+import type { DeliverySlot } from '../domain/delivery-slot.js';
 import type {
   OnboardingState,
   Topic,
@@ -409,17 +410,36 @@ export class OnboardingService {
     return user ? user.onboardingState : null;
   }
 
-  async firstBriefAt(userId: UserId): Promise<Date | null> {
+  /**
+   * The DeliverySlot this User's next brief is due on, and the zone to read it
+   * in.
+   *
+   * Null when they have not recorded a DeliveryTime: nothing is scheduled, and
+   * saying so is different from naming a time that was never asked for.
+   *
+   * Both halves are read from one row, because a header that showed an instant
+   * from one query and a zone from another could state a moment in a zone the
+   * User never chose — and the header is on every page, so that would be
+   * everywhere.
+   */
+  async nextDeliverySlot(
+    userId: UserId,
+  ): Promise<{ readonly slot: DeliverySlot; readonly timezone: string } | null> {
     const settings = await this.deliverySettingsRepo.getByUserId(userId);
     if (!settings) return null;
-    return computeFirstBriefAt(
-      {
-        hour: settings.hour,
-        minute: settings.minute,
-        timezone: settings.timezone,
-      },
-      this.clock.now(),
-    );
+    return {
+      slot: computeFirstBriefAt(deliveryTimeOf(settings), this.clock.now()),
+      timezone: settings.timezone,
+    };
+  }
+
+  /**
+   * When this User's first brief arrives, or null when they have not chosen a
+   * time. The same reading as `nextDeliverySlot`: for a User who has just set
+   * one, the next DeliverySlot is the first brief they are owed.
+   */
+  async firstBriefAt(userId: UserId): Promise<DeliverySlot | null> {
+    return (await this.nextDeliverySlot(userId))?.slot ?? null;
   }
 
   async setDeliveryTime(input: {

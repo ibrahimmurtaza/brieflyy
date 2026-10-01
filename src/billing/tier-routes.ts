@@ -1,11 +1,17 @@
 import type { FastifyInstance } from 'fastify';
 
+import { escapeHtml } from '../domain/html.js';
 import { isTier } from '../domain/tier.js';
 import { AUTHENTICATED_ROUTE_CONFIG, requireAuthPage } from '../http/access.js';
+import { layout, type ShellAccount } from '../pages/layout.js';
+import { resolveShellAccount } from '../pages/shell.js';
+import type { OnboardingService } from '../onboarding/onboarding-service.js';
 import type { UserRepo } from '../repos/user-repo.js';
 
 export interface TierRoutesOptions {
   readonly userRepo: UserRepo;
+  /** What the shell's header says about the signed-in User. */
+  readonly onboardingService: OnboardingService;
 }
 
 /**
@@ -22,7 +28,7 @@ export async function registerTierRoutes(
   fastify: FastifyInstance,
   opts: TierRoutesOptions,
 ): Promise<void> {
-  const { userRepo } = opts;
+  const { userRepo, onboardingService } = opts;
 
   fastify.post<{ Body: { tier?: string } }>(
     '/dev/tier',
@@ -31,10 +37,9 @@ export async function registerTierRoutes(
       if (!requireAuthPage(req, reply)) return reply;
       const requested = (req.body ?? {}).tier;
       if (!isTier(requested)) {
-        return reply
-          .code(400)
-          .type('text/html')
-          .send(badTierPage(String(requested ?? '')));
+        return reply.code(400).type('text/html').send(
+          badTierPage(String(requested ?? ''), await resolveShellAccount(req.auth, onboardingService)),
+        );
       }
       await userRepo.setTier(req.auth.user.id, requested);
       // Back to a real screen rather than a bare confirmation, so the change is
@@ -44,36 +49,24 @@ export async function registerTierRoutes(
   );
 }
 
-function badTierPage(requested: string): string {
-  const safe = escape(requested);
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>Unknown tier &middot; Brieflyy</title>
-  <style>
-    body { font-family: system-ui, sans-serif; max-width: 480px; margin: 4rem auto; padding: 0 1rem; }
-    h1 { font-size: 1.4rem; }
-    p { color: #b00020; }
-    a { color: #1f6feb; }
-  </style>
-</head>
-<body>
-  <main>
-    <h1>Unknown tier</h1>
-    <p>&ldquo;${safe}&rdquo; is not a tier. Use <code>free</code> or <code>paid</code>.</p>
+/**
+ * The refused switch, rendered through the shell.
+ *
+ * It used to be a standalone document with its own `<style>` block and no
+ * navigation, which is the one thing the application shell exists to prevent: a
+ * User who mistyped a development switch landed on a page with no way back into
+ * the product, on a screen that looked nothing like the one they came from.
+ */
+function badTierPage(requested: string, account: ShellAccount): string {
+  return layout({
+    title: 'Unknown tier',
+    width: 'narrow',
+    account,
+    body: `    <h1>Unknown tier</h1>
+    <p class="error-summary" role="alert"><strong>&ldquo;${escapeHtml(
+      requested,
+    )}&rdquo; is not a tier.</strong> Use <code>free</code> or <code>paid</code>.</p>
     <p>Your tier has not been changed.</p>
-    <p><a href="/topics">Back to your topics</a></p>
-  </main>
-</body>
-</html>`;
-}
-
-function escape(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+    <p class="actions"><a class="button" href="/topics">Back to your topics</a></p>`,
+  });
 }
