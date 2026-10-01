@@ -387,15 +387,20 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
 
   // Registered with the rest of the routes rather than with the pages: these are
   // the links a brief carries, and they are public.
-  await registerUnsubscribeRoutes(app, { unsubscribeService, topicRepo });
+  await registerUnsubscribeRoutes(app, {
+    unsubscribeService,
+    topicRepo,
+    onboardingService,
+  });
 
   if (ingestScheduler) {
-    await registerIngestRoutes(app, { scheduler: ingestScheduler });
+    await registerIngestRoutes(app, { scheduler: ingestScheduler, onboardingService });
   }
 
   await registerBriefStatusRoutes(app, {
     scheduler: scheduledBriefService,
     emailTransport: opts.emailTransport,
+    onboardingService,
   });
 
   if (opts.briefJobAutoStart === true) {
@@ -425,7 +430,7 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
   }
 
   if (opts.devToolsEnabled === true) {
-    await registerTierRoutes(app, { userRepo });
+    await registerTierRoutes(app, { userRepo, onboardingService });
   }
 
   return app;

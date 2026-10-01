@@ -2,6 +2,9 @@ import type { FastifyInstance } from 'fastify';
 
 import { AUTHENTICATED_ROUTE_CONFIG, requireAuth } from '../http/access.js';
 import { factValue, renderStatusDashboard, type StatusFact } from '../pages/status-dashboard.js';
+import { resolveShellAccount } from '../pages/shell.js';
+import type { ShellAccount } from '../pages/layout.js';
+import type { OnboardingService } from '../onboarding/onboarding-service.js';
 import type { BriefGeneration, BriefJobRun } from '../domain/types.js';
 import { NO_GENERATION } from '../domain/types.js';
 import type { EmailTransport } from '../email/transport.js';
@@ -14,6 +17,8 @@ export interface BriefStatusRoutesOptions {
    * than leaving an operator to infer it from the absence of a complaint.
    */
   readonly emailTransport: EmailTransport;
+  /** What the shell's header says about the signed-in operator. */
+  readonly onboardingService: OnboardingService;
 }
 
 /**
@@ -30,7 +35,7 @@ export async function registerBriefStatusRoutes(
   fastify: FastifyInstance,
   opts: BriefStatusRoutesOptions,
 ): Promise<void> {
-  const { scheduler, emailTransport } = opts;
+  const { scheduler, emailTransport, onboardingService } = opts;
 
   fastify.get('/api/briefs/status', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
     if (!requireAuth(req, reply, { json: true })) return reply;
@@ -55,6 +60,7 @@ export async function registerBriefStatusRoutes(
       provider: emailTransport.providerName,
       lastRun: status.lastRun,
       recentRuns: status.recentRuns,
+      account: await resolveShellAccount(req.auth, onboardingService),
     });
     return reply.type('text/html; charset=utf-8').send(html);
   });
@@ -76,6 +82,7 @@ interface BriefDashboardInput {
   readonly provider: string;
   readonly lastRun: BriefJobRun | null;
   readonly recentRuns: readonly BriefJobRun[];
+  readonly account: ShellAccount;
 }
 
 /**
@@ -101,6 +108,7 @@ function renderBriefDashboard(input: BriefDashboardInput): string {
   const last = input.lastRun?.generation ?? NO_GENERATION;
   return renderStatusDashboard({
     title: 'Daily brief job',
+    account: input.account,
     facts: [
       { label: 'Running', value: factValue(input.running) },
       { label: 'Provider', value: factValue(input.provider) },

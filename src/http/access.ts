@@ -97,6 +97,9 @@ function signInRequiredPage(): string {
   return layout({
     title: 'Sign in required',
     width: 'narrow',
+    // Shown precisely because there is no session, so there is no account to put
+    // the navigation and sign-out on.
+    account: null,
     body: `    <h1>Sign in required</h1>
     <p>This page is only available to a signed-in user.</p>
     <p class="actions"><a class="button" href="/signup">Sign in</a></p>`,

@@ -122,6 +122,38 @@ test.describe('the shell', () => {
     await page.goto('/topics');
     await expect(page.locator('.account__email')).toHaveText('iris@example.com');
   });
+
+  test('the header says which tier the User is on, and when the next brief lands', async ({ signedInPage: page }) => {
+    // The three facts a User cannot work out for themselves without leaving the
+    // page: who is signed in, what they pay for, and when mail next arrives.
+    await page.goto('/topics');
+    const account = page.locator('.account');
+    await expect(account.locator('.account__tier')).toHaveText('Free plan');
+    // In the User's own zone, because the fixture server stores
+    // `America/New_York` and a clock time with no frame is a claim without one.
+    await expect(account.locator('.account__brief')).toContainText('Next brief');
+    await expect(account.locator('.account__brief')).toContainText('America/New_York');
+    await expect(account.locator('.account__brief')).toContainText('08:00');
+  });
+
+  test('an address that does not exist is a page inside the shell', async ({ signedInPage: page }) => {
+    const response = await page.goto('/there-is-no-such-page');
+    expect(response?.status()).toBe(404);
+    // A dead link used to answer with Fastify's JSON, which is neither a page nor
+    // a way out of wherever the User was when they clicked it.
+    await expect(page.getByRole('heading', { level: 1, name: 'Page not found' })).toBeVisible();
+    await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Back to your topics' })).toBeVisible();
+  });
+
+  test('an anonymous visitor who lands on a dead address is offered the way in', async ({ page }) => {
+    const response = await page.goto('/there-is-no-such-page');
+    expect(response?.status()).toBe(404);
+    await expect(page.getByRole('link', { name: 'Sign in' })).toBeVisible();
+    // And no navigation to pages they cannot reach.
+    await expect(page.getByRole('navigation', { name: 'Primary' })).toHaveCount(0);
+  });
 });
 
 test.describe('the pages that used to be broken on a phone', () => {

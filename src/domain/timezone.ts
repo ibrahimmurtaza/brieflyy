@@ -183,7 +183,14 @@ export function formatDeliveryTimeInZone(
   return `${pad2(deliveryTime.hour)}:${pad2(deliveryTime.minute)}`;
 }
 
-function pad2(n: number): string {
+/**
+ * Two digits, always.
+ *
+ * Exported because every time the application shows a User is padded, and four
+ * copies of these three lines is four places a rendering of "9:05" can start
+ * disagreeing with the others.
+ */
+export function pad2(n: number): string {
   return n < 10 ? `0${n}` : `${n}`;
 }
 

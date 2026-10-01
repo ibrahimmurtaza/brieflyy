@@ -2,7 +2,9 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { PUBLIC_ROUTE_CONFIG } from '../http/access.js';
 import { escapeHtml } from '../domain/html.js';
-import { layout } from '../pages/layout.js';
+import { layout, type ShellAccount } from '../pages/layout.js';
+import { resolveShellAccount } from '../pages/shell.js';
+import type { OnboardingService } from '../onboarding/onboarding-service.js';
 import type { Topic, UnsubscribeScope } from '../domain/types.js';
 import type { TopicRepo } from '../repos/topic-repo.js';
 import type {
@@ -23,6 +25,14 @@ export interface UnsubscribeRoutesOptions {
    * outcome already carries the id; the title is what a reader recognises.
    */
   readonly topicRepo: TopicRepo;
+  /**
+   * What the header says about a signed-in reader who lands here from their own
+   * inbox. Absent rather than optional-in-the-middle because the page is the one
+   * piece of a signed-in User's experience outside the application, and a shell
+   * that says less here than anywhere else is the one they read after doing
+   * something that matters.
+   */
+  readonly onboardingService: OnboardingService;
 }
 
 interface UnsubscribeQuery {
@@ -53,7 +63,7 @@ export async function registerUnsubscribeRoutes(
   fastify: FastifyInstance,
   opts: UnsubscribeRoutesOptions,
 ): Promise<void> {
-  const { unsubscribeService, topicRepo } = opts;
+  const { unsubscribeService, topicRepo, onboardingService } = opts;
 
   const stop = async (
     req: FastifyRequest,
@@ -99,7 +109,7 @@ export async function registerUnsubscribeRoutes(
               outcome,
               scope,
               topic,
-              account: accountFor(req, outcome),
+              account: await accountFor(req, outcome, onboardingService),
             }),
           );
       },
@@ -144,14 +154,15 @@ function readToken(req: FastifyRequest): string | null {
  * person's name and sign-out button on a page about somebody else's
  * subscription.
  */
-function accountFor(
+async function accountFor(
   req: FastifyRequest,
   outcome: UnsubscribeOutcome,
-): string | null {
+  onboardingService: OnboardingService,
+): Promise<ShellAccount | null> {
   const auth = req.auth;
   if (!auth) return null;
   return outcome.status === 'ok' && auth.user.id === outcome.userId
-    ? auth.account.email
+    ? await resolveShellAccount(auth, onboardingService)
     : null;
 }
 
@@ -180,7 +191,7 @@ function confirmationPage(input: {
   readonly outcome: UnsubscribeOutcome;
   readonly scope: UnsubscribeScope;
   readonly topic: Topic | null;
-  readonly account: string | null;
+  readonly account: ShellAccount | null;
 }): string {
   const { outcome } = input;
   if (outcome.status !== 'ok') {

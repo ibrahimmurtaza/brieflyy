@@ -6,7 +6,6 @@ import {
   MIN_CLUSTER_WINDOW_DAYS,
 } from '../domain/cluster-window.js';
 import { resolveTier, topicCapFor } from '../domain/tier.js';
-import { partsInTz } from '../domain/timezone.js';
 import { escapeHtml } from '../domain/html.js';
 import { titleKey } from '../domain/slug.js';
 import { INITIAL_TOPIC_COUNT } from '../onboarding/onboarding-service.js';
@@ -30,7 +29,10 @@ import {
   type UnsubscribeService,
 } from '../services/unsubscribe-service.js';
 import { EMAIL_BRIEFS_PATH } from '../services/unsubscribe-links.js';
-import { layout } from './layout.js';
+import { layout, TIER_LABELS, type ShellAccount } from './layout.js';
+import { formatHumanTime } from './human-time.js';
+import { resolveShellAccount, shellAccountFor } from './shell.js';
+import { pad2 } from '../domain/timezone.js';
 import {
   AUTHENTICATED_ROUTE_CONFIG,
   PUBLIC_ROUTE_CONFIG,
@@ -73,6 +75,32 @@ export async function registerPageRoutes(
   opts: PageRoutesOptions,
 ): Promise<void> {
   const { onboardingService } = opts;
+  const shellFor = shellAccountFor(onboardingService);
+
+  /**
+   * An address that leads nowhere, rendered as a page rather than as Fastify's
+   * JSON.
+   *
+   * A signed-in User who follows a dead link lands inside the application and can
+   * carry on from there; an anonymous one is offered the way in. The answer used
+   * to be `{"message":"Route GET:/x not found","statusCode":404}`, which is
+   * neither a page nor a way out of wherever the User was when they clicked it.
+   *
+   * `/api/` is the one exception, and it follows the rule the rest of the
+   * application already uses: a JSON surface answers JSON, even when the address
+   * is wrong. Handing a machine a document is the same class of mistake as
+   * handing a page a JSON error.
+   */
+  fastify.setNotFoundHandler(async (req, reply) => {
+    if (req.url.startsWith('/api/')) {
+      return reply.code(404).send({ error: 'not_found' });
+    }
+    // A 404 is not a guarded route, so the session is resolved by the same hook
+    // every other request goes through and `req.auth` may or may not be there.
+    const auth = req.auth;
+    const account = auth ? await resolveShellAccount(auth, onboardingService) : null;
+    return reply.code(404).type('text/html; charset=utf-8').send(unknownUrlPage(account));
+  });
 
   fastify.get('/signup', PUBLIC_ROUTE_CONFIG, async (_req, reply) => {
     return reply.type('text/html').send(signupPage());
@@ -95,7 +123,7 @@ export async function registerPageRoutes(
       .type('text/html')
       .send(
         pickTopicsPage({
-          email: req.auth.account.email,
+          account: await shellFor(req),
           templates,
           existing,
           atCap,
@@ -115,7 +143,7 @@ export async function registerPageRoutes(
       .type('text/html')
       .send(
         pickTopicsPage({
-          email: req.auth.account.email,
+          account: await shellFor(req),
           templates,
           existing,
           atCap,
@@ -138,7 +166,7 @@ export async function registerPageRoutes(
     const first = await onboardingService.firstBriefAt(req.auth.user.id);
     return reply.type('text/html').send(
       deliveryTimePage({
-        email: req.auth.account.email,
+        account: await shellFor(req),
         existing: existing ?? DEFAULT_DELIVERY_TIME,
         firstBriefAt: first,
         // A prefilled suggestion is not a saved time, so the page must not
@@ -160,7 +188,7 @@ export async function registerPageRoutes(
     const first = await onboardingService.firstBriefAt(req.auth.user.id);
     return reply.type('text/html').send(
       welcomePage({
-        email: req.auth.account.email,
+        account: await shellFor(req),
         deliveryTime: settings,
         firstBriefAt: first,
       }),
@@ -183,7 +211,7 @@ export async function registerPageRoutes(
       }
       return reply.type('text/html').send(
         deliveryTimePage({
-          email: req.auth.account.email,
+          account: await shellFor(req),
           existing,
           isSet: true,
           firstBriefAt: null,
@@ -214,7 +242,7 @@ export async function registerPageRoutes(
       const settings = await opts.onboardingService.getDeliveryTime(userId);
       return reply.type('text/html').send(
         emailBriefsPage({
-          email: req.auth.account.email,
+          account: await shellFor(req),
           topics,
           optedOutAt: req.auth.user.unsubscribedAt,
           // The User's own timezone, so a date on this page is a date they would
@@ -245,7 +273,7 @@ export async function registerPageRoutes(
         return reply
           .code(404)
           .type('text/html')
-          .send(notFoundPage(req.auth.account.email));
+          .send(notFoundPage(await shellFor(req)));
       }
       const outcome = await opts.unsubscribeService.resubscribeTopic(
         req.auth.user.id,
@@ -259,7 +287,7 @@ export async function registerPageRoutes(
         : reply
             .code(404)
             .type('text/html')
-            .send(notFoundPage(req.auth.account.email));
+            .send(notFoundPage(await shellFor(req)));
     },
   );
 
@@ -286,7 +314,7 @@ export async function registerPageRoutes(
       .type('text/html')
       .send(
         upgradePage({
-          email: req.auth.account.email,
+          account: await shellFor(req),
           topicCount: topics.length,
           tier: resolveTier(req.auth.user),
         }),
@@ -297,7 +325,7 @@ export async function registerPageRoutes(
     if (!requireAuthPage(req, reply)) return reply;
     return reply
       .type('text/html')
-      .send(archiveSearchPage({ email: req.auth.account.email }));
+      .send(archiveSearchPage({ account: await shellFor(req) }));
   });
 
   fastify.get('/', PUBLIC_ROUTE_CONFIG, async (_req, reply) => {
@@ -312,7 +340,7 @@ export async function registerPageRoutes(
       .type('text/html')
       .send(
         homePage({
-          email: req.auth.account.email,
+          account: await shellFor(req),
           topics,
           tier: resolveTier(req.auth.user),
           atCap: topics.length >= cap,
@@ -333,14 +361,14 @@ export async function registerPageRoutes(
         return reply
           .code(404)
           .type('text/html')
-          .send(notFoundPage(req.auth.account.email));
+          .send(notFoundPage(await shellFor(req)));
       }
       const body = (req.body ?? {}) as Record<string, unknown>;
       const clusterId = readField(body, 'clusterId');
       if (!clusterId) {
         return reply.code(400).type('text/html').send(
           feedbackErrorPage({
-            email: req.auth.account.email,
+            account: await shellFor(req),
             message: 'That submission named no story.',
             topicSlug: req.params.slug,
           }),
@@ -370,7 +398,7 @@ export async function registerPageRoutes(
           .type('text/html')
           .send(
             feedbackErrorPage({
-              email: req.auth.account.email,
+              account: await shellFor(req),
               message: humanFeedbackReason(outcome.status),
               topicSlug: req.params.slug,
             }),
@@ -396,7 +424,7 @@ export async function registerPageRoutes(
         return reply
           .code(404)
           .type('text/html')
-          .send(notFoundPage(req.auth.account.email));
+          .send(notFoundPage(await shellFor(req)));
       }
       // Parsed rather than trusted: a value the User typed that is not a number
       // becomes NaN and falls back to the default, and one outside the range
@@ -424,7 +452,7 @@ export async function registerPageRoutes(
         return reply
           .code(404)
           .type('text/html')
-          .send(notFoundPage(req.auth.account.email));
+          .send(notFoundPage(await shellFor(req)));
       }
       // The daily job already skips a User or a Topic that has unsubscribed, and
       // this is the one path that could get around it: a User who has asked not
@@ -471,7 +499,7 @@ export async function registerPageRoutes(
         return reply
           .code(404)
           .type('text/html')
-          .send(notFoundPage(req.auth.account.email, 'That brief'));
+          .send(notFoundPage(await shellFor(req), 'That brief'));
       }
       // The stored document, served as stored. A BriefSnapshot is what was
       // emailed, so rendering it again from today's Clusters would show a
@@ -494,7 +522,7 @@ export async function registerPageRoutes(
         return reply
           .code(404)
           .type('text/html')
-          .send(notFoundPage(req.auth.account.email));
+          .send(notFoundPage(await shellFor(req)));
       }
       const clusters = await opts.clusterRepo.listByTopicId(topic.id);
       // What this User has already said, read once. Every answer the page gives
@@ -579,7 +607,7 @@ export async function registerPageRoutes(
         : [];
       return reply.type('text/html').send(
         topicPage({
-          email: req.auth.account.email,
+          account: await shellFor(req),
           topic,
           topicSlug: req.params.slug,
           clusters: activeClusters,
@@ -613,6 +641,9 @@ function signupPage(): string {
   return layout({
     title: 'Sign in',
     width: 'narrow',
+    // The one page that is the shell with nothing in it: there is no signed-in
+    // User yet to put a navigation, an account or a sign-out control on it.
+    account: null,
     body: `    <h1>Sign in to Brieflyy</h1>
     <p class="lede">Enter your email and we'll send you a magic link.</p>
     <form id="signup" novalidate>
@@ -673,7 +704,7 @@ function signupPage(): string {
 }
 
 function pickTopicsPage(input: {
-  email: string;
+  account: ShellAccount;
   templates: readonly TopicTemplate[];
   existing: readonly Topic[];
   atCap: boolean;
@@ -793,7 +824,7 @@ function pickTopicsPage(input: {
   return layout({
     title: onboarding ? 'Pick your topics' : 'Your topics',
     width: 'reading',
-    account: input.email,
+    account: input.account,
     // Only the management screen is "Manage topics". In onboarding the same
     // page is "Pick your topics", and following the nav link there redirects
     // back to it, so marking it current would be a small lie.
@@ -890,7 +921,7 @@ function formatClockTime(t: DeliveryTimeValue): string {
  * back with their hour, minute and timezone still filled in.
  */
 export function deliveryTimePage(input: {
-  email: string;
+  account: ShellAccount;
   existing: DeliveryTimeValue;
   isSet: boolean;
   firstBriefAt: Date | null;
@@ -959,7 +990,7 @@ ${formHtml}
   return layout({
     title: isOnboarding ? 'Pick your delivery time' : 'Delivery time',
     width: 'form',
-    account: input.email,
+    account: input.account,
     activeHref: '/settings/delivery',
     body: `    <h1>${isOnboarding ? 'Pick your delivery time' : 'Delivery time'}</h1>
     <p class="lede">${
@@ -990,7 +1021,7 @@ ${body}`,
  * page says so rather than quietly restoring it.
  */
 export function emailBriefsPage(input: {
-  email: string;
+  account: ShellAccount;
   topics: readonly Topic[];
   /** When the User opted out of every brief, or null while they want them. */
   optedOutAt: Date | null;
@@ -1065,7 +1096,7 @@ ${rows}
   return layout({
     title: 'Email briefs',
     width: 'form',
-    account: input.email,
+    account: input.account,
     activeHref: EMAIL_BRIEFS_PATH,
     body: `    <h1>Email briefs</h1>
     <p class="lede">What Brieflyy sends you, and how to stop it.</p>
@@ -1170,7 +1201,7 @@ function timeZoneOptions(selected: string): string {
 }
 
 function welcomePage(input: {
-  email: string;
+  account: ShellAccount;
   deliveryTime: { hour: number; minute: number; timezone: string };
   firstBriefAt: Date | null;
 }): string {
@@ -1182,9 +1213,9 @@ function welcomePage(input: {
   return layout({
     title: "You're set up",
     width: 'form',
-    account: input.email,
+    account: input.account,
     body: `    <h1>You're set up</h1>
-    <p class="lede">Welcome, ${escapeHtml(input.email)}.</p>
+    <p class="lede">Welcome, ${escapeHtml(input.account.email)}.</p>
     <div class="callout">
       <p><strong>Your first brief arrives ${escapeHtml(when)}</strong></p>
       <p>(${tz}, daily at ${time}).</p>
@@ -1194,7 +1225,11 @@ function welcomePage(input: {
   });
 }
 
-function upgradePage(input: { email: string; topicCount: number; tier: Tier }): string {
+function upgradePage(input: {
+  account: ShellAccount;
+  topicCount: number;
+  tier: Tier;
+}): string {
   const used = input.topicCount === 1 ? '1 topic' : `${input.topicCount} topics`;
   // A paid user reaching this page already has what it is selling, so say that
   // rather than pitching them a plan they are on.
@@ -1211,7 +1246,7 @@ function upgradePage(input: { email: string; topicCount: number; tier: Tier }): 
   return layout({
     title: 'Upgrade to paid',
     width: 'form',
-    account: input.email,
+    account: input.account,
     body: `    <h1>${headline}</h1>
     ${priceHtml}
     <p>Paid Brieflyy includes unlimited topics, indefinite archive retention, and the full trends view.</p>
@@ -1230,11 +1265,11 @@ function upgradePage(input: { email: string; topicCount: number; tier: Tier }): 
  * page with no way out of the application. It is now an honest, styled
  * placeholder that says so and can be left.
  */
-function archiveSearchPage(input: { email: string }): string {
+function archiveSearchPage(input: { account: ShellAccount }): string {
   return layout({
     title: 'Archive search',
     width: 'form',
-    account: input.email,
+    account: input.account,
     activeHref: '/archive/search',
     body: `    <h1>Archive search</h1>
     <p class="lede">Search everything Brieflyy has delivered to you, by word or topic.</p>
@@ -1246,45 +1281,18 @@ function archiveSearchPage(input: { email: string }): string {
   });
 }
 
-function pad2(n: number): string {
-  return n < 10 ? `0${n}` : `${n}`;
-}
-
-const MONTH_NAMES = [
-  'Jan',
-  'Feb',
-  'Mar',
-  'Apr',
-  'May',
-  'Jun',
-  'Jul',
-  'Aug',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dec',
-];
-
-function formatHumanTime(date: Date, timezone: string): string {
-  const parts = partsInTz(date, timezone);
-  const weekday = parts.weekday;
-  const day = parts.day;
-  const month = MONTH_NAMES[parts.month - 1] ?? '';
-  const hour = pad2(parts.hour);
-  const minute = pad2(parts.minute);
-  return `${weekday}, ${day} ${month} at ${hour}:${minute}`;
-}
-
 function homePage(input: {
-  email: string;
+  account: ShellAccount;
   topics: readonly Topic[];
   tier: Tier;
   atCap: boolean;
 }): string {
   const cap = topicCapFor(input.tier);
+  // The tier's own name from the shell's table, so the topic list and the header
+  // it sits above cannot come to spell it differently.
   const plan = Number.isFinite(cap)
-    ? `Free plan &middot; ${input.topics.length} of ${cap} topics`
-    : `Paid plan &middot; ${input.topics.length} topics`;
+    ? `${TIER_LABELS[input.tier]} &middot; ${input.topics.length} of ${cap} topics`
+    : `${TIER_LABELS[input.tier]} &middot; ${input.topics.length} topics`;
   // A user who cannot add another topic is told so on the page they land on,
   // not only on the picker they have to go and find.
   const atCapHtml = input.atCap
@@ -1311,7 +1319,7 @@ function homePage(input: {
   return layout({
     title: 'Your topics',
     width: 'default',
-    account: input.email,
+    account: input.account,
     activeHref: '/topics',
     body: `    <h1>Your topics</h1>
     <p class="lede">Pick a topic to open its living brief.</p>
@@ -1325,7 +1333,7 @@ ${rows}
 }
 
 function topicPage(input: {
-  email: string;
+  account: ShellAccount;
   topic: Topic;
   topicSlug: string;
   clusters: readonly Cluster[];
@@ -1471,7 +1479,7 @@ ${signalButtons}
   return layout({
     title: input.topic.title,
     width: 'reading',
-    account: input.email,
+    account: input.account,
     activeHref: '/topics',
     body: `    <h1>${safeTitle}</h1>
     <p class="lede">${category}${count}</p>
@@ -1584,7 +1592,7 @@ function newestFirst(
  * indistinguishable from the scheduler being broken.
  */
 function sendBriefSection(input: {
-  email: string;
+  account: ShellAccount;
   topicSlug: string;
   snapshots?: readonly import('../domain/types.js').BriefSnapshot[];
   briefJustSent?: boolean;
@@ -1609,7 +1617,7 @@ ${sent.join('\n')}
     </section>`
     : '';
   const notice = input.briefJustSent
-    ? `    <div class="callout callout--success" role="status">Your brief has been sent to ${escapeHtml(input.email)}.</div>`
+    ? `    <div class="callout callout--success" role="status">Your brief has been sent to ${escapeHtml(input.account.email)}.</div>`
     : '';
   // The route refuses to send while the mail is stopped, so the button must not
   // be offered: a control that always ends in a refusal is worse than one that
@@ -1746,14 +1754,14 @@ function readField(body: Record<string, unknown>, key: string): string | undefin
  * rather than stranding the User on an error page.
  */
 function feedbackErrorPage(input: {
-  readonly email: string;
+  readonly account: ShellAccount;
   readonly message: string;
   readonly topicSlug: string;
 }): string {
   return layout({
     title: 'Feedback not saved',
     width: 'form',
-    account: input.email,
+    account: input.account,
     body: `    <h1>Feedback not saved</h1>
     <p>${escapeHtml(input.message)}</p>
     <p class="actions"><a class="button" href="/topics/${escapeHtml(input.topicSlug)}">Back to your brief</a></p>`,
@@ -1776,16 +1784,43 @@ function humanFeedbackReason(status: string): string {
   }
 }
 
-function notFoundPage(email: string, what = 'That topic'): string {
-  // The slug the User asked for used to be reflected back into the page. It is
-  // escaped, so it was never a vulnerability, but it is a URL path echoed for
-  // no product reason, and the copy below says the same thing without it.
+/**
+ * A thing the User named that is not there — a Topic of theirs, a brief of theirs.
+ *
+ * Distinct from `unknownUrlPage` because this one can say what was being looked
+ * for. The slug used to be reflected back into the page; it is escaped, so it was
+ * never a vulnerability, but it is a URL path echoed for no product reason, and
+ * the copy below says the same thing without it.
+ */
+function notFoundPage(account: ShellAccount, what = 'That topic'): string {
   return layout({
     title: 'Not found',
     width: 'form',
-    account: email,
+    account,
     body: `    <h1>Not found</h1>
     <p>${escapeHtml(what)} does not exist, or it is not one of yours.</p>
     <p class="actions"><a class="button" href="/topics">Back to your topics</a></p>`,
+  });
+}
+
+/**
+ * An address nothing is registered at.
+ *
+ * Two shapes, because the two situations are not the same: a signed-in User who
+ * followed a dead link needs to get back into the application, and an anonymous
+ * visitor needs the way in. Giving an anonymous visitor the signed-in navigation
+ * would offer them links to pages they cannot reach, which is a page that looks
+ * like a way out and is not one.
+ */
+function unknownUrlPage(account: ShellAccount | null): string {
+  return layout({
+    title: 'Page not found',
+    width: 'form',
+    account,
+    body: `    <h1>Page not found</h1>
+    <p>There is nothing at this address.</p>
+    <p class="actions"><a class="button" href="${
+      account === null ? '/signup' : '/topics'
+    }">${account === null ? 'Sign in' : 'Back to your topics'}</a></p>`,
   });
 }
