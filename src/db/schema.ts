@@ -488,6 +488,16 @@ export const feedbackEvents = sqliteTable(
       ],
     }).notNull(),
     scope: text('scope', { enum: ['this_topic', 'global'] }),
+    /**
+     * The Source a `hide_source` signal is about, and null for the other four.
+     *
+     * It has to be on the row rather than inferred from the Cluster, because a
+     * Cluster can carry reporting from several Sources and the User asked to stop
+     * seeing one outlet — not to stop seeing the story, and not to lose every
+     * other outlet's account of it. A row without one names no Source at all,
+     * which is why it is nullable and the write path refuses it.
+     */
+    sourceId: text('source_id').references(() => sources.id, { onDelete: 'cascade' }),
     timestamp: integer('timestamp', { mode: 'timestamp_ms' })
       .notNull()
       .default(sql`(unixepoch() * 1000)`),
@@ -502,6 +512,10 @@ export const feedbackEvents = sqliteTable(
       t.userId,
       t.clusterId,
     ),
+    // Hide-source is read per User and per Source, and the Source is the whole
+    // signal: without this, every lookup of what a User has hidden scans every
+    // signal they have ever given on every Cluster.
+    userSourceIdx: index('feedback_events_user_source_idx').on(t.userId, t.sourceId),
   }),
 );
 

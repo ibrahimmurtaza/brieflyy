@@ -206,9 +206,41 @@ test.describe('the LivingBrief', () => {
 
   test('every cluster control has an accessible name and a reachable target', async ({ signedInPage: page }) => {
     await page.goto('/topics/world-news');
-    for (const name of ['More like this', 'Less like this', 'Hide this source', 'Dismiss']) {
+    for (const name of ['Thumbs up', 'Thumbs down', 'More like this', 'Less like this', 'Hide source', 'Dismiss']) {
       await expect(page.getByRole('button', { name, exact: true }).or(page.getByRole('link', { name })).first()).toBeVisible();
     }
+  });
+
+  // Read-only on purpose. Every project runs against one seeded server and one
+  // database, and these specs run in parallel, so a test that recorded a signal
+  // would change the brief the other two viewports are asserting about. What a
+  // signal *does* is covered at the HTTP seam in `src/pages/topic-page.test.ts`,
+  // where each test has its own database.
+  test('says what a signal would do, before any has been given', async ({ signedInPage: page }) => {
+    await page.goto('/topics/world-news');
+
+    for (const name of ['Thumbs up', 'Thumbs down', 'More like this', 'Less like this']) {
+      await expect(page.getByRole('button', { name, exact: true })).toHaveAttribute(
+        'aria-pressed',
+        'false',
+      );
+    }
+  });
+
+  test('the hide control names which source and how far the ask reaches', async ({ signedInPage: page }) => {
+    await page.goto('/topics/world-news');
+
+    const hide = page.locator('form.hide-source').first();
+    await expect(hide.getByRole('combobox', { name: 'Source to hide' })).toBeVisible();
+    const scope = hide.getByRole('combobox', { name: 'Where to hide it' });
+    await expect(scope).toBeVisible();
+    await expect(scope.locator('option')).toHaveText(['This topic', 'All your topics']);
+    // The fifth signal shows its state the same way the other four do, so a User
+    // who has already hidden something can see that from the button.
+    await expect(hide.getByRole('button', { name: 'Hide source' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
   });
 
   test('filtering by a Source marks that Source as the live one', async ({ signedInPage: page }) => {

@@ -183,6 +183,21 @@ small { font-size: var(--text-sm); }
 }
 .skip-link:focus { transform: translateY(0); }
 
+/* A label no sighted reader needs but every control needs. Kept in the document
+   rather than replaced by aria-label so the select it labels is still named when
+   it is read out of context, which an aria-label on the control alone is not. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* --------------------------------------------------------------------- shell */
 .site-header {
   border-bottom: 1px solid var(--color-rule);
@@ -493,6 +508,25 @@ form.feedback button {
 }
 form.feedback button:hover { background: var(--color-surface); }
 form.feedback button[aria-pressed="true"] { border-color: var(--color-primary); background: var(--color-notice-surface); color: var(--color-notice-text); }
+/* The Hide-source control is a second form rather than a fifth button, because it
+   has to say *which* Source and *how far* the ask reaches — and a button that
+   cannot say either of those is what made the global scope unreachable in the first
+   place.
+   Its selects are sized by the control rather than by the longest Source name, so
+   a long name cannot push the button off the row. */
+form.hide-source { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0 0 var(--space-3); }
+form.hide-source button[aria-pressed="true"] { border-color: var(--color-primary); background: var(--color-notice-surface); color: var(--color-notice-text); }
+form.hide-source select {
+  min-height: 2rem;
+  max-width: 12rem;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--color-text);
+  background: var(--color-canvas);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+}
+.hide-source__state { flex-basis: 100%; margin: 0; font-size: var(--text-sm); }
 .hide-btn {
   display: inline-flex;
   align-items: center;

@@ -17,7 +17,8 @@ personalized brief feed with insights and visual trends.
 - [ ] [06] Full source registry ingest
 - [x] **[07]** Cluster formation & extractive summary
 - [ ] [08] LivingBrief in-app
-- [ ] [09] Feedback signals
+- [x] **[09]** Feedback signals — recorded through `FeedbackService`, propagated to
+      Stories and Articles, and used to order the LivingBrief. See ADR-0004.
 - [ ] [10] BriefPlan + scheduled BriefSnapshot
 - [x] **[11]** LLM summary for BriefSnapshot top-N
 - [ ] [12] Trends view (per-Topic)

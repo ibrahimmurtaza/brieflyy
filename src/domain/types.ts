@@ -405,6 +405,15 @@ export interface FeedbackEvent {
   readonly clusterId: ClusterId;
   readonly feedbackType: FeedbackType;
   readonly scope: FeedbackScope | null;
+  /**
+   * The Source a `hide_source` signal is about, and null for the other four.
+   *
+   * The Cluster is where the User pressed the button, not what they said about:
+   * a Cluster carries reporting from several Sources and hiding one of them is a
+   * statement about that outlet. A row without a Source here is a hide that names
+   * nothing, which is why the write path refuses to create one.
+   */
+  readonly sourceId: SourceId | null;
   readonly timestamp: Date;
 }
 

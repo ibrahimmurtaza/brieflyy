@@ -14,7 +14,15 @@ import type { OnboardingService } from '../onboarding/onboarding-service.js';
 import type { ClusterRepo } from '../repos/cluster-repo.js';
 import type { SourceRepo } from '../repos/source-repo.js';
 import type { TopicRepo } from '../repos/topic-repo.js';
-import type { FeedbackRepo } from '../repos/feedback-repo.js';
+import type { FeedbackService } from '../services/feedback-service.js';
+import {
+  clusterRelevance,
+  orderByRelevance,
+  FEEDBACK_SCOPES,
+  type ClusterSignals,
+  type HiddenSource,
+} from '../domain/feedback.js';
+import type { ClusterId, FeedbackScope, FeedbackType, SourceId } from '../domain/types.js';
 import type { BriefSnapshotRepo } from '../repos/brief-snapshot-repo.js';
 import type { BriefPlanService } from '../services/brief-plan-service.js';
 import {
@@ -35,7 +43,16 @@ export interface PageRoutesOptions {
   readonly clusterRepo: ClusterRepo;
   readonly topicRepo: TopicRepo;
   readonly sourceRepo: SourceRepo;
-  readonly feedbackRepo?: FeedbackRepo;
+  /**
+   * How a User's signals are recorded and read back. Held rather than reached for
+   * through the repository so the page and the write share one answer to "what has
+   * this User already said" — the write path that bypassed the service was how a
+   * signal ended up stored as something the page could not show.
+   *
+   * Required, unlike the two below: a LivingBrief without it renders buttons that
+   * record nothing and never light up, which is the state this work started from.
+   */
+  readonly feedbackService: FeedbackService;
   /**
    * How a User asks for a brief of one of their Topics right now, and where the
    * brief that was sent is served from. Optional only so a caller that has
@@ -303,24 +320,65 @@ export async function registerPageRoutes(
       );
   });
 
-  fastify.post<{ Params: { slug: string }; Body: { clusterId?: string; type?: string; scope?: string } }>(
+  fastify.post<{
+    Params: { slug: string };
+    Body: Record<string, unknown>;
+  }>(
     '/topics/:slug/feedback',
     AUTHENTICATED_ROUTE_CONFIG,
     async (req, reply) => {
-      if (!opts.feedbackRepo || !requireAuthPage(req, reply)) return reply;
-      const clusterId = req.body.clusterId ? String(req.body.clusterId) : '';
-      const feedbackType = (req.body.type ? String(req.body.type) : 'thumbs_up') as 'thumbs_up' | 'thumbs_down' | 'hide_source' | 'more_like_this' | 'less_like_this';
-      if (!clusterId || !feedbackType) {
-        return reply.code(400).type('text/html').send('Invalid feedback');
+      if (!requireAuthPage(req, reply)) return reply;
+      const topic = await opts.topicRepo.findBySlug(req.auth.user.id, req.params.slug);
+      if (!topic) {
+        return reply
+          .code(404)
+          .type('text/html')
+          .send(notFoundPage(req.auth.account.email));
       }
-      await opts.feedbackRepo.insert({
-        id: `fe-${req.auth.user.id}-${clusterId}-${feedbackType}-${Date.now()}`,
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const clusterId = readField(body, 'clusterId');
+      if (!clusterId) {
+        return reply.code(400).type('text/html').send(
+          feedbackErrorPage({
+            email: req.auth.account.email,
+            message: 'That submission named no story.',
+            topicSlug: req.params.slug,
+          }),
+        );
+      }
+      // Handed to the service as plain strings and validated there, rather than
+      // narrowed here. A `type` or `scope` that is not one the glossary names is
+      // a submission to refuse, and refusing it is the service's one answer to
+      // "is this a signal" — checking it twice, with the two copies able to
+      // disagree, would be the thing to avoid. `scope` is passed through even when
+      // it is not one of the two, so an unusable scope is refused rather than
+      // quietly stored as `this_topic`.
+      const rawType = readField(body, 'type');
+      const rawScope = readField(body, 'scope');
+      const rawSourceId = readField(body, 'sourceId');
+      const outcome = await opts.feedbackService.recordFeedback({
         userId: req.auth.user.id,
-        clusterId,
-        feedbackType,
-        scope: feedbackType === 'hide_source' ? (req.body.scope === 'global' ? 'global' : 'this_topic') : null,
-        timestamp: new Date(),
+        topicId: topic.id,
+        clusterId: clusterId as ClusterId,
+        feedbackType: (rawType ?? '') as FeedbackType,
+        ...(rawScope === undefined ? {} : { scope: rawScope as FeedbackScope }),
+        ...(rawSourceId ? { sourceId: rawSourceId as SourceId } : {}),
       });
+      if (outcome.status !== 'recorded' && outcome.status !== 'unchanged') {
+        return reply
+          .code(400)
+          .type('text/html')
+          .send(
+            feedbackErrorPage({
+              email: req.auth.account.email,
+              message: humanFeedbackReason(outcome.status),
+              topicSlug: req.params.slug,
+            }),
+          );
+      }
+      // Read back through a redirect rather than answered from the submission, so
+      // what the User sees after pressing a button is the same page a reload would
+      // give them, and a signal that changed the order shows the new order.
       return reply.code(302).header('location', `/topics/${req.params.slug}`).send();
     },
   );
@@ -439,12 +497,15 @@ export async function registerPageRoutes(
           .send(notFoundPage(req.auth.account.email));
       }
       const clusters = await opts.clusterRepo.listByTopicId(topic.id);
+      // What this User has already said, read once. Every answer the page gives
+      // about their signals comes from this one call: which buttons are lit, which
+      // Sources to leave out, and how the Clusters are ordered.
+      const feedback = await opts.feedbackService.feedbackFor(req.auth.user.id, topic.id);
+
       // The Active set before any filter is applied. A filter that happens to
       // match nothing is a different situation from a Topic with no Clusters at
       // all, and the page has to be able to tell them apart.
-      const active = clusters
-        .filter((c) => c.state === 'active')
-        .sort((a, b) => b.lastSeenAt.getTime() - a.lastSeenAt.getTime());
+      const active = clusters.filter((c) => c.state === 'active');
       const sourceFilter = req.query.source ? String(req.query.source) : null;
       let activeClusters = active;
       if (sourceFilter) {
@@ -452,47 +513,48 @@ export async function registerPageRoutes(
       }
 
       // Two ways a Cluster gets hidden, kept apart because only one of them is
-      // undone by dropping the query string. A Feedback hide is stored per User
-      // and outlives the request that set it.
+      // undone by dropping the query string. A `?hide=` belongs to this request;
+      // a Feedback hide is stored per User and outlives it — though what Feedback
+      // hides is a *Source*, applied to the Articles below rather than to the
+      // whole Cluster, which is the difference between disliking one outlet and
+      // losing every outlet's account of the same story.
       const queryHidden = new Set(
         (req.query.hide ? String(req.query.hide) : '')
           .split(',')
           .filter((s) => s.length > 0),
       );
-      const feedbackHiddenIds = new Set<string>();
-      const verdicts = new Map<string, 'thumbs_up' | 'thumbs_down'>();
-      if (opts.feedbackRepo) {
-        const userEvents = await opts.feedbackRepo.listByUser(req.auth.user.id);
-        const hideEvents = userEvents.filter((e) => e.feedbackType === 'hide_source');
-        for (const ev of hideEvents) {
-          if (ev.scope === 'global' || (ev.scope === 'this_topic' && ev.clusterId)) {
-            feedbackHiddenIds.add(ev.clusterId);
-          }
-        }
-        // The latest verdict per Cluster, so a thumb that was changed to a
-        // thumb down shows the change rather than leaving both buttons lit.
-        // `listByUser` is ordered newest first, so the first one seen wins.
-        for (const ev of userEvents) {
-          if (ev.feedbackType !== 'thumbs_up' && ev.feedbackType !== 'thumbs_down') continue;
-          if (verdicts.has(ev.clusterId)) continue;
-          verdicts.set(ev.clusterId, ev.feedbackType);
-        }
-      }
-      activeClusters = activeClusters.filter(
-        (c) => !queryHidden.has(c.id) && !feedbackHiddenIds.has(c.id),
-      );
+      activeClusters = activeClusters.filter((c) => !queryHidden.has(c.id));
       // What the "show all" link will actually put back on the page: it drops
-      // the Source filter and a `hide=` the User typed, but nothing stored in
-      // Feedback. Counting from `active` instead would promise Clusters the
-      // link does not bring back.
-      const revealableCount = active.filter((c) => !feedbackHiddenIds.has(c.id)).length;
+      // the Source filter and a `hide=` the User typed, but nothing a User has
+      // hidden through Feedback. Counting from `active` instead would promise
+      // Clusters the link does not bring back.
+      const revealableCount = active.length;
+
+      // Hidden Sources are dropped before relevance is measured, not after: an Article
+      // the page has removed is not evidence about what the User wants to read
+      // next, and ranking on Articles that are then taken away would order the
+      // brief by something the User cannot see.
+      const hiddenSourceIds = feedback.hiddenSourceIds;
       const clusterArticles = new Map<string, readonly import('../domain/types.js').Article[]>();
+      const relevance = new Map<ClusterId, number>();
+      const clustersWithoutArticles = new Set<string>();
       for (const c of activeClusters) {
-        clusterArticles.set(
-          c.id,
-          await opts.clusterRepo.listArticlesByClusterId(c.id, topic.sourceIds),
-        );
+        const visible = (
+          await opts.clusterRepo.listArticlesByClusterId(c.id, topic.sourceIds)
+        ).filter((a) => !hiddenSourceIds.has(a.sourceId));
+        clusterArticles.set(c.id, visible);
+        relevance.set(c.id, clusterRelevance(visible, feedback.weightByArticleId));
+        // A Cluster left with no Articles at all — every one of them from a Source
+        // this User has hidden — has nothing of this Topic left to show, so it
+        // goes. Naming the Source is what makes this a Source-level exclusion: a
+        // Cluster carried by two outlets keeps the other one's reporting.
+        if (visible.length === 0) clustersWithoutArticles.add(c.id);
       }
+      activeClusters = activeClusters.filter((c) => !clustersWithoutArticles.has(c.id));
+      // Relevance before recency, so a signal moves a Cluster relative to what the
+      // User has already answered for. A User who has given none sees exactly the
+      // recency order this page has always used.
+      activeClusters = [...orderByRelevance(activeClusters, relevance)];
       const sourcesById = new Map(
         (await opts.sourceRepo.list()).map((s) => [s.id, s] as const),
       );
@@ -500,7 +562,12 @@ export async function registerPageRoutes(
       // carry, so the link a User clicks is one that can still show something.
       const visibleSources = new Set<string>();
       for (const c of active) {
-        for (const sid of c.sourceIds) visibleSources.add(sid);
+        for (const sid of c.sourceIds) {
+          // A Source the User has hidden is not offered as a filter either: the
+          // link would land on a page with nothing in it, which is a dead end
+          // rather than a filter.
+          if (!hiddenSourceIds.has(sid)) visibleSources.add(sid);
+        }
       }
       // The BriefSnapshots of this Topic that have been emailed, newest first.
       // The LivingBrief regenerates, so this list is the only way back to the
@@ -519,11 +586,15 @@ export async function registerPageRoutes(
           clusterCount: clusters.length,
           activeClusterCount: active.length,
           revealableClusterCount: revealableCount,
+          hiddenSourceNames: [...hiddenSourceIds]
+            .map((sid) => sourcesById.get(sid)?.name ?? sid)
+            .sort(),
           sourceFilter,
           sourcesById,
           visibleSourceIds: visibleSources,
           clusterArticles,
-          verdicts,
+          signals: feedback.signalsByCluster,
+          hiddenSources: feedback.hiddenSources,
           snapshots,
           briefJustSent: req.query.brief === 'sent',
           // The button to send a brief by hand is only honest while the User
@@ -1277,12 +1348,29 @@ function topicPage(input: {
    * because the link can only undo a filter, not Feedback.
    */
   revealableClusterCount: number;
+  /**
+   * The names of the Sources hidden from this Topic. Named rather than counted
+   * because an empty page that says "3 sources" leaves the User with nothing to
+   * act on, and this is the one empty page a link here cannot undo.
+   */
+  hiddenSourceNames: readonly string[];
   sourceFilter: string | null;
   sourcesById: Map<string, { id: string; name: string }>;
   visibleSourceIds: Set<string>;
   clusterArticles?: Map<string, readonly import('../domain/types.js').Article[]>;
-  /** The User's latest thumbs verdict per Cluster, so a control can show it. */
-  verdicts: Map<string, 'thumbs_up' | 'thumbs_down'>;
+  /**
+   * The signals this User's feedback says each Cluster carries, so every button
+   * can show whether it is the one in force. A Cluster absent from the map is not
+   * a bug: a User who has pressed nothing, and one whose every signal has been
+   * replaced, both have nothing lit, and saying so is what the `aria-pressed`
+   * values mean.
+   */
+  readonly signals: ReadonlyMap<ClusterId, ClusterSignals>;
+  /**
+   * The Sources this User has hidden and the scope of each, so the hide control
+   * can offer the scope it would use and show which Sources are already gone.
+   */
+  readonly hiddenSources: ReadonlyMap<SourceId, HiddenSource>;
   /** The BriefSnapshots of this Topic already emailed, newest first. */
   readonly snapshots?: readonly import('../domain/types.js').BriefSnapshot[];
   /** Set when the User has just asked for one and it was sent. */
@@ -1316,19 +1404,40 @@ ${bulletPoints}
           return `<li><span class="outlet">${escapeHtml(outlet)}:</span> <a href="${escapeHtml(a.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(a.title || 'Source article')}</a></li>`;
         })
         .join('\n        ');
-      const verdict = input.verdicts.get(c.id) ?? null;
+      const signals = input.signals.get(c.id)?.activeTypes ?? new Set<FeedbackType>();
       // Two controls that look alike behave differently: this one is undone by
       // dropping the query string, the Feedback one is stored. Labelling them
       // the same meant a User picked the irreversible one without knowing.
       const hideLink = `<a href="?hide=${encodeURIComponent(String(c.id))}" class="hide-btn">Dismiss</a>`;
+      // The four Cluster signals, each marked with whether it is the one in
+      // force. The accessible names are the signal's own rather than a neighbour's:
+      // the thumbs used to answer to the same name as the more/less buttons, so a
+      // screen reader offered two controls called "More like this" and could not
+      // say which was which.
+      const signalButtons = ([
+        ['thumbs_up', 'Thumbs up'],
+        ['thumbs_down', 'Thumbs down'],
+        ['more_like_this', 'More like this'],
+        ['less_like_this', 'Less like this'],
+      ] as const)
+        .map(([type, label]) => {
+          const glyph = type === 'thumbs_up' ? '&#128077;' : type === 'thumbs_down' ? '&#128078;' : '';
+          return `        <button${glyph ? '' : ' class="secondary"'} type="submit" name="type" value="${type}" aria-label="${label}" aria-pressed="${signals.has(type)}">${glyph || escapeHtml(label)}</button>`;
+        })
+        .join('\n');
       const feedbackButtons = `<form class="feedback" method="POST" action="${action}">
         <input type="hidden" name="clusterId" value="${escapeHtml(c.id)}">
-        <button type="submit" name="type" value="thumbs_up" aria-label="More like this" aria-pressed="${verdict === 'thumbs_up'}">&#128077;</button>
-        <button type="submit" name="type" value="thumbs_down" aria-label="Less like this" aria-pressed="${verdict === 'thumbs_down'}">&#128078;</button>
-        <button class="secondary" type="submit" name="type" value="more_like_this">More like this</button>
-        <button class="secondary" type="submit" name="type" value="less_like_this">Less like this</button>
-        <button class="secondary" type="submit" name="type" value="hide_source">Hide this source</button>
+${signalButtons}
       </form>`;
+      const hideForm = hideSourceForm({
+        action,
+        clusterId: c.id,
+        sources: c.sourceIds.map((sid) => ({
+          id: sid,
+          name: input.sourcesById.get(sid)?.name ?? sid,
+          hiddenScope: input.hiddenSources.get(sid)?.scope ?? null,
+        })),
+      });
       const sources = c.sourceIds
         .filter((sid) => input.visibleSourceIds.has(sid))
         .map((sid) => {
@@ -1342,6 +1451,7 @@ ${bulletPoints}
         <div class="hide-row">${feedbackButtons}${hideLink}</div>
         ${bullets}
         <p class="sources">${sources || '<span class="muted">No sources</span>'}</p>
+        ${hideForm}
         ${articleLinks ? `<ul class="articles">
         ${articleLinks}
         </ul>` : ''}
@@ -1372,6 +1482,85 @@ ${rows}
 ${windowForm}`,
   });
 }
+
+/**
+ * The Hide-source control: which Source, and how far the ask reaches.
+ *
+ * Two things were wrong with the single "Hide this source" button it replaces.
+ * It named no Source, so there was nothing on the event to say which outlet was
+ * meant and the only thing to act on was the Cluster — hiding one outlet's
+ * reporting took every other outlet's reporting of the same story with it. And it
+ * had no scope on it, so `global` could never be reached: the field was never
+ * rendered, so every hide the route stored was `this_topic`.
+ *
+ * The two selects say both out loud. The scope's selected option is the scope in
+ * force for that Source, so a choice made on one page load is the one the next
+ * page load shows — the choice persists because it is read back off the stored
+ * signal rather than kept in the page.
+ */
+function hideSourceForm(input: {
+  readonly action: string;
+  readonly clusterId: string;
+  readonly sources: readonly {
+    readonly id: string;
+    readonly name: string;
+    readonly hiddenScope: FeedbackScope | null;
+  }[];
+}): string {
+  if (input.sources.length === 0) return '';
+  // A Source already hidden is still offered, marked as hidden and with its stored
+  // scope selected. Offering it is what makes the scope changeable: a User who hid
+  // an outlet everywhere and then wants it back on one Topic has to be able to say
+  // so here, and a control that only offered Sources they had not touched could
+  // not express it. The stored scope is what the control submits again, so the
+  // choice made on one page load is the one the next page load shows.
+  const first = input.sources.find((s) => s.hiddenScope !== null) ?? input.sources[0]!;
+  const scope = first.hiddenScope ?? 'this_topic';
+  const sourceOptions = input.sources
+    .map(
+      (s) =>
+        `          <option value="${escapeHtml(s.id)}"${s.id === first.id ? ' selected' : ''}>${escapeHtml(s.name)}${s.hiddenScope === null ? '' : ' (hidden)'}</option>`,
+    )
+    .join('\n');
+  const scopeOptions = FEEDBACK_SCOPES.map(
+    (value) =>
+      `          <option value="${value}"${scope === value ? ' selected' : ''}>${FEEDBACK_SCOPE_LABELS[value]}</option>`,
+  )
+    .join('\n');
+  const hidden = input.sources
+    .filter((s) => s.hiddenScope !== null)
+    .map(
+      (s) =>
+        `${escapeHtml(s.name)}: ${s.hiddenScope === 'global' ? 'hidden on all your topics' : 'hidden on this topic'}`,
+    )
+    .join('; ');
+  return `    <form class="feedback hide-source" method="POST" action="${input.action}">
+      <input type="hidden" name="clusterId" value="${escapeHtml(input.clusterId)}">
+      <input type="hidden" name="type" value="hide_source">
+      <label class="visually-hidden" for="source-${escapeHtml(input.clusterId)}">Source to hide</label>
+      <select id="source-${escapeHtml(input.clusterId)}" name="sourceId">
+${sourceOptions}
+      </select>
+      <label class="visually-hidden" for="scope-${escapeHtml(input.clusterId)}">Where to hide it</label>
+      <select id="scope-${escapeHtml(input.clusterId)}" name="scope">
+${scopeOptions}
+      </select>
+      <button class="secondary" type="submit" aria-pressed="${first.hiddenScope !== null}">Hide source</button>
+      ${hidden === '' ? '' : `<p class="muted hide-source__state">${hidden}</p>`}
+    </form>`;
+}
+
+/**
+ * How a Scope reads on the page.
+ *
+ * One table rather than a list at each place a scope is named, so the label a User
+ * sees and the value the service checks cannot drift apart — the same reason
+ * `FEEDBACK_SCOPES` in the domain is a value and not only a type.
+ */
+const FEEDBACK_SCOPE_LABELS: Readonly<Record<FeedbackScope, string>> = {
+  this_topic: 'This topic',
+  global: 'All your topics',
+};
 
 /** How many emailed BriefSnapshots the LivingBrief offers a way back to. */
 const SNAPSHOTS_ON_TOPIC_PAGE = 5;
@@ -1440,12 +1629,14 @@ ${list}`;
 /**
  * What the page says when it has no Clusters to render.
  *
- * Three different situations, and conflating any two of them misleads the User
+ * Four different situations, and conflating any two of them misleads the User
  * about their own Topic. An empty Topic has nothing yet. A Topic whose Clusters
- * have all gone Archived has something, just nothing current. And a Topic whose
- * Clusters a Source filter or a Hide has removed still has Clusters — saying
+ * have all gone Archived has something, just nothing current. A Topic whose
+ * Clusters a Source filter or a Dismiss has removed still has Clusters — saying
  * "no stories yet" there would tell them their ingest is broken when it is
- * working exactly as asked.
+ * working exactly as asked. And a Topic whose Clusters are left with nothing to
+ * show because every Source behind them has been hidden is a fourth thing
+ * again, and the one a link on this page cannot undo.
  *
  * Each of them also says what to do next. Describing an empty screen without
  * offering a way out of it leaves the User with nothing to act on, which is the
@@ -1460,19 +1651,24 @@ function emptyStateBlock(input: {
   readonly activeClusterCount: number;
   readonly revealableClusterCount: number;
   readonly topicSlug: string;
+  /** The names of the Sources hidden from this Topic, named rather than counted. */
+  readonly hiddenSourceNames: readonly string[];
 }): string {
   if (input.clusters.length > 0) return '';
+  // Checked before the filter, because it outranks it: a Source filter that
+  // matches nothing is a transient thing the link undoes, whereas a hidden Source
+  // is why there is nothing left to filter, and offering "Show all N" here would
+  // promise Clusters the link cannot bring back.
+  if (input.hiddenSourceNames.length > 0) {
+    const names = input.hiddenSourceNames.map((n) => escapeHtml(n)).join(' and ');
+    return `    <div class="empty-state">
+      <p class="muted">Nothing is showing because you hid ${names}, and every Article this topic had left came from ${input.hiddenSourceNames.length === 1 ? 'it' : 'them'}.</p>
+      <p class="empty-state__actions"><a href="/topics">All your topics</a></p>
+    </div>`;
+  }
   if (input.revealableClusterCount > 0) {
     return `    <div class="empty-state">
       <p class="muted">No clusters match the current filter. <a href="/topics/${escapeHtml(input.topicSlug)}">Show all ${input.revealableClusterCount} active cluster${input.revealableClusterCount === 1 ? '' : 's'}</a></p>
-    </div>`;
-  }
-  // Everything still Active is hidden by stored Feedback, which no link on this
-  // page can undo. Saying "show all 0 clusters" here would be a dead end.
-  if (input.activeClusterCount > 0) {
-    return `    <div class="empty-state">
-      <p class="muted">Nothing is showing because you hid all ${input.activeClusterCount} active cluster${input.activeClusterCount === 1 ? '' : 's'} on this topic.</p>
-      <p class="empty-state__actions"><a href="/topics">All your topics</a></p>
     </div>`;
   }
   if (input.clusterCount > 0) {
@@ -1533,6 +1729,51 @@ function clusterWindowForm(input: {
       <span>days (${min}-${max})</span>
       <button class="secondary" type="submit">Save</button>
     </form>`;
+}
+
+/** A field off a form submission, read as a plain string or nothing. */
+function readField(body: Record<string, unknown>, key: string): string | undefined {
+  const value = body[key];
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+/**
+ * What the page says when a signal could not be recorded.
+ *
+ * The submission is refused rather than stored, so the reasons name the thing
+ * that was wrong: a type that is not one of the five signals, a hide with no
+ * Source, a Cluster from another Topic. Each one keeps a way back to the brief
+ * rather than stranding the User on an error page.
+ */
+function feedbackErrorPage(input: {
+  readonly email: string;
+  readonly message: string;
+  readonly topicSlug: string;
+}): string {
+  return layout({
+    title: 'Feedback not saved',
+    width: 'form',
+    account: input.email,
+    body: `    <h1>Feedback not saved</h1>
+    <p>${escapeHtml(input.message)}</p>
+    <p class="actions"><a class="button" href="/topics/${escapeHtml(input.topicSlug)}">Back to your brief</a></p>`,
+  });
+}
+
+/** Why a signal was refused, in words rather than in a status name. */
+function humanFeedbackReason(status: string): string {
+  switch (status) {
+    case 'invalid_type':
+      return 'That is not one of the signals a brief offers.';
+    case 'invalid_scope':
+      return 'Hiding a source applies to this topic or to all your topics.';
+    case 'missing_source':
+      return 'Choose which source to hide.';
+    case 'unknown_source':
+      return 'That source is not one of this topic.';
+    default:
+      return 'That story is no longer part of this topic.';
+  }
 }
 
 function notFoundPage(email: string, what = 'That topic'): string {
