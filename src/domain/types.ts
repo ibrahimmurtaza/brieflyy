@@ -119,6 +119,48 @@ export interface TopicTemplate {
   readonly defaultSourceIds: readonly SourceId[];
 }
 
+/**
+ * A Directory entry together with what the corpus has seen of the Entities its
+ * Sources write about inside the measured window.
+ *
+ * `TopicTemplate` says which Sources an entry follows, which is not enough to say
+ * what it covers: two entries can follow entirely different outlets and still be
+ * about the same handful of companies and people. That overlap is half of what a
+ * Recommendation is derived from.
+ */
+export interface DiscoverTemplate extends TopicTemplate {
+  readonly entityIds: readonly EntityId[];
+}
+
+/**
+ * One of a User's own Topics, as the DiscoverTab reads it.
+ *
+ * `clonedFromTemplateId` is the answer to "which Directory entry is this the same
+ * as". The Topic's own `id` is not: it is a randomly generated identifier
+ * belonging to a different kind of thing, and matching a Directory entry against
+ * it compares two unrelated names — a collision that the seed's `id === slug`
+ * makes common enough to look like a working rule.
+ */
+export interface UserTopicSignal {
+  readonly topicId: TopicId;
+  readonly title: string;
+  readonly clonedFromTemplateId: TopicTemplateId | null;
+  readonly sourceIds: readonly SourceId[];
+  readonly entityIds: readonly EntityId[];
+}
+
+/**
+ * How many Articles one Source published inside the measured window.
+ *
+ * A measurement, not a ranking. What is trending is computed from these; a count
+ * handed in already carrying an opinion about which entries are popular is how a
+ * "trending" list ends up being whatever the caller decided.
+ */
+export interface SourceVolume {
+  readonly sourceId: SourceId;
+  readonly articleCount: number;
+}
+
 export type TopicOrigin =
   | { readonly kind: 'template'; readonly templateId: TopicTemplateId }
   | { readonly kind: 'freeform' };

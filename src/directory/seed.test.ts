@@ -5,6 +5,7 @@ import { applySchema } from '../db/migrate.js';
 import { createDatabase } from '../db/client.js';
 import { sources, topicTemplateSources } from '../db/schema.js';
 import { safeExternalUrl } from '../domain/url.js';
+import { titleKey } from '../domain/slug.js';
 import { createTestDb } from '../testing/test-db.js';
 import { applyDirectorySeed, directorySeed } from './seed.js';
 
@@ -276,6 +277,50 @@ describe('the curated Source registry', () => {
     // A duplicate slug would be one outlet counted twice, quietly halving the
     // coverage of both Topics it was meant to serve.
     const slugs = directorySeed.sources.map((s) => s.slug);
+    expect(new Set(slugs).size).toBe(slugs.length);
+  });
+});
+
+describe('the curated Directory', () => {
+  /**
+   * A count, not a judgement.
+   *
+   * The Directory existed with ten entries, which is ten cards for a User to read
+   * and nothing to choose from: the DiscoverTab offers a grid, and a grid of ten
+   * is a paragraph. Thirty is the floor below which the surface is not worth
+   * having, and it is here so that trimming the list is a deliberate act rather
+   * than something that happens by not noticing.
+   */
+  const MINIMUM_ENTRIES = 30;
+
+  it('holds enough entries for a User to choose between', () => {
+    expect(directorySeed.templates.length).toBeGreaterThanOrEqual(MINIMUM_ENTRIES);
+  });
+
+  it('covers every category the pickers group by', () => {
+    // A category with no entries never appears as a heading, so a User has no way
+    // to tell the absence from a bug in the picker.
+    const categories = new Set(directorySeed.templates.map((t) => t.category));
+    expect([...categories].sort()).toEqual([
+      'business',
+      'news',
+      'policy',
+      'science',
+      'technology',
+    ]);
+  });
+
+  it('gives no two entries the same title', () => {
+    // The clone path refuses on a folded title as well as on a template id, and
+    // slug allocation falls back to `-2`. Two entries whose titles fold together
+    // are therefore a pair where the second can never be added cleanly.
+    const keys = directorySeed.templates.map((t) => titleKey(t.title));
+    const duplicates = keys.filter((k, i) => keys.indexOf(k) !== i);
+    expect(duplicates).toEqual([]);
+  });
+
+  it('gives no two entries the same slug', () => {
+    const slugs = directorySeed.templates.map((t) => t.slug);
     expect(new Set(slugs).size).toBe(slugs.length);
   });
 });

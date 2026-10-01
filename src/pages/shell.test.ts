@@ -33,6 +33,7 @@ interface Harness {
 const SIGNED_IN_PAGES: readonly (readonly [string, number])[] = [
   ['/topics', 200],
   ['/pick-topics', 200],
+  ['/discover', 200],
   ['/onboarding/welcome', 200],
   ['/settings/delivery', 200],
   ['/settings/briefs', 200],

@@ -495,6 +495,13 @@ section > h2 { font-size: var(--text-sm); text-transform: uppercase; letter-spac
   letter-spacing: 0.02em;
   color: var(--color-text-muted);
 }
+/* A Directory card the User acts on, rather than one whole card is. The picker's
+   card is a <label>, so the card itself is the target and the text sits beside a
+   checkbox in the first column; here the control is a button and the text owns
+   the card, so the second column has nothing to hold and is removed rather than
+   left for the title to squeeze into. */
+.card--entry { grid-template-columns: 1fr; cursor: default; }
+.card--entry .card__note { grid-column: 1; }
 
 .freeform { margin-top: var(--space-5); }
 .existing { list-style: none; padding: 0; margin: 0 0 var(--space-4); }

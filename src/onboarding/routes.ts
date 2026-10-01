@@ -90,7 +90,12 @@ export async function registerOnboardingRoutes(
     return reply
       .code(400)
       .type('text/html')
-      .send(pickTopicsErrorPage({ account: await shellFor(req), message: humanReason(outcome.reason, 'onboarding') }));
+      .send(
+        pickTopicsErrorPage({
+          account: await shellFor(req),
+          message: humanTopicSelectionReason(outcome.reason, 'onboarding'),
+        }),
+      );
   });
 
   fastify.post('/pick-topics', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
@@ -122,7 +127,11 @@ export async function registerOnboardingRoutes(
       .code(400)
       .type('text/html')
       .send(
-        pickTopicsErrorPage({ account: await shellFor(req), message: humanReason(outcome.reason, 'manage'), backHref: '/pick-topics' }),
+        pickTopicsErrorPage({
+          account: await shellFor(req),
+          message: humanTopicSelectionReason(outcome.reason, 'manage'),
+          backHref: '/pick-topics',
+        }),
       );
   });
 
@@ -327,7 +336,16 @@ function toInt(value: string, fallback: number): number {
   return Number.isInteger(n) ? n : fallback;
 }
 
-function humanReason(
+/**
+ * What an outcome reason reads as to a User.
+ *
+ * Exported because two screens now refuse the same submission for the same
+ * reasons, and a User who is told "You already have one of those topics" on one
+ * screen and something else on another has been given two answers to one
+ * question. The reasons belong to `OnboardingService`; the wording belongs to
+ * whoever is showing the refusal, and there are now two of those.
+ */
+export function humanTopicSelectionReason(
   reason: Exclude<SelectTopicsOutcome, { status: 'ok' }>['reason'],
   mode: 'onboarding' | 'manage',
 ): string {

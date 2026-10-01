@@ -9,6 +9,5 @@
  */
 export const DEFERRED_SERVICES: Readonly<Record<string, string>> = {
   ArchiveSearchService: '#49',
-  DiscoverService: '#47',
   TrendsService: '#48',
 };

@@ -29,7 +29,7 @@ import {
   type UnsubscribeService,
 } from '../services/unsubscribe-service.js';
 import { EMAIL_BRIEFS_PATH } from '../services/unsubscribe-links.js';
-import { layout, TIER_LABELS, type ShellAccount } from './layout.js';
+import { layout, planLine, type ShellAccount } from './layout.js';
 import { formatHumanTime } from './human-time.js';
 import { resolveShellAccount, shellAccountFor } from './shell.js';
 import { pad2 } from '../domain/timezone.js';
@@ -1289,10 +1289,13 @@ function homePage(input: {
 }): string {
   const cap = topicCapFor(input.tier);
   // The tier's own name from the shell's table, so the topic list and the header
-  // it sits above cannot come to spell it differently.
-  const plan = Number.isFinite(cap)
-    ? `${TIER_LABELS[input.tier]} &middot; ${input.topics.length} of ${cap} topics`
-    : `${TIER_LABELS[input.tier]} &middot; ${input.topics.length} topics`;
+  // it sits above cannot come to spell it differently. The DiscoverTab counts the
+  // same three facts through the same helper.
+  const plan = planLine({
+    tier: input.tier,
+    heldCount: input.topics.length,
+    cap,
+  });
   // A user who cannot add another topic is told so on the page they land on,
   // not only on the picker they have to go and find.
   const atCapHtml = input.atCap

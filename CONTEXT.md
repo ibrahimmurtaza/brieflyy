@@ -123,11 +123,14 @@ _Avoid_: history, log
 **Directory**: The curated set of TopicTemplates Brieflyy ships. A User selecting a Directory entry clones it into a per-user Topic.
 _Avoid_: catalog, library
 
-**DiscoverTab**: The in-app surface showing Directory entries, "topics like yours" Recommendations, and "trending this week" — used to find and add Topics.
+**DiscoverTab**: The in-app surface showing Directory entries, "topics like yours" Recommendations, and "trending this week" — used to find and add Topics. One Directory entry is cloned at a time, not three. See ADR-0014.
 _Avoid_: explore, browse
 
-**Recommendation**: A suggested Topic surfaced in DiscoverTab, derived from the User's existing Topics' Entity and Source overlap.
+**Recommendation**: A suggested Topic surfaced in DiscoverTab, derived from the User's existing Topics' Entity and Source overlap. Each distinct Entity and each distinct Source shared counts once.
 _Avoid_: suggestion, related topic
+
+**Mention volume**: How many Articles a Source published inside the measured window. What "trending" is computed from; a Directory entry's mention volume is the sum over its Sources, each counted once. See ADR-0014.
+_Avoid_: popularity, buzz, score
 
 ### Monetization
 

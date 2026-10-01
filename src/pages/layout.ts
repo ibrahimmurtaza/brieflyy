@@ -93,10 +93,17 @@ export interface LayoutInput {
  * links, and a link that can only turn something off without any way to turn it
  * back on is not a control. The confirmation page those links land on points
  * straight at this.
+ *
+ * "Discover" is here because it is the only way to a new Topic from anywhere.
+ * The two list pages are where a User manages what they already have; a User who
+ * wants a fourth thing has to go looking for it, and finding it only from an
+ * empty state or a paywall means the empty state and the paywall are the two
+ * screens that decide it.
  */
 export const PRIMARY_NAV: readonly NavLink[] = [
   { href: '/topics', label: 'Topics' },
   { href: '/pick-topics', label: 'Manage topics' },
+  { href: '/discover', label: 'Discover' },
   { href: '/archive/search', label: 'Archive' },
   { href: EMAIL_BRIEFS_PATH, label: 'Email briefs' },
   { href: '/settings/delivery', label: 'Delivery time' },
@@ -155,6 +162,29 @@ export const TIER_LABELS: Readonly<Record<Tier, string>> = {
   free: 'Free plan',
   paid: 'Paid plan',
 };
+
+/**
+ * The one line that says which tier this User is on and how much of it they use.
+ *
+ * Two pages needed it and would otherwise have written it twice: the topic list
+ * and the DiscoverTab. They read the same three facts — the tier's own name from
+ * the table above, how many Topics are held, and the cap that allows — and the
+ * only thing that differs is whether a cap exists to count down. So the count is
+ * assembled here, once, and a page that names the tier differently cannot.
+ *
+ * The separator is a literal `&middot;` because the parts are escaped and the
+ * punctuation between them is not markup.
+ */
+export function planLine(input: {
+  readonly tier: Tier;
+  readonly heldCount: number;
+  readonly cap: number;
+}): string {
+  const count = Number.isFinite(input.cap)
+    ? `${input.heldCount} of ${input.cap} topics`
+    : `${input.heldCount} topics`;
+  return `${escapeHtml(TIER_LABELS[input.tier])} &middot; ${count}`;
+}
 
 /**
  * What the header says about the brief that is coming, and where to change it.

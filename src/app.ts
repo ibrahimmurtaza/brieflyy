@@ -40,6 +40,8 @@ import type { OAuthClient } from './oauth/client.js';
 import { OnboardingService } from './onboarding/onboarding-service.js';
 import { registerOnboardingRoutes } from './onboarding/routes.js';
 import { registerPageRoutes } from './pages/routes.js';
+import { registerDiscoverRoutes } from './discover/routes.js';
+import { DrizzleDiscoverRepo } from './repos/discover-repo.js';
 import type { EmailTransport } from './email/transport.js';
 import type { LLMSummaryClient } from './domain/llm.js';
 import type { Clock } from './domain/clock.js';
@@ -213,6 +215,10 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
   const briefRunRepo = new DrizzleBriefRunRepo(opts.db);
   const briefJobRunRepo = new DrizzleBriefJobRunRepo(opts.db);
   const unsubscribeRepo = new DrizzleUnsubscribeRepo(opts.db);
+  // What the DiscoverTab measures. Built here rather than at the route because the
+  // measurements are the same for every User and only the lookup that reads them
+  // is per-request.
+  const discoverRepo = new DrizzleDiscoverRepo(opts.db);
 
   await applyDirectorySeed(opts.db);
 
@@ -383,6 +389,12 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     briefPlanService,
     briefSnapshotRepo,
     unsubscribeService,
+  });
+
+  await registerDiscoverRoutes(app, {
+    discoverRepo,
+    onboardingService,
+    clock,
   });
 
   // Registered with the rest of the routes rather than with the pages: these are
