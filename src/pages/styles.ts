@@ -540,6 +540,13 @@ form.remove, form.logout { display: inline; margin: 0; }
 .topics li { padding: var(--space-3) 0; border-bottom: 1px solid var(--color-rule); }
 .topics a { font-size: var(--text-lg); text-decoration: none; }
 .topics a:hover { text-decoration: underline; }
+/*
+ * The sent-brief list is one link per row and nothing else, so the link itself is
+ * the target and has to clear 24px. Left inline it is measured by the font's
+ * ascent and descent rather than by the line box, which is 21px on Linux and
+ * passes on Windows — the target size depended on the runner's fonts.
+ */
+.topics--sent a { display: inline-block; }
 
 /* ----------------------------------------------------------------- the brief */
 /* The id is what the trends page's spike annotations link to, so following one
