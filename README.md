@@ -315,3 +315,26 @@ build when the shape of the system drifts:
 
 The rest cover the auth and OAuth flows, onboarding, ingest, delivery settings,
 the repositories, the migration runner, and the rate limiter.
+
+The browser suite is separate because it needs a Chromium download:
+
+```bash
+pnpm test:e2e:install
+pnpm test:e2e
+```
+
+## CI
+
+`.github/workflows/ci.yml` runs on every pull request and on every push to
+`main`, on Node 22 with the pnpm version pinned in `packageManager`. It has three
+jobs, all three required on `main`:
+
+| Job | Runs |
+| --- | --- |
+| `verify` | `pnpm typecheck`, `pnpm test`, `pnpm secrets:check` |
+| `build` | `pnpm build` |
+| `e2e` | `playwright install --with-deps chromium`, then `pnpm test:e2e` |
+
+No job needs a `.env`: the vitest suite and the Playwright fixture server each
+build their own throwaway SQLite database. Failed e2e runs upload `test-results/`
+so the traces Playwright records on the first retry are downloadable.
