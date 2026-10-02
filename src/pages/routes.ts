@@ -1614,7 +1614,7 @@ function sendBriefSection(input: {
   const list = sent.length > 0
     ? `    <section>
       <h2>Briefs you have been sent</h2>
-      <ul class="topics">
+      <ul class="topics topics--sent">
 ${sent.join('\n')}
       </ul>
     </section>`
