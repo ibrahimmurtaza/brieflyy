@@ -64,6 +64,9 @@ import {
 } from './services/scheduled-brief-service.js';
 import { registerBriefStatusRoutes } from './services/brief-status-routes.js';
 import { FeedbackService } from './services/feedback-service.js';
+import { TrendsService } from './services/trends-service.js';
+import { registerTrendsRoutes } from './trends/routes.js';
+import { DrizzleTrendsRepo } from './repos/trends-repo.js';
 import { UnsubscribeService } from './services/unsubscribe-service.js';
 import { registerUnsubscribeRoutes } from './services/unsubscribe-routes.js';
 import { registerTierRoutes } from './billing/tier-routes.js';
@@ -117,6 +120,16 @@ export interface CreateAppOptions {
   readonly briefJobAutoStart?: boolean | undefined;
   /** How often the brief job looks for a DeliveryTime that has arrived. */
   readonly briefIntervalMs?: number | undefined;
+  /**
+   * Run the trends recomputation for as long as the application is up. Off by
+   * default for the same reason `ingestAutoStart` is: a test can build the
+   * application without a background timer racing its fixtures. The server
+   * entrypoint turns it on, which is what makes a trend an hourly job rather than
+   * something computed while somebody waits for a page.
+   */
+  readonly trendsJobAutoStart?: boolean | undefined;
+  /** How often the trends are recomputed. Absent means the scheduler's default. */
+  readonly trendsIntervalMs?: number | undefined;
   /**
    * Writes the one-liner and bullets for the leading Clusters of a brief.
    *
@@ -219,6 +232,11 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
   // measurements are the same for every User and only the lookup that reads them
   // is per-request.
   const discoverRepo = new DrizzleDiscoverRepo(opts.db);
+  // The trends layer's one repository: it measures what a Topic's Sources published
+  // and named, and it stores the trend that every page then reads. One dependency
+  // rather than two because the expensive half and the cheap half are the same
+  // question about the same Topic.
+  const trendsRepo = new DrizzleTrendsRepo(opts.db);
 
   await applyDirectorySeed(opts.db);
 
@@ -344,6 +362,18 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     random: opts.random ?? nodeRandom,
   });
 
+  // What a Topic's trends are, and what a User's tier may be shown of them. The
+  // measuring half is only ever run by the hourly loop below; the pages go through
+  // `trendFor` and `rollupFor`, which read the row the loop left behind.
+  const trendsService = new TrendsService({
+    repo: trendsRepo,
+    clock,
+    random: opts.random ?? nodeRandom,
+    ...(opts.trendsIntervalMs === undefined
+      ? {}
+      : { intervalMs: opts.trendsIntervalMs }),
+  });
+
   const ingestScheduler = await resolveIngestScheduler({
     provided: opts.ingestScheduler,
     db: opts.db,
@@ -389,6 +419,14 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     briefPlanService,
     briefSnapshotRepo,
     unsubscribeService,
+    trendsService,
+  });
+
+  await registerTrendsRoutes(app, {
+    trendsService,
+    onboardingService,
+    topicRepo,
+    clusterRepo,
   });
 
   await registerDiscoverRoutes(app, {
@@ -438,6 +476,17 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     // against a database that is already closing.
     app.addHook('onClose', async () => {
       await ingestScheduler.stop();
+    });
+  }
+
+  if (opts.trendsJobAutoStart === true) {
+    // The trend every trends page reads is written by this loop rather than by the
+    // request that shows it. Deliberately not awaited, for the reason the ingest
+    // loop is not: it runs for the life of the process, and a stop waits for the
+    // pass in flight so a recompute is not abandoned against a closing database.
+    void trendsService.runForever();
+    app.addHook('onClose', async () => {
+      await trendsService.stop();
     });
   }
 

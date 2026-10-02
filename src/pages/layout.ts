@@ -99,17 +99,36 @@ export interface LayoutInput {
  * wants a fourth thing has to go looking for it, and finding it only from an
  * empty state or a paywall means the empty state and the paywall are the two
  * screens that decide it.
+ *
+ * "Trends" is here because the trends view is a paid differentiator, and a
+ * differentiator nobody can find is not one. It is the across-your-topics page
+ * rather than a per-Topic one, because the navigation has no Topic to be relative
+ * to; the per-Topic trends page is reached from the LivingBrief and from this one.
  */
 export const PRIMARY_NAV: readonly NavLink[] = [
   { href: '/topics', label: 'Topics' },
   { href: '/pick-topics', label: 'Manage topics' },
   { href: '/discover', label: 'Discover' },
+  { href: '/trends', label: 'Trends' },
   { href: '/archive/search', label: 'Archive' },
   { href: EMAIL_BRIEFS_PATH, label: 'Email briefs' },
   { href: '/settings/delivery', label: 'Delivery time' },
 ];
 
 const FOOTER = 'Aggregated, clustered, summarised. One brief per topic, every day.';
+
+/**
+ * Where one Cluster sits on the LivingBrief, so something else can link to it.
+ *
+ * The trends page annotates a spike with the Clusters that arrived on that day, and
+ * each annotation is only worth having if it goes somewhere: a marker that says a
+ * jump was caused by something nobody can read is a hint rather than a link. Both
+ * pages go through this one function so the id a link is built from and the id the
+ * LivingBrief renders cannot drift apart.
+ */
+export function clusterAnchor(clusterId: string): string {
+  return `cluster-${clusterId}`;
+}
 
 /**
  * The whole HTML document, from one place.
