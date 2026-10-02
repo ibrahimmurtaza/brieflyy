@@ -246,6 +246,22 @@ small { font-size: var(--text-sm); }
 .site-nav a:hover { color: var(--color-link); text-decoration: underline; }
 .site-nav a[aria-current="page"] { color: var(--color-text); font-weight: 600; }
 
+/* The search box in the header. One row, and the placeholder rather than a visible
+   label, because the box is recognisable by its shape and the label would only cost
+   the width the navigation needs. The label stays in the document for anyone reading
+   the page aloud. */
+.shell-search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+}
+.shell-search input {
+  min-height: 2.25rem;
+  width: 11rem;
+}
+.shell-search button { min-height: 2.25rem; }
+
 /* The account summary. Three facts — who is signed in, what they pay for, and
    when mail next arrives — in the one place that is on every page, so none of
    them has to be restated by a screen that would otherwise get one of them
@@ -639,6 +655,32 @@ form.hide-source select {
 
 .empty-state { max-width: var(--measure); color: var(--color-text-muted); }
 .empty-state__actions { display: flex; flex-wrap: wrap; gap: var(--space-4); margin-top: var(--space-2); }
+
+/* The Archive search form and its results. The filters come before the box, which
+   reads backwards from what a User does: they usually type first and narrow second,
+   and the controls they have not touched yet should not be the loudest thing on the
+   page. Two columns of filters rather than six, so the box does not end up below
+   the fold on a phone. */
+.archive-search {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  align-items: end;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  margin-bottom: var(--space-5);
+}
+/* The label wraps its control, so one field is one grid cell at every width. */
+.archive-search > label { gap: var(--space-1); }
+.archive-search > .actions { grid-column: 1 / -1; margin-top: 0; }
+.results { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-5); }
+.results li { padding-bottom: var(--space-4); border-bottom: 1px solid var(--color-rule); }
+.results li:last-child { border-bottom: 0; padding-bottom: 0; }
+.results__kind { margin: 0 0 var(--space-1); font-size: var(--text-sm); color: var(--color-text-muted); }
+.results__title { margin: 0 0 var(--space-2); font-size: var(--text-lg); font-weight: 600; }
+.results__title a { color: var(--color-link); }
 
 /* ---------------------------------------------------------------- the trends */
 /* The chart is a drawing, so it needs no colours a User has to read a label to

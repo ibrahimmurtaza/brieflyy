@@ -29,7 +29,11 @@ personalized brief feed with insights and visual trends.
 - [x] **[13]** DiscoverTab + Recommendations — `GET /discover` in the shell, with
       Recommendations scored on Entity and Source overlap and trending computed
       from mention volume over a stated window. See ADR-0014.
-- [ ] [14] Archive search + tier enforcement
+- [x] **[14]** Archive search + tier enforcement — a search box in the shell on every
+      page, `GET /archive/search` over Cluster summaries, BriefSnapshot text, Article
+      bodies, Retired Stories and FeedbackEvents through a full-text index, narrowed
+      by date range, Source, Entity and Topic. Retention is a predicate in the query,
+      not a filter in the page. See ADR-0016.
 
 ## Stack
 
@@ -223,6 +227,15 @@ Rebuilds, column migrations and retired columns run *before* `SCHEMA_SQL`, so th
 DDL that follows already matches the shape they produced; an index on a column an
 older table does not have would otherwise fail against the table as it stands.
 
+The Archive's text index is the one piece of DDL that is not in `migrate.ts`: its
+table, its FTS5 virtual table and the twenty-odd triggers that keep the two in step
+live in `src/db/archive-index.ts`, and `applySchema` calls `applyArchiveIndex` from
+it. It is separate for two reasons. `schemaStatements()` cuts `SCHEMA_SQL` on
+semicolons to find indexes worth rebuilding, and a trigger body is full of them. And
+the index is filled from the rows a database already held the first time it is
+created, which needs to happen before its own `CREATE TABLE` runs. `schema-agreement.test.ts`
+still covers it, because it reads whatever `applySchema` applied.
+
 `schema-agreement.test.ts` compares columns, nullability, foreign keys and index
 uniqueness. A `NOT NULL` that only one of the two schemas has is a constraint that
 has stopped being true of the database while the code reading it still assumes it,
@@ -238,6 +251,8 @@ src/
 ├── config.ts              # shared constants
 │
 ├── db/                    # Drizzle schema, migration runner, driver factory
+│                          # (archive-index.ts holds the Archive's DDL and its
+│                          # triggers; applySchema calls it)
 ├── directory/             # Seed JSON + directory loader (Sources, TopicTemplates)
 ├── domain/                # pure types & helpers (crypto, clock, timezone, DeliverySlot)
 ├── http/                  # route access declarations, auth guard, rate limiter
@@ -245,15 +260,19 @@ src/
 ├── scheduling/            # IntervalLoop — the loop both background jobs ride on
 ├── verify/                # staged-credential check (run by pnpm secrets:check)
 │
+├── archive/               # the Archive view: the search results page. Its route and
+│                          # its full-text index live in db/archive-index.ts
 ├── email/                 # EmailTransport seam (Console + Resend)
 │
 ├── auth/                  # AuthService (orchestration) + HTTP routes
 ├── ingest/                # registry ingest + IngestScheduler (poll every Source)
 ├── onboarding/            # OnboardingService (Directory → Topics) + HTTP routes
-├── pages/                 # placeholder HTML routes (signup, onboarding, ...)
+├── pages/                 # the shell's HTML routes (signup, onboarding, topics,
+│                          # the LivingBrief, the Archive route, ...)
 ├── services/              # clustering, BriefPlan/Snapshot, the written summary
-│                          # client, the daily brief job, the trends layer, and
-│                          # the unsubscribe state that job honours
+│                          # client, the daily brief job, the trends layer, the
+│                          # Archive search, and the unsubscribe state that job
+│                          # honours
 ├── trends/                # the trends view: inline-SVG chart + sparklines, the
 │                          # per-Topic and across-your-topics pages, HTTP routes
 │

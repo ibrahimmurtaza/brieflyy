@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 
 import type { SqliteDriver } from './client.js';
+import { applyArchiveIndex } from './archive-index.js';
 import { extractSignature } from '../domain/extract.js';
 import { canonicalEntityKey } from '../domain/entity-extraction.js';
 import {
@@ -973,6 +974,11 @@ export function applySchema(driver: SqliteDriver): void {
   // touch rows the new columns left empty.
   backfillStorySignatures(driver);
   backfillArticleSignatures(driver);
+  // Last of all: the Archive's own table, its full-text index and its triggers, and
+  // the one-time fill of that index from what is already stored. After the backfills
+  // above, so the fill reads the tables as they now stand, and so the triggers are
+  // not there to fire for every row those backfills rewrite.
+  applyArchiveIndex(driver);
 }
 
 function schemaStatements(): string[] {

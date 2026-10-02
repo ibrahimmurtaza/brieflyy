@@ -759,6 +759,57 @@ export const briefJobRuns = sqliteTable(
   }),
 );
 
+/**
+ * The Archive, as one table.
+ *
+ * Clusters, BriefSnapshots, Articles, Retired Stories and FeedbackEvents are five
+ * shapes in five tables, and the page that searches them has to be able to say
+ * "this User's" and "as recent as this User's tier allows" about all five. Made
+ * identical and keyed by the Topic an item is in, both of those are one predicate
+ * on one indexed table instead of five queries that can disagree.
+ *
+ * `source_ids` and `entity_ids` are comma-joined rather than JSON, matching
+ * `clusters.source_ids` and `brief_plans.cluster_ids`: they are read by asking
+ * whether a list contains an id, never parsed into a structure.
+ *
+ * `title` and `body` are the full-text index's two columns, kept beside the row
+ * rather than inside the FTS table so that one statement can read what matched and
+ * apply the retention window to it. `body` is empty for the kinds that are read
+ * where they are listed, and `url` is empty for the kinds that are not.
+ *
+ * The row itself decides nothing about what a User may see. Retention is applied by
+ * the query, so a User who upgrades reaches their whole Archive at once.
+ */
+export const archiveItems = sqliteTable(
+  'archive_items',
+  {
+    kind: text('kind', {
+      enum: ['cluster', 'snapshot', 'article', 'story', 'feedback'],
+    }).notNull(),
+    itemId: text('item_id').notNull(),
+    topicId: text('topic_id')
+      .notNull()
+      .references(() => topics.id, { onDelete: 'cascade' }),
+    sourceIds: text('source_ids').notNull().default(''),
+    entityIds: text('entity_ids').notNull().default(''),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    title: text('title').notNull(),
+    body: text('body').notNull(),
+    url: text('url').notNull().default(''),
+  },
+  (t) => ({
+    // Not a primary key but the same uniqueness: one row per item per Topic, which
+    // is what lets an Article be in two Topics' Archives without being two Articles.
+    pk: uniqueIndex('archive_items_pk').on(t.kind, t.itemId, t.topicId),
+    // The Archive of one Topic, newest first, and every predicate the search adds
+    // lands on this index.
+    topicCreatedIdx: index('archive_items_topic_created_idx').on(t.topicId, t.createdAt),
+  }),
+);
+
+export type ArchiveItemRow = typeof archiveItems.$inferSelect;
+export type NewArchiveItemRow = typeof archiveItems.$inferInsert;
+
 export type BriefPlanRow = typeof briefPlans.$inferSelect;
 export type NewBriefPlanRow = typeof briefPlans.$inferInsert;
 export type BriefSnapshotRow = typeof briefSnapshots.$inferSelect;

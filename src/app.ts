@@ -42,6 +42,7 @@ import { registerOnboardingRoutes } from './onboarding/routes.js';
 import { registerPageRoutes } from './pages/routes.js';
 import { registerDiscoverRoutes } from './discover/routes.js';
 import { DrizzleDiscoverRepo } from './repos/discover-repo.js';
+import { DrizzleArchiveRepo } from './repos/archive-repo.js';
 import type { EmailTransport } from './email/transport.js';
 import type { LLMSummaryClient } from './domain/llm.js';
 import type { Clock } from './domain/clock.js';
@@ -64,6 +65,7 @@ import {
 } from './services/scheduled-brief-service.js';
 import { registerBriefStatusRoutes } from './services/brief-status-routes.js';
 import { FeedbackService } from './services/feedback-service.js';
+import { ArchiveSearchService } from './services/archive-search-service.js';
 import { TrendsService } from './services/trends-service.js';
 import { registerTrendsRoutes } from './trends/routes.js';
 import { DrizzleTrendsRepo } from './repos/trends-repo.js';
@@ -237,6 +239,9 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
   // rather than two because the expensive half and the cheap half are the same
   // question about the same Topic.
   const trendsRepo = new DrizzleTrendsRepo(opts.db);
+  // The Archive's own repository. One dependency because reading a User's Archive is
+  // one question about one index, and the tier decides how far back the answer goes.
+  const archiveRepo = new DrizzleArchiveRepo(opts.db);
 
   await applyDirectorySeed(opts.db);
 
@@ -374,6 +379,14 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
       : { intervalMs: opts.trendsIntervalMs }),
   });
 
+  // What a User can find in their own Archive. Built here rather than at the route
+  // because the tier's window is part of the answer, and a route that assembled the
+  // search itself would be the place the window could be left out.
+  const archiveSearchService = new ArchiveSearchService({
+    archiveRepo,
+    clock,
+  });
+
   const ingestScheduler = await resolveIngestScheduler({
     provided: opts.ingestScheduler,
     db: opts.db,
@@ -420,6 +433,7 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     briefSnapshotRepo,
     unsubscribeService,
     trendsService,
+    archiveSearchService,
   });
 
   await registerTrendsRoutes(app, {
