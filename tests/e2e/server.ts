@@ -35,9 +35,21 @@ import { EMPTY_SIGNATURE } from '../../src/domain/story-signature.js';
 import { DrizzleClusterRepo } from '../../src/repos/cluster-repo.js';
 import { DrizzleStoryRepo } from '../../src/repos/story-repo.js';
 import { DrizzleTopicRepo } from '../../src/repos/topic-repo.js';
+import { DrizzleTrendsRepo } from '../../src/repos/trends-repo.js';
+import { DrizzleEntityRepo } from '../../src/repos/entity-repo.js';
+import { DrizzleArticleRepo } from '../../src/repos/article-repo.js';
+import { TrendsService } from '../../src/services/trends-service.js';
+import { nodeRandom } from '../../src/domain/crypto.js';
 import { makeCluster, makeTopic } from '../../src/testing/fixtures.js';
 import { RecordingSummaryClient } from '../../src/testing/summary-client.js';
-import type { SourceId, StoryId, TopicCategory, TopicOrigin } from '../../src/domain/types.js';
+import type {
+  ArticleId,
+  EntityId,
+  SourceId,
+  StoryId,
+  TopicCategory,
+  TopicOrigin,
+} from '../../src/domain/types.js';
 import { E2E_BASE_URL, E2E_PORT } from './base-url.js';
 import {
   E2E_ALL_UNSUBSCRIBE_TOKEN,
@@ -181,6 +193,57 @@ await clusterRepo.insert(
 );
 
 /**
+ * A run of coverage on the day the Cluster above arrived, and a trickle before it.
+ *
+ * Two jobs. The run is what makes the day a spike worth annotating, and it is dated
+ * to the Cluster's own `createdAt` so the annotation has a real Cluster to point
+ * at. The trickle is the baseline the spike is measured against — without it every
+ * day would be quiet and nothing would stand out. Each of these Articles is its own
+ * Story so the LivingBrief keeps showing exactly one Article under the Cluster,
+ * which the brief specs count.
+ */
+const articleRepo = new DrizzleArticleRepo(db);
+const entityRepo = new DrizzleEntityRepo(db);
+const ACME_ENTITY_ID = 'e2e-entity-acme' as EntityId;
+await entityRepo.upsertByKey({
+  id: ACME_ENTITY_ID,
+  entity: { name: 'Acme Corp', key: 'acme corp', kind: 'org' },
+});
+
+/** Days before `NOW`, oldest first. */
+const COVERAGE: readonly { readonly id: string; readonly daysAgo: number }[] = [
+  ...Array.from({ length: 12 }, (_, i) => ({ id: `burst-${i}`, daysAgo: 1 })),
+  ...Array.from({ length: 10 }, (_, i) => ({ id: `trickle-${i}`, daysAgo: 3 + i * 3 })),
+];
+for (const { id, daysAgo } of COVERAGE) {
+  const publishedAt = new Date(NOW.getTime() - daysAgo * DAY);
+  const storyId = `e2e-story-${id}` as StoryId;
+  await storyRepo.insert({
+    id: storyId,
+    signature: EMPTY_SIGNATURE,
+    firstSeenAt: publishedAt,
+    lastSeenAt: publishedAt,
+    published: { first: publishedAt, last: publishedAt },
+  });
+  await articleRepo.insert({
+    article: {
+      id: `e2e-article-${id}` as ArticleId,
+      sourceId: SOURCES[0]![0],
+      externalId: `ext-${id}`,
+      url: `https://www.theguardian.com/${id}`,
+      title: 'Acme Corp says something',
+      body: 'Acme Corp was mentioned again, in a story nobody else carried.',
+      publishedAt,
+      ingestedAt: publishedAt,
+      entities: [],
+      signature: EMPTY_SIGNATURE,
+      storyId,
+    },
+    entityIds: [ACME_ENTITY_ID],
+  });
+}
+
+/**
  * A brief that really went out, with tokens the specs know.
  *
  * The unsubscribe routes are public and the token is the whole authorisation, so
@@ -234,6 +297,22 @@ app.post('/e2e/reset-unsubscribe', async (_req, reply) => {
   insert(`DELETE FROM unsubscribes`);
   return reply.code(204).send();
 });
+
+/**
+ * The stored trends the specs read, written as rows rather than measured.
+ *
+ * A spec asserting that a chart draws a spike needs a spike to exist, and making
+ * one happen through ingest would mean the spec was testing ingest too. These are
+ * the same rows the hourly job writes, in the same shape, through the same
+ * application — the server builds them with `TrendsService`, so a spec cannot pass
+ * against a trend the real code would refuse to produce.
+ */
+const trendsService = new TrendsService({
+  repo: new DrizzleTrendsRepo(db),
+  clock: systemClock,
+  random: nodeRandom,
+});
+await trendsService.refreshAll();
 
 /**
  * Soft-remove a Topic, the way a User does from `/topics`.

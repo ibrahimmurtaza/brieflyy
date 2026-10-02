@@ -468,6 +468,49 @@ export type NewStoryRow = typeof stories.$inferInsert;
 export type ClusterRow = typeof clusters.$inferSelect;
 export type ClusterStoryRow = typeof clusterStories.$inferSelect;
 
+/**
+ * One Topic's trends, materialised.
+ *
+ * The measurement behind this — every Article every Entity was named in across a
+ * thirty-day baseline — is far too much work to do while somebody is waiting for a
+ * page, so it is done on an hourly cadence and this row is what every request
+ * reads. Without it the trends view would either be slow or be computed again per
+ * request, and the two are the same mistake.
+ *
+ * The series are JSON rather than one row per day because they are always read
+ * whole, never queried by day, and the annotations carry a list of Cluster ids
+ * that a row-per-day table would then need a second table for.
+ *
+ * Unique on the Topic because there is one current trend per Topic: the job
+ * replaces the row rather than accumulating a history of them, and nothing reads
+ * an older one.
+ */
+export const topicTrends = sqliteTable(
+  'topic_trends',
+  {
+    id: text('id').primaryKey(),
+    topicId: text('topic_id')
+      .notNull()
+      .references(() => topics.id, { onDelete: 'cascade' }),
+    computedAt: integer('computed_at', { mode: 'timestamp_ms' }).notNull(),
+    // The window stored with the row, so the page can say which days it is
+    // looking at without asking the clock a question whose answer has moved on.
+    observationStart: integer('observation_start', { mode: 'timestamp_ms' }).notNull(),
+    observationEnd: integer('observation_end', { mode: 'timestamp_ms' }).notNull(),
+    baselineStart: integer('baseline_start', { mode: 'timestamp_ms' }).notNull(),
+    baselineEnd: integer('baseline_end', { mode: 'timestamp_ms' }).notNull(),
+    volume: text('volume').notNull().default('[]'),
+    spikes: text('spikes').notNull().default('[]'),
+    entities: text('entities').notNull().default('[]'),
+  },
+  (t) => ({
+    topicUnique: uniqueIndex('topic_trends_topic_unique').on(t.topicId),
+  }),
+);
+
+export type TopicTrendRow = typeof topicTrends.$inferSelect;
+export type NewTopicTrendRow = typeof topicTrends.$inferInsert;
+
 export const feedbackEvents = sqliteTable(
   'feedback_events',
   {

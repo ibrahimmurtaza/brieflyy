@@ -117,6 +117,10 @@ export const STYLESHEET = `/* Brieflyy design tokens and page rules. Generated o
   --color-paywall-surface: var(--amber-50);
   --color-paywall-border: var(--amber-300);
   --color-paywall-text: var(--amber-800);
+  /* The rule drawn through a day whose mention volume stands out. Amber for
+     attention, and its own name rather than borrowing the paywall's: a spike is
+     not something a User is being held back from. */
+  --color-spike: var(--amber-300);
 
   /* Measure: how wide a line of prose is allowed to be, and how wide a page of
      controls is allowed to be. Four pages used to disagree about the second. */
@@ -529,7 +533,11 @@ form.remove, form.logout { display: inline; margin: 0; }
 .topics--sent a { display: inline-block; }
 
 /* ----------------------------------------------------------------- the brief */
-.cluster { padding: var(--space-5) 0; border-top: 1px solid var(--color-rule); }
+/* The id is what the trends page's spike annotations link to, so following one
+   scrolls a Cluster into view rather than to the top of the brief. The scroll
+   margin leaves a little room above it so a Cluster's headline is not flush
+   against the edge of the viewport on a phone. */
+.cluster { padding: var(--space-5) 0; border-top: 1px solid var(--color-rule); scroll-margin-top: var(--space-4); }
 .cluster h2 { font-size: var(--text-lg); margin: 0 0 var(--space-3); max-width: var(--measure); }
 .cluster ul { margin: 0 0 var(--space-3); padding-left: var(--space-5); line-height: 1.7; max-width: var(--measure); }
 .cluster li + li { margin-top: var(--space-1); }
@@ -631,6 +639,48 @@ form.hide-source select {
 
 .empty-state { max-width: var(--measure); color: var(--color-text-muted); }
 .empty-state__actions { display: flex; flex-wrap: wrap; gap: var(--space-4); margin-top: var(--space-2); }
+
+/* ---------------------------------------------------------------- the trends */
+/* The chart is a drawing, so it needs no colours a User has to read a label to
+   interpret: the two lines are told apart by weight and dash, which survives a
+   monochrome print and is the one distinction a colour-blind reader does not need
+   the legend for. The legend carries the names, and the table under the chart
+   carries the numbers. */
+.trend-chart { display: block; margin: var(--space-4) 0 var(--space-2); overflow: visible; }
+.trend-chart__axis { stroke: var(--color-border-subtle); stroke-width: 1; }
+.trend-chart__articles { fill: none; stroke: var(--color-primary); stroke-width: 2; stroke-linejoin: round; }
+.trend-chart__stories { fill: none; stroke: var(--color-text-muted); stroke-width: 2; stroke-dasharray: 4 3; stroke-linejoin: round; }
+/* The spike rules sit under the lines so a mark never hides the data it marks. */
+.spike-marker { stroke: var(--color-spike); stroke-width: 1; stroke-dasharray: 2 3; }
+
+.legend { display: flex; flex-wrap: wrap; gap: var(--space-4); list-style: none; padding: 0; margin: 0 0 var(--space-4); font-size: var(--text-sm); color: var(--color-text-muted); }
+.legend li { display: flex; align-items: center; gap: var(--space-2); }
+.legend__swatch { display: inline-block; width: 1.5rem; height: 0; border-top: 2px solid var(--color-primary); }
+.legend__swatch--stories { border-top-style: dashed; border-top-color: var(--color-text-muted); }
+
+.trend-table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); margin: 0 0 var(--space-5); }
+.trend-table caption { text-align: left; color: var(--color-text-muted); padding-bottom: var(--space-2); }
+.trend-table th, .trend-table td { text-align: left; padding: var(--space-1) var(--space-2); border-bottom: 1px solid var(--color-rule); }
+.trend-table td { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* One row per thing that is getting louder: the name, the shape, and the two
+   numbers the shape is evidence for. The sparkline is decoration over them, so it
+   is placed after the name rather than before it, where it would be read first. */
+.entities { list-style: none; padding: 0; margin: 0 0 var(--space-5); }
+.entity { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); padding: var(--space-3) 0; border-bottom: 1px solid var(--color-rule); }
+.entity__name { font-size: var(--text-lg); }
+.entity__mentions { font-size: var(--text-sm); color: var(--color-text-muted); }
+.entity__lift { font-size: var(--text-sm); color: var(--color-success); }
+.sparkline { display: block; flex: none; }
+.sparkline polyline { fill: none; stroke: var(--color-primary); stroke-width: 1.5; stroke-linejoin: round; }
+
+/* What caused each jump. The date is fixed-width because the dates are the thing a
+   reader scans this list for. */
+.spikes { list-style: none; padding: 0; margin: 0 0 var(--space-5); }
+.spikes li { padding: var(--space-2) 0; border-bottom: 1px solid var(--color-rule); font-size: var(--text-sm); display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: baseline; }
+.spike__date { font-variant-numeric: tabular-nums; color: var(--color-text-muted); min-width: 6rem; }
+.spike__size { color: var(--color-text-muted); }
+.spike__clusters { flex: 1 1 16rem; }
 
 /* ------------------------------------------------------------------ spacing */
 @media (min-width: 40rem) {

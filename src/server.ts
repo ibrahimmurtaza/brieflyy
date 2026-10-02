@@ -73,6 +73,10 @@ async function main(): Promise<void> {
     ingestAutoStart: true,
     briefJobAutoStart: config.briefsEnabled,
     briefIntervalMs: config.briefsIntervalMs,
+    // Trends are recomputed because the process is running, not because a User
+    // opened a page. The same argument as the two loops above it, and the reason
+    // the trends page is a read of stored data rather than a measurement.
+    trendsJobAutoStart: true,
   });
 
   installShutdownHandlers(app, driver);

@@ -459,6 +459,13 @@ export interface FeedbackEvent {
   readonly timestamp: Date;
 }
 
+/**
+ * The 7d observation window and the 30d baseline it is compared against.
+ *
+ * Both bounds are half-open and they meet: the baseline ends where the
+ * observation starts, so an Article published at exactly `observationStart` is
+ * counted once, as an observation, and never as a baseline Article as well.
+ */
 export interface TrendWindow {
   readonly observationStart: Date;
   readonly observationEnd: Date;
@@ -466,16 +473,140 @@ export interface TrendWindow {
   readonly baselineEnd: Date;
 }
 
+/**
+ * One UTC day of a Topic's mention volume.
+ *
+ * Articles and Stories are both counted, and they are counted separately because
+ * they answer different questions: Articles is how much was published, Stories is
+ * how much actually happened. Three outlets carrying one story is three Articles
+ * and one Story, and a trend that only showed the first number would call the
+ * loudest week the most eventful one.
+ */
+export interface TrendVolumePoint {
+  /** The UTC day this point covers, as `YYYY-MM-DD`. */
+  readonly date: string;
+  readonly articles: number;
+  /** Distinct Stories among those Articles, each counted once. */
+  readonly stories: number;
+}
+
+/**
+ * A day whose mention volume stands out, and the Clusters that arrived on it.
+ *
+ * A trend without a cause is a number with nothing to act on, so the Clusters are
+ * carried with it rather than looked up afterwards: the arrival of a Cluster is
+ * what makes a day's volume jump, and each one is a link to the thing that
+ * happened.
+ */
+export interface TrendSpike {
+  readonly date: string;
+  /** The day's Mention volume — Articles published — so a label can name the jump. */
+  readonly articles: number;
+  readonly clusterIds: readonly ClusterId[];
+}
+
+/** One Entity's mentions inside a Topic, day by day, over the whole measured span. */
+export interface EntityMentions {
+  readonly entityId: EntityId;
+  readonly canonicalName: string;
+  /** Articles in the observation window that named it. */
+  readonly observationMentions: number;
+  /** Articles in the baseline that named it. */
+  readonly baselineMentions: number;
+  readonly daily: readonly { date: string; mentions: number }[];
+}
+
+/**
+ * What the repository measured for one Topic, before anything is decided about it.
+ *
+ * Everything here is a count taken from stored Articles and Clusters. The lift, the
+ * ranking and the tier's cutoff are all computed from this by
+ * `domain/trends.ts`, so the measurement is the only part that has to touch the
+ * database — which is what makes the hourly cadence possible.
+ */
+export interface TopicTrendMeasurement {
+  /** One point per day from the start of the baseline to the end of the observation. */
+  readonly volume: readonly TrendVolumePoint[];
+  readonly entities: readonly EntityMentions[];
+  /** Cluster ids by the day the Cluster arrived, over the same span. */
+  readonly clustersByDay: ReadonlyMap<string, readonly ClusterId[]>;
+}
+
+/**
+ * An Entity whose mention rate has risen against the baseline.
+ *
+ * Carries its own daily series as well as the ratio, because a ratio with nothing
+ * drawn under it is a claim a User cannot check: the sparkline is the evidence for
+ * the number beside it.
+ *
+ * The three figures that come out of the 7d/30d comparison are nullable, and null
+ * is the honest answer for a User whose tier cannot see either window in full. A
+ * free User is shown three days of series and nothing else: shipping them a lift
+ * and a baseline count beside it would describe the month the paywall is holding
+ * back, in three numbers instead of thirty-seven. Null rather than zero because
+ * "not shown to you" and "nothing happened" are different facts.
+ */
 export interface EmergingEntity {
   readonly entityId: EntityId;
   readonly canonicalName: string;
-  readonly lift: number;
+  /**
+   * Observation rate over baseline rate, capped at `MAX_LIFT` so a zero baseline
+   * round-trips through storage. Read `baselineMentions` rather than the number:
+   * an Entity that was never mentioned before has no meaningful multiple.
+   */
+  readonly lift: number | null;
+  /** Articles in the observation window that named it, or null when not shown. */
+  readonly observationMentions: number | null;
+  /** Articles in the baseline that named it, or null when not shown. */
+  readonly baselineMentions: number | null;
+  /** The daily series, cut to whatever this User's tier allows. */
+  readonly daily: readonly { date: string; mentions: number }[];
 }
 
+/**
+ * One Topic's trends, as materialised by the hourly job and read back by every
+ * request that shows them.
+ *
+ * The window travels with it so the page can say which days it is looking at
+ * without asking the clock a question whose answer has since moved on.
+ */
 export interface TopicTrend {
   readonly topicId: TopicId;
   readonly computedAt: Date;
-  readonly volumeOverTime: readonly { date: string; count: number }[];
+  readonly window: TrendWindow;
+  readonly volumeOverTime: readonly TrendVolumePoint[];
+  readonly spikes: readonly TrendSpike[];
+  /** Sorted by lift, loudest first. */
   readonly entities: readonly EmergingEntity[];
+}
+
+/** An Entity that is rising, attributed to the one Topic it rose in most. */
+export interface RollupEntity {
+  readonly entityId: EntityId;
+  readonly canonicalName: string;
+  /** Null when the tier cannot see the baseline it was measured against. */
+  readonly lift: number | null;
+  /**
+   * What the baseline said about it, or null for the same reason. Carried so the
+   * rollup can say "new in this window" the way the per-Topic view does, rather
+   * than printing a capped multiple as though it were a measured ratio.
+   */
+  readonly baselineMentions: number | null;
+  readonly topicId: TopicId;
+  readonly topicSlug: string;
+  readonly topicTitle: string;
+}
+
+/**
+ * Every Topic a User holds, added together.
+ *
+ * Built from the stored per-Topic trends rather than from a fresh measurement, so
+ * the dashboard costs a read and not another pass over every Article.
+ */
+export interface TrendsRollup {
+  readonly window: TrendWindow;
+  readonly volumeOverTime: readonly TrendVolumePoint[];
+  /** Sorted by lift, loudest first, one entry per Entity however many Topics it rose in. */
+  readonly entities: readonly RollupEntity[];
 }
 

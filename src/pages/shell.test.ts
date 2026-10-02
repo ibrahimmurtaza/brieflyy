@@ -34,6 +34,7 @@ const SIGNED_IN_PAGES: readonly (readonly [string, number])[] = [
   ['/topics', 200],
   ['/pick-topics', 200],
   ['/discover', 200],
+  ['/trends', 200],
   ['/onboarding/welcome', 200],
   ['/settings/delivery', 200],
   ['/settings/briefs', 200],
@@ -41,6 +42,7 @@ const SIGNED_IN_PAGES: readonly (readonly [string, number])[] = [
   ['/archive/search', 200],
   ['/admin/briefs', 200],
   ['/topics/probe', 404],
+  ['/topics/probe/trends', 404],
   ['/briefs/probe', 404],
 ];
 
