@@ -23,6 +23,12 @@ import {
 } from '../domain/feedback.js';
 import type { ClusterId, FeedbackScope, FeedbackType, SourceId } from '../domain/types.js';
 import type { BriefSnapshotRepo } from '../repos/brief-snapshot-repo.js';
+import {
+  archiveOffset,
+  type ArchiveSearchService,
+} from '../services/archive-search-service.js';
+import { archiveSearchPage } from '../archive/page.js';
+import { parseArchiveQuery } from '../domain/archive-query.js';
 import type { BriefPlanService } from '../services/brief-plan-service.js';
 import type { TrendsService } from '../services/trends-service.js';
 import {
@@ -30,7 +36,7 @@ import {
   type UnsubscribeService,
 } from '../services/unsubscribe-service.js';
 import { EMAIL_BRIEFS_PATH } from '../services/unsubscribe-links.js';
-import { layout, planLine, clusterAnchor, type ShellAccount } from './layout.js';
+import { layout, planLine, clusterAnchor, type ShellAccount, ARCHIVE_SEARCH_PATH } from './layout.js';
 import { formatHumanTime } from './human-time.js';
 import { resolveShellAccount, shellAccountFor } from './shell.js';
 import { pad2 } from '../domain/timezone.js';
@@ -78,6 +84,17 @@ export interface PageRoutesOptions {
    * that cannot measure anything says so rather than failing.
    */
   readonly trendsService?: TrendsService;
+  /**
+   * What this User can find in their own Archive, and how far back their tier
+   * reaches.
+   *
+   * Required rather than optional for the same reason `feedbackService` is: a
+   * `/archive/search` with nothing behind it renders a search box that answers
+   * nothing, which is the state this work started from. The other two above are
+   * optional only so a caller that mounts the pages without those subsystems still
+   * has the rest of them.
+   */
+  readonly archiveSearchService: ArchiveSearchService;
 }
 
 export async function registerPageRoutes(
@@ -331,12 +348,38 @@ export async function registerPageRoutes(
       );
   });
 
-  fastify.get('/archive/search', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
-    if (!requireAuthPage(req, reply)) return reply;
-    return reply
-      .type('text/html')
-      .send(archiveSearchPage({ account: await shellFor(req) }));
-  });
+  fastify.get<{ Querystring: Record<string, unknown> }>(
+    ARCHIVE_SEARCH_PATH,
+    AUTHENTICATED_ROUTE_CONFIG,
+    async (req, reply) => {
+      if (!requireAuthPage(req, reply)) return reply;
+      // The tier is read from the signed-in User, not from a parameter and not from
+      // the page. A window applied after the rows were read is a window the
+      // repository never applied, and the User's tier is the only thing that knows
+      // how far back their Archive reaches.
+      const viewer = { userId: req.auth.user.id, tier: resolveTier(req.auth.user) };
+      const filter = parseArchiveQuery(req.query);
+      // How many rows into the Archive to start from, decided in one place with the
+      // rest of the paging rather than here, so a bound written for the page cannot
+      // be left out of the route that reads the number off the URL.
+      const offset = archiveOffset(Number(req.query.offset ?? 0));
+      const [results, filters] = await Promise.all([
+        opts.archiveSearchService.search({ viewer, filter, offset }),
+        opts.archiveSearchService.filtersFor(viewer),
+      ]);
+      return reply.type('text/html').send(
+        archiveSearchPage({
+          account: await shellFor(req),
+          viewer,
+          filter,
+          filters,
+          results,
+          offset,
+          retentionDays: entitlementsFor(viewer.tier).archiveRetentionDays,
+        }),
+      );
+    },
+  );
 
   fastify.get('/', PUBLIC_ROUTE_CONFIG, async (_req, reply) => {
     return reply.code(302).header('location', '/signup').send();
@@ -1271,29 +1314,6 @@ function upgradePage(input: {
     <div class="callout callout--paywall">
       <p><strong>Billing isn't connected yet.</strong></p>
       <p>There is nothing to pay with on this page today, so it is not a checkout. It will become one when payments are wired up. Until then free Brieflyy covers 3 topics, and you are using ${used}.</p>
-    </div>
-    <p class="actions"><a class="button" href="/topics">Back to your topics</a></p>`,
-  });
-}
-
-/**
- * `/archive/search` is a route with nothing behind it yet: `ArchiveRepo` is an
- * interface with no implementation, so there is nothing to search. It used to
- * render a bare heading with no navigation, which left a signed-in User on a
- * page with no way out of the application. It is now an honest, styled
- * placeholder that says so and can be left.
- */
-function archiveSearchPage(input: { account: ShellAccount }): string {
-  return layout({
-    title: 'Archive search',
-    width: 'form',
-    account: input.account,
-    activeHref: '/archive/search',
-    body: `    <h1>Archive search</h1>
-    <p class="lede">Search everything Brieflyy has delivered to you, by word or topic.</p>
-    <div class="callout">
-      <p><strong>Search is not switched on yet.</strong></p>
-      <p>Every brief you have been sent is already kept, so this is a matter of putting a search box in front of it. Until then, your topics and their living briefs are where everything lives.</p>
     </div>
     <p class="actions"><a class="button" href="/topics">Back to your topics</a></p>`,
   });

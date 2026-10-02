@@ -4,12 +4,21 @@ import type {
   Account,
   Article,
   ArticleId,
+  BriefPlan,
+  BriefSnapshot,
   Cadence,
   Cluster,
   ClusterId,
   DeliverySettings,
+  Entity,
+  EntityId,
+  FeedbackEvent,
+  FeedbackScope,
+  FeedbackType,
   OnboardingState,
+  Source,
   SourceId,
+  Story,
   StoryId,
   Tier,
   Topic,
@@ -158,10 +167,13 @@ export function makeCluster(input: ClusterFixture): Cluster {
 
 export interface ArticleFixture {
   readonly id: string;
+  readonly sourceId?: string;
   readonly body?: string;
   readonly url?: string;
   readonly title?: string;
-  readonly storyId?: string;
+  readonly publishedAt?: Date;
+  readonly ingestedAt?: Date;
+  readonly storyId?: string | null;
 }
 
 /**
@@ -174,16 +186,151 @@ export interface ArticleFixture {
 export function makeArticle(input: ArticleFixture): Article {
   return {
     id: input.id as ArticleId,
-    sourceId: 'src-a' as SourceId,
+    sourceId: (input.sourceId ?? 'src-a') as SourceId,
     externalId: input.id,
     url: input.url ?? `https://example.com/${input.id}`,
     title: input.title ?? 'A headline',
     body: input.body ?? '',
-    publishedAt: new Date('2026-09-02T10:00:00Z'),
-    ingestedAt: new Date('2026-09-02T10:00:00Z'),
+    publishedAt: input.publishedAt ?? new Date('2026-09-02T10:00:00Z'),
+    ingestedAt: input.ingestedAt ?? new Date('2026-09-02T10:00:00Z'),
     entities: [],
     signature: EMPTY_SIGNATURE,
-    storyId: (input.storyId ?? 'story-1') as StoryId,
+    storyId: (input.storyId === undefined ? 'story-1' : input.storyId) as StoryId | null,
+  };
+}
+
+export interface SourceFixture {
+  readonly id: string;
+  readonly name?: string;
+  readonly slug?: string;
+}
+
+/** A registry Source, with the fields a test cares about left to it. */
+export function makeSource(input: SourceFixture): Source {
+  return {
+    id: input.id as SourceId,
+    slug: input.slug ?? input.id,
+    name: input.name ?? `Source ${input.id}`,
+    homepageUrl: `https://example.com/${input.slug ?? input.id}`,
+    feedUrl: null,
+    lastPolledAt: null,
+    lastSuccessAt: null,
+  };
+}
+
+export interface EntityFixture {
+  readonly id: string;
+  readonly canonicalName?: string;
+  readonly kind?: Entity['kind'];
+}
+
+/** An Entity the corpus has already keyed. */
+export function makeEntity(input: EntityFixture): Entity {
+  return {
+    id: input.id as EntityId,
+    canonicalName: input.canonicalName ?? `Entity ${input.id}`,
+    kind: input.kind ?? 'org',
+  };
+}
+
+export interface StoryFixture {
+  readonly id: string;
+  readonly sourceIds?: readonly string[];
+  readonly firstSeenAt?: Date;
+  readonly lastSeenAt?: Date;
+  readonly firstPublishedAt?: Date;
+  readonly lastPublishedAt?: Date;
+  readonly articleCount?: number;
+}
+
+/** A Story with a published range, which is the part the dedup window needs. */
+export function makeStory(input: StoryFixture): Story {
+  const firstSeenAt = input.firstSeenAt ?? new Date('2026-09-02T09:00:00Z');
+  const lastSeenAt = input.lastSeenAt ?? firstSeenAt;
+  return {
+    id: input.id as StoryId,
+    sourceIds: (input.sourceIds ?? ['src-a']) as readonly SourceId[],
+    signature: EMPTY_SIGNATURE,
+    firstSeenAt,
+    lastSeenAt,
+    published: {
+      first: input.firstPublishedAt ?? firstSeenAt,
+      last: input.lastPublishedAt ?? lastSeenAt,
+    },
+    articleCount: input.articleCount ?? 1,
+  };
+}
+
+export interface BriefPlanFixture {
+  readonly id: string;
+  readonly topicId: string;
+  readonly userId: string;
+  readonly clusterIds?: readonly string[];
+  readonly createdAt?: Date;
+}
+
+/** A BriefPlan over one Topic's Clusters. The parent every snapshot needs. */
+export function makeBriefPlan(input: BriefPlanFixture): BriefPlan {
+  return {
+    id: input.id,
+    topicId: input.topicId as TopicId,
+    userId: input.userId as UserId,
+    createdAt: input.createdAt ?? new Date('2026-09-02T08:00:00Z'),
+    clusterIds: (input.clusterIds ?? []) as readonly ClusterId[],
+  };
+}
+
+export interface BriefSnapshotFixture {
+  readonly id: string;
+  readonly briefPlanId: string;
+  readonly userId: string;
+  readonly topicId: string;
+  readonly createdAt?: Date;
+  readonly html?: string;
+  readonly text?: string;
+}
+
+/**
+ * A BriefSnapshot: the brief as it was sent, in both renderings.
+ *
+ * Both halves are fixtures rather than one derived from the other because the
+ * point of storing both is that they can disagree — that is what "the brief you
+ * were sent" means.
+ */
+export function makeBriefSnapshot(input: BriefSnapshotFixture): BriefSnapshot {
+  return {
+    id: input.id,
+    briefPlanId: input.briefPlanId,
+    userId: input.userId as UserId,
+    topicId: input.topicId as TopicId,
+    createdAt: input.createdAt ?? new Date('2026-09-02T08:00:00Z'),
+    html: input.html ?? '<p>A brief that was sent.</p>',
+    text: input.text ?? 'A brief that was sent.',
+    unsubscribeToken: `unsub-${input.id}`,
+    globalUnsubscribeToken: `global-unsub-${input.id}`,
+  };
+}
+
+export interface FeedbackEventFixture {
+  readonly id: string;
+  readonly userId: string;
+  readonly clusterId: string;
+  readonly feedbackType?: FeedbackType;
+  readonly scope?: FeedbackScope | null;
+  readonly sourceId?: string | null;
+  readonly timestamp?: Date;
+}
+
+/** One signal a User gave on a Cluster. */
+export function makeFeedbackEvent(input: FeedbackEventFixture): FeedbackEvent {
+  return {
+    id: input.id,
+    userId: input.userId as UserId,
+    clusterId: input.clusterId as ClusterId,
+    feedbackType: input.feedbackType ?? 'thumbs_up',
+    scope: input.scope ?? null,
+    sourceId: (input.sourceId ?? null) as SourceId | null,
+    timestamp: input.timestamp ?? new Date('2026-09-02T11:00:00Z'),
   };
 }
 

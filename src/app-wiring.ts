@@ -7,6 +7,4 @@
  * so an unwired service cannot be added silently. Each entry names the ticket
  * that wires the service; the list shrinks to empty as those tickets land.
  */
-export const DEFERRED_SERVICES: Readonly<Record<string, string>> = {
-  ArchiveSearchService: '#49',
-};
+export const DEFERRED_SERVICES: Readonly<Record<string, string>> = {};

@@ -124,7 +124,7 @@ _Avoid_: live, current
 **Retired (Story)**: A Story's state once none of its Clusters is Active. Retired Stories are retained per tier but are not surfaced in new Briefs.
 _Avoid_: dead, expired
 
-**Archive**: The persisted history of Clusters, BriefSnapshots, Stories, and FeedbackEvents beyond their active lifetime. Searchable by the User. Retention is tiered, with BriefSnapshots exempt (retained forever).
+**Archive**: The persisted history of Clusters, BriefSnapshots, Articles, Stories, and FeedbackEvents beyond their active lifetime, held per Topic so it is one User's and no other's. Searchable by the User, by whole words through a full-text index. Retention is tiered, with BriefSnapshots exempt (retained forever).
 _Avoid_: history, log
 
 ### Onboarding & discovery

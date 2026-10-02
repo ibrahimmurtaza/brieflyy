@@ -229,6 +229,38 @@ function renderBriefFact(brief: ShellBrief): string {
   )})</p>`;
 }
 
+/**
+ * The search box every signed-in page carries, and where it leads.
+ *
+ * The Archive is the one thing a User reaches for from anywhere, and a control that
+ * only exists on the Archive's own results page is a control they have to already be
+ * on. It is in the header rather than in the navigation because it is a control and
+ * not a place: seven links already wrap onto two rows on a phone, and a seventh
+ * shape of "go somewhere" beside a box would be one more thing to read past.
+ *
+ * A GET, so a search is a link a User can share, bookmark or come back to, and so
+ * the results page works with no JavaScript at all. It takes `q`, the same field the
+ * results page's own form takes, so arriving here from the box and then narrowing it
+ * further is one form rather than two that have to be kept in step.
+ *
+ * Named "Search archive" rather than "Search" because the results page has a second
+ * button of its own called exactly that, and two controls with one name are one
+ * control to anyone reading the page aloud.
+ *
+ * Only rendered for a signed-in User: the Archive is theirs, and an empty box that
+ * answers "nothing to search" to a visitor who has nothing to search is a control
+ * that cannot do anything.
+ */
+export const ARCHIVE_SEARCH_PATH = '/archive/search';
+
+function renderArchiveSearch(): string {
+  return `    <form class="shell-search" method="GET" action="${ARCHIVE_SEARCH_PATH}" role="search">
+      <label class="visually-hidden" for="shell-search-q">Search your archive</label>
+      <input id="shell-search-q" name="q" type="search" placeholder="Search your archive" autocomplete="off">
+      <button class="quiet" type="submit">Search archive</button>
+    </form>`;
+}
+
 function renderHeader(input: {
   readonly account: ShellAccount | null;
   readonly nav: readonly NavLink[] | null;
@@ -256,6 +288,7 @@ function renderHeader(input: {
     <nav class="site-nav" aria-label="Primary">
       ${links}
     </nav>
+${renderArchiveSearch()}
     <div class="account">
       <div class="account__who">
         <span class="account__email">${escapeHtml(account.email)}</span>

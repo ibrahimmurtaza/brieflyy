@@ -255,13 +255,18 @@ for (const { id, daysAgo } of COVERAGE) {
  *
  * Written on `fusion-energy` rather than `world-news` so that a spec spending the
  * per-Topic token stops a brief no other spec reads.
+ *
+ * `cluster_ids` is comma-joined, which is what `brief-plan-repo.ts` writes and what
+ * `src/db/archive-index.ts` reads it back with. A JSON array here parsed as one id
+ * that matches no Cluster, which is invisible until something reads a brief's
+ * Sources off the plan that wrote it.
  */
 insert(
   `INSERT INTO brief_plans (id, topic_id, user_id, created_at, cluster_ids)
    VALUES ('e2e-brief-plan-1', 'fusion-energy', ?, ?, ?)`,
   USER_ID,
   NOW.getTime() - DAY,
-  '["e2e-cluster-1"]',
+  'e2e-cluster-1',
 );
 insert(
   `INSERT INTO brief_snapshots (id, brief_plan_id, user_id, topic_id, created_at, html, text, unsubscribe_token, global_unsubscribe_token)

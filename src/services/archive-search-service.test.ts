@@ -1,14 +1,31 @@
-import { beforeAll, describe, it, expect } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+
 import { ArchiveSearchService } from './archive-search-service.js';
+import { createTestDb } from '../testing/test-db.js';
+import {
+  makeBriefPlan,
+  makeBriefSnapshot,
+  makeCluster,
+  makeSource,
+  makeTopic,
+  makeUser,
+} from '../testing/fixtures.js';
 import { tierOfPersistedUser } from '../testing/tier.js';
+import { DrizzleArchiveRepo } from '../repos/archive-repo.js';
+import { DrizzleBriefPlanRepo } from '../repos/brief-plan-repo.js';
+import { DrizzleBriefSnapshotRepo } from '../repos/brief-snapshot-repo.js';
+import { DrizzleClusterRepo } from '../repos/cluster-repo.js';
+import { DrizzleSourceRepo } from '../repos/source-repo.js';
+import { DrizzleTopicRepo } from '../repos/topic-repo.js';
+import { DrizzleUserRepo } from '../repos/user-repo.js';
+import type { Db } from '../db/client.js';
 import type { Tier } from '../domain/types.js';
 
 /**
  * The tier comes from a User that was written to a database and read back, not
- * from a literal in the test. A paywall that only works when the branch is
- * reached by hand is not a paywall.
+ * from a literal in the test. A paywall that only works when the branch is reached
+ * by hand is not a paywall.
  */
-const tier: Record<Tier, Tier> = { free: 'free', paid: 'paid' };
 let free: Tier;
 let paid: Tier;
 
@@ -17,113 +34,133 @@ beforeAll(async () => {
   paid = await tierOfPersistedUser('paid');
 });
 
+const NOW = new Date('2026-09-25T00:00:00Z');
+const fixedClock = { now: () => new Date(NOW) };
+
 describe('ArchiveSearchService', () => {
-  it('enforces 30-day window for free tier on clusters', async () => {
-    const svc = new ArchiveSearchService({
-      tier: free,
-      now: new Date('2026-09-25T00:00:00Z'),
-      archiveItems: [
-        { kind: 'cluster', id: 'c-old', createdAt: new Date('2026-08-01T00:00:00Z') },
-        { kind: 'cluster', id: 'c-new', createdAt: new Date('2026-09-20T00:00:00Z') },
-      ],
-    });
-    const results = svc.search({ query: '' });
-    expect(results.items.map((i) => i.id)).toContain('c-new');
-    expect(results.items.map((i) => i.id)).not.toContain('c-old');
+  let db: Db;
+  let clusters: DrizzleClusterRepo;
+  let snapshots: DrizzleBriefSnapshotRepo;
+
+  const ids = (items: readonly { readonly kind: string; readonly id: string }[]): string[] =>
+    items.map((i) => `${i.kind}:${i.id}`).sort();
+
+  function service(tier: Tier): ArchiveSearchService {
+    return new ArchiveSearchService({ archiveRepo: new DrizzleArchiveRepo(db), clock: fixedClock });
+  }
+
+  async function search(tier: Tier, filter: Parameters<ArchiveSearchService['search']>[0]['filter']): Promise<readonly { kind: string; id: string }[]> {
+    const results = await service(tier).search({ viewer: { userId: 'user-1', tier }, filter });
+    return results.items;
+  }
+
+  beforeEach(async () => {
+    const created = createTestDb();
+    db = created.db;
+    clusters = new DrizzleClusterRepo(db);
+    snapshots = new DrizzleBriefSnapshotRepo(db);
+    const plans = new DrizzleBriefPlanRepo(db);
+    const sources = new DrizzleSourceRepo(db);
+    const topics = new DrizzleTopicRepo(db);
+
+    await new DrizzleUserRepo(db).insert(makeUser({ id: 'user-1', onboardingState: 'completed' }));
+    await sources.insert(makeSource({ id: 'src-a' }));
+    await topics.insert(makeTopic({ id: 'topic-1', userId: 'user-1', title: 'Fusion' }));
+    await topics.insertTopicSource('topic-1' as never, 'src-a', 0);
+    await plans.insert(makeBriefPlan({ id: 'plan-1', topicId: 'topic-1', userId: 'user-1' }));
+
+    await clusters.insert(
+      makeCluster({
+        id: 'c-old',
+        topicId: 'topic-1',
+        title: 'Old',
+        createdAt: new Date('2026-08-01T00:00:00Z'),
+      }),
+    );
+    await clusters.insert(
+      makeCluster({
+        id: 'c-new',
+        topicId: 'topic-1',
+        title: 'New',
+        sourceIds: ['src-a'],
+        createdAt: new Date('2026-09-20T00:00:00Z'),
+      }),
+    );
+    await snapshots.insert(
+      makeBriefSnapshot({
+        id: 'snap-old',
+        briefPlanId: 'plan-1',
+        userId: 'user-1',
+        topicId: 'topic-1',
+        createdAt: new Date('2020-01-01T00:00:00Z'),
+        text: 'A brief from a long time ago.',
+      }),
+    );
   });
 
-  it('always includes BriefSnapshots regardless of tier and age', () => {
-    const snapshot = {
-      kind: 'snapshot' as const,
-      id: 'snap-old',
-      createdAt: new Date('2026-01-01T00:00:00Z'),
-    };
-    for (const [name, t] of Object.entries({ free, paid })) {
-      const svc = new ArchiveSearchService({
-        tier: t,
-        now: new Date('2026-09-25T00:00:00Z'),
-        archiveItems: [snapshot],
-      });
-      expect(
-        svc.search({ query: '' }).items.map((i) => i.id),
-        `${name} tier drops a BriefSnapshot`,
-      ).toContain('snap-old');
-    }
+  it('leaves a free User everything older than thirty days, and keeps their briefs', async () => {
+    expect(ids(await search(free, {}))).toEqual([
+      'cluster:c-new',
+      'snapshot:snap-old',
+    ]);
   });
 
-  it('paid tier returns all archive items regardless of age', () => {
-    const svc = new ArchiveSearchService({
-      tier: paid,
-      now: new Date('2026-09-25T00:00:00Z'),
-      archiveItems: [
-        { kind: 'cluster', id: 'c-old', createdAt: new Date('2026-01-01T00:00:00Z') },
-      ],
-    });
-    const results = svc.search({ query: '' });
-    expect(results.items.map((i) => i.id)).toContain('c-old');
+  it('leaves a paid User their whole Archive, however old', async () => {
+    expect(ids(await search(paid, {}))).toEqual([
+      'cluster:c-new',
+      'cluster:c-old',
+      'snapshot:snap-old',
+    ]);
   });
 
-  it('filters by entity', () => {
-    const svc = new ArchiveSearchService({
-      tier: paid,
-      now: new Date('2026-09-25T00:00:00Z'),
-      archiveItems: [
-        { kind: 'cluster', id: 'c1', entities: ['Tesla'], createdAt: new Date('2026-09-20T00:00:00Z') },
-        { kind: 'cluster', id: 'c2', entities: ['Apple'], createdAt: new Date('2026-09-20T00:00:00Z') },
-      ],
+  it('measures the window from the clock it was given, not from the machine’s', async () => {
+    // The service is handed a clock so the boundary is a fact about the request
+    // rather than about when the test happened to be run. Thirty days before this
+    // clock is after `c-old`, which a clock a month later would not be.
+    const early = new ArchiveSearchService({
+      archiveRepo: new DrizzleArchiveRepo(db),
+      clock: { now: () => new Date('2026-08-15T00:00:00Z') },
     });
-    const results = svc.search({ entity: 'Tesla' });
-    expect(results.items.map((i) => i.id)).toEqual(['c1']);
+    const results = await early.search({ viewer: { userId: 'user-1', tier: free }, filter: {} });
+
+    expect(ids(results.items)).toEqual([
+      'cluster:c-new',
+      'cluster:c-old',
+      'snapshot:snap-old',
+    ]);
   });
 
-  it('filters by date range', () => {
-    const svc = new ArchiveSearchService({
-      tier: paid,
-      now: new Date('2026-09-25T00:00:00Z'),
-      archiveItems: [
-        { kind: 'cluster', id: 'c1', createdAt: new Date('2026-09-10T00:00:00Z') },
-        { kind: 'cluster', id: 'c2', createdAt: new Date('2026-09-20T00:00:00Z') },
-      ],
-    });
-    const results = svc.search({ from: new Date('2026-09-15T00:00:00Z') });
-    expect(results.items.map((i) => i.id)).toEqual(['c2']);
+  it('narrows by everything the filter carries', async () => {
+    expect(ids(await search(paid, { query: 'Old' }))).toEqual(['cluster:c-old']);
   });
 
-  it('returns empty state when no archive data', () => {
-    const svc = new ArchiveSearchService({
-      tier: free,
-      now: new Date('2026-09-25T00:00:00Z'),
-      archiveItems: [],
-    });
-    const results = svc.search({ query: '' });
-    expect(results.items).toHaveLength(0);
+  it('says how many matched rather than only how many are shown', async () => {
+    const results = await service(paid).search({ viewer: { userId: 'user-1', tier: paid }, filter: {} });
+
+    expect(results.total).toBe(3);
   });
 
-  it('searches text across cluster summaries and snapshot html', () => {
-    const svc = new ArchiveSearchService({
-      tier: paid,
-      now: new Date('2026-09-25T00:00:00Z'),
-      archiveItems: [
-        { kind: 'cluster', id: 'c1', summary: 'Tesla earnings rise', createdAt: new Date('2026-09-20T00:00:00Z') },
-        { kind: 'snapshot', id: 'snap1', html: '<p>Apple earnings fall</p>', createdAt: new Date('2026-09-20T00:00:00Z') },
-      ],
-    });
-    const teslaResults = svc.search({ query: 'Tesla' });
-    expect(teslaResults.items.map((i) => i.id)).toContain('c1');
+  it('offers the filters this User already holds', async () => {
+    const filters = await service(paid).filtersFor({ userId: 'user-1', tier: paid });
 
-    const appleResults = svc.search({ query: 'Apple' });
-    expect(appleResults.items.map((i) => i.id)).toContain('snap1');
+    expect(filters.topics.map((t) => t.title)).toEqual(['Fusion']);
+    expect(filters.sources.map((s) => s.id)).toEqual(['src-a']);
   });
 
-  it('keeps a snapshot the caller named on a free user who is otherwise cut off', () => {
-    const svc = new ArchiveSearchService({
-      tier: tier.free,
-      now: new Date('2026-09-25T00:00:00Z'),
-      archiveItems: [
-        { kind: 'cluster', id: 'c-ancient', createdAt: new Date('2020-01-01T00:00:00Z') },
-        { kind: 'snapshot', id: 'snap-ancient', createdAt: new Date('2020-01-01T00:00:00Z') },
-      ],
+  it('offers nothing a free User cannot reach', async () => {
+    // Every Cluster in this database is older than the free window except one, and
+    // a filter for something with nothing behind it is a link to an empty page.
+    const filters = await service(free).filtersFor({ userId: 'user-1', tier: free });
+
+    expect(filters.topics.map((t) => t.title)).toEqual(['Fusion']);
+  });
+
+  it('has nothing to say to a User with no Archive at all', async () => {
+    const results = await service(paid).search({
+      viewer: { userId: 'nobody', tier: paid },
+      filter: {},
     });
-    expect(svc.search({}).items.map((i) => i.id)).toEqual(['snap-ancient']);
+
+    expect(results).toEqual({ items: [], total: 0 });
   });
 });
