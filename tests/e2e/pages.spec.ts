@@ -53,6 +53,8 @@ test.describe('every page a signed-in User can reach', () => {
     ['/archive/search', 'Archive search'],
     ['/upgrade', 'Upgrade to paid'],
     ['/discover', 'Discover'],
+    ['/trends', 'Trends'],
+    [`/topics/${E2E_TOPIC_SLUG}/trends`, 'World news trends'],
   ];
 
   for (const [url, heading] of PAGES) {
@@ -72,7 +74,7 @@ test.describe('every page a signed-in User can reach', () => {
 
 test.describe('the shell', () => {
   test('every signed-in page has the same navigation, and it can be left', async ({ signedInPage: page }) => {
-    for (const url of ['/topics', '/pick-topics', '/discover', '/archive/search', '/upgrade', '/settings/briefs', '/settings/delivery']) {
+    for (const url of ['/topics', '/pick-topics', '/discover', '/trends', '/archive/search', '/upgrade', '/settings/briefs', '/settings/delivery']) {
       await page.goto(url);
       const nav = page.getByRole('navigation', { name: 'Primary' });
       await expect(nav, `${url} has no primary navigation`).toBeVisible();
@@ -85,9 +87,9 @@ test.describe('the shell', () => {
 
   test('every signed-in page can reach topic management', async ({ signedInPage: page }) => {
     // "Manage topics" lived on /topics and on the LivingBrief before the shell
-    // existed, and went missing with the per-page navigation they carried. This
-    // is the check that says it is not allowed to go missing again.
-    for (const url of ['/topics', '/topics/world-news', '/settings/briefs', '/settings/delivery', '/upgrade', '/archive/search', '/discover']) {
+    // existed, and went missing with the per-page navigation they carried. This is
+    // the check that says it is not allowed to go missing again.
+    for (const url of ['/topics', '/topics/world-news', '/settings/briefs', '/settings/delivery', '/upgrade', '/archive/search', '/discover', '/trends', '/topics/world-news/trends']) {
       await page.goto(url);
       const link = page
         .getByRole('navigation', { name: 'Primary' })
@@ -161,7 +163,7 @@ test.describe('the pages that used to be broken on a phone', () => {
   // A missing viewport meta tag made the browser lay out at a nominal 980px and
   // scale the result down, which is invisible to a request-injection test and
   // obvious here.
-  const PAGES = ['/signup', '/topics', '/pick-topics', '/settings/briefs', '/settings/delivery', '/upgrade'];
+  const PAGES = ['/signup', '/topics', '/pick-topics', '/settings/briefs', '/settings/delivery', '/upgrade', '/trends', `/topics/${E2E_TOPIC_SLUG}/trends`];
 
   for (const url of PAGES) {
     test(`${url} has no horizontal scroll`, async ({ signedInPage: page }) => {

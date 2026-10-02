@@ -21,7 +21,11 @@ personalized brief feed with insights and visual trends.
       Stories and Articles, and used to order the LivingBrief. See ADR-0004.
 - [ ] [10] BriefPlan + scheduled BriefSnapshot
 - [x] **[11]** LLM summary for BriefSnapshot top-N
-- [ ] [12] Trends view (per-Topic)
+- [x] **[12]** Trends view (per-Topic) — `GET /topics/:slug/trends` and the
+      across-your-topics `GET /trends`, both in the shell, plus the rollup on the
+      dashboard. Measured on an hourly cadence and stored; the tier's cutoff is
+      applied server-side and is visible in `/api/topics/:slug/trends`. See
+      ADR-0015.
 - [x] **[13]** DiscoverTab + Recommendations — `GET /discover` in the shell, with
       Recommendations scored on Entity and Source overlap and trending computed
       from mention volume over a stated window. See ADR-0014.
@@ -248,8 +252,10 @@ src/
 ├── onboarding/            # OnboardingService (Directory → Topics) + HTTP routes
 ├── pages/                 # placeholder HTML routes (signup, onboarding, ...)
 ├── services/              # clustering, BriefPlan/Snapshot, the written summary
-│                          # client, the daily brief job, and the unsubscribe
-│                          # state that job honours
+│                          # client, the daily brief job, the trends layer, and
+│                          # the unsubscribe state that job honours
+├── trends/                # the trends view: inline-SVG chart + sparklines, the
+│                          # per-Topic and across-your-topics pages, HTTP routes
 │
 └── testing/               # test-only helpers (test DB, deterministic clock)
 ```
@@ -268,7 +274,8 @@ The system has a small number of seams where behaviour is plugged in:
 | `RandomSource`   | `bytes()`, `uuid()`      | `nodeRandom`, `deterministicRandom`         |
 | `EnvSource`      | `Record<string, string?>` | `process.env`, a plain object in tests      |
 | `afterCycle`     | `run(report)`            | `ClusterFormationService`                    |
-| Scheduler loop  | `IntervalLoop`           | the ingest loop, the daily brief job      |
+| Scheduler loop  | `IntervalLoop`           | the ingest loop, the daily brief job, the trends job |
+| `TrendsRepo`    | `measure`, `find*`, `save` | `DrizzleTrendsRepo` — counts only, never an ordering |
 Tests at the `AuthService` seam use real SQLite (in-memory), a fake clock, a
 fake random source, and a `ConsoleEmailTransport`. Tests at the HTTP seam use
 Fastify's `inject()` against the same `createApp` factory. The summary client is
@@ -278,14 +285,16 @@ and asserts what a brief cost instead of what a brief was sent.
 
 ### Background jobs
 
-Two loops run for the life of the process and both stop on it. `IngestScheduler`
+Three loops run for the life of the process and all three stop on it. `IngestScheduler`
 polls every Source a Topic names (ADR-0003); `ScheduledBriefService` answers each
 User's daily-Cadence Topics for the DeliverySlot they are owed (ADR-0011), except
-any the User or the Topic has unsubscribed from (ADR-0012). Both
+any the User or the Topic has unsubscribed from (ADR-0012); `TrendsService`
+recomputes every Topic's trends from stored Articles on an hourly cadence, so a page
+that shows a trend is reading a row rather than measuring one (ADR-0015). All three
 ride on `IntervalLoop`, so closing the application wakes them out of their wait and
-waits for the work in flight before the database is closed. Both are configurable
-(`INGEST_*`, `BRIEFS_*`) and both report what they last did to a signed-in User at
-`/admin/ingest` and `/admin/briefs`.
+waits for the work in flight before the database is closed. The first two are
+configurable (`INGEST_*`, `BRIEFS_*`) and both report what they last did to a
+signed-in User at `/admin/ingest` and `/admin/briefs`.
 
 ## Tests
 
@@ -306,3 +315,26 @@ build when the shape of the system drifts:
 
 The rest cover the auth and OAuth flows, onboarding, ingest, delivery settings,
 the repositories, the migration runner, and the rate limiter.
+
+The browser suite is separate because it needs a Chromium download:
+
+```bash
+pnpm test:e2e:install
+pnpm test:e2e
+```
+
+## CI
+
+`.github/workflows/ci.yml` runs on every pull request and on every push to
+`main`, on Node 22 with the pnpm version pinned in `packageManager`. It has three
+jobs, all three required on `main`:
+
+| Job | Runs |
+| --- | --- |
+| `verify` | `pnpm typecheck`, `pnpm test`, `pnpm secrets:check` |
+| `build` | `pnpm build` |
+| `e2e` | `playwright install --with-deps chromium`, then `pnpm test:e2e` |
+
+No job needs a `.env`: the vitest suite and the Playwright fixture server each
+build their own throwaway SQLite database. Failed e2e runs upload `test-results/`
+so the traces Playwright records on the first retry are downloadable.

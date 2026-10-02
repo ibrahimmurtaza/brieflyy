@@ -1,11 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 
-import { type Topic, type TopicTemplate, type Cluster, type Tier } from '../domain/types.js';
+import { type Topic, type TopicTemplate, type Cluster, type Tier, type TrendsRollup } from '../domain/types.js';
 import {
   MAX_CLUSTER_WINDOW_DAYS,
   MIN_CLUSTER_WINDOW_DAYS,
 } from '../domain/cluster-window.js';
-import { resolveTier, topicCapFor } from '../domain/tier.js';
+import { resolveTier, topicCapFor, entitlementsFor } from '../domain/tier.js';
 import { escapeHtml } from '../domain/html.js';
 import { titleKey } from '../domain/slug.js';
 import { INITIAL_TOPIC_COUNT } from '../onboarding/onboarding-service.js';
@@ -24,15 +24,17 @@ import {
 import type { ClusterId, FeedbackScope, FeedbackType, SourceId } from '../domain/types.js';
 import type { BriefSnapshotRepo } from '../repos/brief-snapshot-repo.js';
 import type { BriefPlanService } from '../services/brief-plan-service.js';
+import type { TrendsService } from '../services/trends-service.js';
 import {
   isEmailStopped,
   type UnsubscribeService,
 } from '../services/unsubscribe-service.js';
 import { EMAIL_BRIEFS_PATH } from '../services/unsubscribe-links.js';
-import { layout, planLine, type ShellAccount } from './layout.js';
+import { layout, planLine, clusterAnchor, type ShellAccount } from './layout.js';
 import { formatHumanTime } from './human-time.js';
 import { resolveShellAccount, shellAccountFor } from './shell.js';
 import { pad2 } from '../domain/timezone.js';
+import { rollupBlock, TRENDS_PATH } from '../trends/page.js';
 import {
   AUTHENTICATED_ROUTE_CONFIG,
   PUBLIC_ROUTE_CONFIG,
@@ -68,6 +70,14 @@ export interface PageRoutesOptions {
    * without a brief path can still have the rest of them.
    */
   readonly unsubscribeService?: UnsubscribeService;
+  /**
+   * The across-your-topics rollup on the dashboard.
+   *
+   * Optional for the same reason `briefPlanService` is: a caller that mounts the
+   * pages without a trends service still has the rest of them, and a dashboard
+   * that cannot measure anything says so rather than failing.
+   */
+  readonly trendsService?: TrendsService;
 }
 
 export async function registerPageRoutes(
@@ -336,14 +346,22 @@ export async function registerPageRoutes(
     if (!requireAuthPage(req, reply)) return reply;
     const topics = await opts.onboardingService.listTopics(req.auth.user.id);
     const cap = await opts.onboardingService.topicCapForUser(req.auth.user.id);
+    const tier = resolveTier(req.auth.user);
+    // The rollup is added to the dashboard rather than being a page of its own
+    // only: "what is getting louder" is the question a User opens Brieflyy with,
+    // and the list of Topics is the answer to "what am I reading", not to that.
+    const rollup = opts.trendsService
+      ? await opts.trendsService.rollupFor({ topics, tier })
+      : null;
     return reply
       .type('text/html')
       .send(
         homePage({
           account: await shellFor(req),
           topics,
-          tier: resolveTier(req.auth.user),
+          tier,
           atCap: topics.length >= cap,
+          ...(rollup === null ? {} : { rollup }),
         }),
       );
   });
@@ -1286,6 +1304,8 @@ function homePage(input: {
   topics: readonly Topic[];
   tier: Tier;
   atCap: boolean;
+  /** Every Topic's volume added together, when a trends service is mounted. */
+  rollup?: TrendsRollup;
 }): string {
   const cap = topicCapFor(input.tier);
   // The tier's own name from the shell's table, so the topic list and the header
@@ -1319,6 +1339,17 @@ function homePage(input: {
       <p class="muted">You haven't picked any topics yet. <a href="/pick-topics">Pick your topics to get started</a>.</p>
     </div>`
     : '';
+  // Nothing to roll up before a Topic exists, and a section heading over an empty
+  // Topic list is a claim that would be false.
+  const trends = input.topics.length > 0 && input.rollup
+    ? `    <section>
+${rollupBlock({
+      rollup: input.rollup,
+      headingLevel: 2,
+    })}
+      <p class="actions"><a href="${TRENDS_PATH}">All trends</a></p>
+    </section>`
+    : '';
   return layout({
     title: 'Your topics',
     width: 'default',
@@ -1331,7 +1362,8 @@ ${atCapHtml}
 ${emptyState}
     <ul class="topics">
 ${rows}
-    </ul>`,
+    </ul>
+${trends}`,
   });
 }
 
@@ -1457,7 +1489,7 @@ ${signalButtons}
           return `<a href="${escapeHtml(filterHref)}" class="source">${escapeHtml(name)}</a>`;
         })
         .join('\n        ');
-      return `      <article class="cluster">
+      return `      <article class="cluster" id="${escapeHtml(clusterAnchor(c.id))}">
         <h2>${escapeHtml(c.summary || c.title)}</h2>
         <div class="hide-row">${feedbackButtons}${hideLink}</div>
         ${bullets}
@@ -1479,6 +1511,13 @@ ${signalButtons}
     ? ''
     : `${escapeHtml(input.topic.category)} &middot; `;
   const count = `${input.clusters.length} active cluster${input.clusters.length === 1 ? '' : 's'}`;
+  // The way into the trends view, from the one page a User is already on when
+  // something starts getting louder. It was reachable from the navigation and from
+  // nowhere a User would go looking for it, which is the same failure the shell
+  // fixed for topic management.
+  const trendsLink = `    <p class="actions"><a href="/topics/${escapeHtml(
+    input.topicSlug,
+  )}/trends">Trends for this topic</a></p>`;
   return layout({
     title: input.topic.title,
     width: 'reading',
@@ -1487,6 +1526,7 @@ ${signalButtons}
     body: `    <h1>${safeTitle}</h1>
     <p class="lede">${category}${count}</p>
 ${briefActions}
+${trendsLink}
 ${sourceFilterBar}
 ${emptyState}
 ${rows}
@@ -1795,7 +1835,7 @@ function humanFeedbackReason(status: string): string {
  * never a vulnerability, but it is a URL path echoed for no product reason, and
  * the copy below says the same thing without it.
  */
-function notFoundPage(account: ShellAccount, what = 'That topic'): string {
+export function notFoundPage(account: ShellAccount, what = 'That topic'): string {
   return layout({
     title: 'Not found',
     width: 'form',

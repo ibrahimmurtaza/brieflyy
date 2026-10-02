@@ -101,11 +101,20 @@ _Avoid_: schedule, frequency
 
 ### Trends
 
-**TrendWindow**: A 7d observation window compared against a prior 30d baseline, used to compute entity-level lift for a Topic.
+**TrendWindow**: A 7d observation window compared against a prior 30d baseline, used to compute entity-level lift for a Topic. Half-open at both ends, and they meet: an Article published exactly where the baseline ends is observed, not baselined, so nothing is counted twice.
 _Avoid_: window, period
 
-**EmergingEntity**: An Entity whose mention rate within a Topic's Articles shows significant lift in the current TrendWindow vs the prior baseline. Surfaced in the trends view and the "across your topics" rollup.
+**EmergingEntity**: An Entity whose mention rate within a Topic's Articles shows significant lift in the current TrendWindow vs the prior baseline. Surfaced in the trends view and the "across your topics" rollup, carrying its own daily mention-rate series — a ratio with nothing drawn under it is a claim a User cannot check.
 _Avoid_: trending topic, hot entity
+
+**TopicTrend**: One Topic's measured trends, materialised and stored rather than computed per request. Recomputed on an hourly cadence, so the chart, the annotations and the Entity list all describe the same measurement taken at the same instant; a page that measured on every read would answer three different questions.
+_Avoid_: trend report, analytics snapshot
+
+**Trends spike**: A day whose mention volume stands well above the average, together with the Clusters that arrived on it. The Clusters are carried with it rather than looked up afterwards, because a jump with nothing behind it cannot be acted on.
+_Avoid_: anomaly, outlier, event
+
+**Trends rollup**: Every Topic a User holds, added together, from the stored TopicTrends rather than from a fresh measurement. One Entity however many of their Topics it rose in.
+_Avoid_: dashboard stats, summary
 
 ### State
 

@@ -4,6 +4,7 @@
   "private": true,
   "description": "Brieflyy: aggregated, clustered, AI-summarized topic briefs.",
   "type": "module",
+  "packageManager": "pnpm@10.24.0",
   "engines": {
     "node": ">=20"
   },

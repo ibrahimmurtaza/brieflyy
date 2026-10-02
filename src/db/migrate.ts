@@ -203,6 +203,20 @@ CREATE TABLE IF NOT EXISTS cluster_stories (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS cluster_stories_pk ON cluster_stories (cluster_id, story_id);
 
+CREATE TABLE IF NOT EXISTS topic_trends (
+  id TEXT PRIMARY KEY NOT NULL,
+  topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+  computed_at INTEGER NOT NULL,
+  observation_start INTEGER NOT NULL,
+  observation_end INTEGER NOT NULL,
+  baseline_start INTEGER NOT NULL,
+  baseline_end INTEGER NOT NULL,
+  volume TEXT NOT NULL DEFAULT '[]',
+  spikes TEXT NOT NULL DEFAULT '[]',
+  entities TEXT NOT NULL DEFAULT '[]'
+);
+CREATE UNIQUE INDEX IF NOT EXISTS topic_trends_topic_unique ON topic_trends (topic_id);
+
 CREATE TABLE IF NOT EXISTS feedback_events (
   id TEXT PRIMARY KEY NOT NULL,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
