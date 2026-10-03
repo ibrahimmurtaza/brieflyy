@@ -51,10 +51,12 @@ pnpm install          # install dependencies
 pnpm dev              # start the server with --env-file=.env
 pnpm start            # start the server
 pnpm typecheck        # run tsc --noEmit
-pnpm test             # run the test suite (Vitest)
+pnpm test             # run the unit and HTTP suite (Vitest)
 pnpm test:watch       # vitest --watch
+pnpm test:e2e:install # fetch the Chromium the browser suite drives (once)
+pnpm test:e2e         # run the browser suite (Playwright)
 pnpm secrets:check    # fail if a credential-shaped value is staged for commit
-pnpm verify           # typecheck + test + secrets:check
+pnpm verify           # typecheck + test + test:e2e + secrets:check
 pnpm build            # compile to ./dist
 ```
 
@@ -339,9 +341,41 @@ the repositories, the migration runner, and the rate limiter.
 The browser suite is separate because it needs a Chromium download:
 
 ```bash
-pnpm test:e2e:install
+pnpm test:e2e:install   # once per machine
 pnpm test:e2e
 ```
+
+It drives the real application on a throwaway SQLite file, so a change to the
+markup, the stylesheet or a page's behaviour has somewhere to fail that an
+injected request cannot reach: no viewport, no reflow, no focus ring, no target
+size, and no reading of what a page actually says. It is part of `pnpm verify`,
+so a change that breaks a page fails the same command as one that breaks a
+service. CI keeps it in its own job rather than folding it into `verify`, so the
+Chromium download is not on the path of every other check there.
+
+Specs run in parallel against that one server and database, three viewports at a
+time. Anything a spec changes is therefore given a User of its own rather than
+being shared: the specs that record a signal or send a brief have their own
+account and their own Topics, and the specs that spend a single-use unsubscribe
+token have one account per viewport, because a token that is single-use by design
+cannot be spent by three of them at once. `tests/e2e/server.ts` holds the fixtures
+and says why each User is there; `tests/e2e/harness-routes.ts` holds the six
+routes the specs lean on; `tests/e2e/fixture-data.ts` holds the ids and tokens the
+two agree on, and the viewport list the Playwright config builds its projects from.
+
+Those routes are the only part of the test harness that is an HTTP surface, and
+they are deliberately not in `src/`. `src/http/route-guard.test.ts` enumerates the
+routes `createApp` registers and fails on one that declares no access level, and
+`PUBLIC_ROUTES` in `src/http/access.ts` is the allowlist of what an anonymous
+caller may reach in a deployed instance; neither should know about a test
+affordance, and a route in `src/` that un-spends an unsubscribe token would be a
+way to spend it twice in production. They are also outside the guard because they
+are registered on the instance `createApp` returned, which is after the guard has
+walked it. Every one of them that can touch a User's data is scoped by the session
+cookie through the application's own auth hook. `/e2e/mailbox` is the exception,
+and it is why this server only ever runs against a throwaway database in the OS
+temp directory: it answers with a sign-in token to anyone who asks, with no session
+at all.
 
 ## CI
 

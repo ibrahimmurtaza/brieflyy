@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 
 import { createApp } from '../app.js';
 import { ConsoleEmailTransport } from '../email/console-transport.js';
+import { INITIAL_TOPIC_COUNT } from '../onboarding/onboarding-service.js';
 import { createTestDb } from '../testing/test-db.js';
 import { extractMagicLinkToken } from '../testing/email.js';
 import {
@@ -45,6 +46,93 @@ describe('HTTP: /topics', () => {
     expect(resp.statusCode).toBe(302);
     expect(resp.headers.location).toBe('/signup');
   });
+
+  it('says so, rather than showing a list of nothing, to a User with no Topics', async () => {
+    const { app: signedIn, cookie } = await signInFresh();
+    try {
+      const resp = await signedIn.inject({
+        method: 'GET',
+        url: '/topics',
+        headers: { cookie },
+      });
+      expect(resp.statusCode).toBe(200);
+      expect(resp.body).toContain("You haven't picked any topics yet");
+      // The way out of an empty page is the whole point of it: a User who has
+      // nothing has to be able to go and get something.
+      expect(resp.body).toContain('href="/pick-topics"');
+      // And no row pretending one of them exists.
+      expect(resp.body).not.toContain('<ul class="topics">\n\n</ul>');
+    } finally {
+      await signedIn.close();
+    }
+  });
+
+  it('lists each of the signed-in User\'s Topics, linked to its LivingBrief', async () => {
+    // The page a User opens Brieflyy to see. The assertions that stood behind it
+    // were all about the layout around it or about the tier, so the one thing the
+    // page exists to do (each of their Topics is on it, and each one is a way into
+    // its LivingBrief) had nothing of its own at this seam.
+    const { app: signedIn, cookie } = await signInOnboarded(3);
+    try {
+      const resp = await signedIn.inject({
+        method: 'GET',
+        url: '/topics',
+        headers: { cookie },
+      });
+      expect(resp.statusCode).toBe(200);
+
+      const held = [...resp.body.matchAll(/<a href="\/topics\/([^"]+)">([^<]+)<\/a>/g)].map(
+        (m) => ({ slug: m[1]!, title: m[2]! }),
+      );
+      expect(held).toHaveLength(3);
+      // Every entry is a link into that Topic, so the count is not a list of
+      // strings: a page that named three Topics and linked to none would pass a
+      // test that only looked for the titles.
+      for (const entry of held) {
+        const brief = await signedIn.inject({
+          method: 'GET',
+          url: `/topics/${entry.slug}`,
+          headers: { cookie },
+        });
+        expect(brief.statusCode, `${entry.slug} is listed but does not open`).toBe(200);
+        expect(brief.body).toContain(entry.title);
+      }
+    } finally {
+      await signedIn.close();
+    }
+  });
+
+  it('leaves another User\'s Topics off the list', async () => {
+    const { app: signedIn, transport, cookie } = await signInOnboarded();
+    try {
+      const before = await signedIn.inject({
+        method: 'GET',
+        url: '/topics',
+        headers: { cookie },
+      });
+      const slugs = [...before.body.matchAll(/href="\/topics\/([^"]+)"/g)].map((m) => m[1]!);
+      expect(slugs.length).toBeGreaterThan(0);
+
+      // A second User, signed in through the same application, who has picked
+      // nothing. The page they land on is empty, and the first User's Topics are
+      // not in it.
+      const other = await signInOn({ app: signedIn, transport, email: 'owen@example.com' });
+      const after = await signedIn.inject({
+        method: 'GET',
+        url: '/topics',
+        headers: { cookie: other },
+      });
+      expect(after.statusCode).toBe(200);
+      expect(after.body).toContain("You haven't picked any topics yet");
+      for (const slug of slugs) {
+        expect(after.body, `${slug} leaked to another User`).not.toContain(
+          `href="/topics/${slug}"`,
+        );
+      }
+    } finally {
+      await signedIn.close();
+    }
+  });
 });
 
 describe('HTTP: /topics/:slug', () => {
@@ -65,21 +153,84 @@ describe('HTTP: /topics/:slug', () => {
   });
 });
 
-async function signInFresh(): Promise<{ app: FastifyInstance; cookie: string }> {
-  const { app, transport } = await makeTestApp();
-  await app.inject({
+/**
+ * One address, signed in the way a person signs in: a magic link asked for, read
+ * back out of the mail it produced, and opened.
+ *
+ * The mail is read rather than the row written because the seam these tests are
+ * about is the route. A session inserted straight into the table would leave the
+ * half of the path a User actually walks untested everywhere it is used.
+ */
+async function signInOn(input: {
+  readonly app: FastifyInstance;
+  readonly transport: ConsoleEmailTransport;
+  readonly email: string;
+}): Promise<string> {
+  await input.app.inject({
     method: 'POST',
     url: '/auth/magic-link/request',
-    payload: { email: 'iris@example.com' },
+    payload: { email: input.email },
   });
-  const token = extractMagicLinkToken(transport.snapshot()[0]!.text);
-  const verify = await app.inject({
+  // The last message, not the first: a second address on the same application
+  // has a magic link of its own behind the first.
+  const token = extractMagicLinkToken(input.transport.snapshot().at(-1)!.text);
+  const verify = await input.app.inject({
     method: 'GET',
     url: `/auth/magic-link/verify?token=${encodeURIComponent(token)}`,
   });
   const setCookie = verify.headers['set-cookie'];
   const setCookieText = Array.isArray(setCookie) ? setCookie[0]! : setCookie!;
-  return { app, cookie: setCookieText.split(';')[0]! };
+  return setCookieText.split(';')[0]!;
+}
+
+async function signInFresh(): Promise<{
+  app: FastifyInstance;
+  transport: ConsoleEmailTransport;
+  cookie: string;
+}> {
+  const { app, transport } = await makeTestApp();
+  return { app, transport, cookie: await signInOn({ app, transport, email: 'iris@example.com' }) };
+}
+
+async function firstTemplateIds(app: FastifyInstance, count: number): Promise<string[]> {
+  const resp = await app.inject({ method: 'GET', url: '/api/onboarding/templates' });
+  return (resp.json() as { templates: { id: string }[] }).templates
+    .slice(0, count)
+    .map((t) => t.id);
+}
+
+/**
+ * A signed-in User past onboarding, so none of the pages redirect them away on
+ * arrival.
+ *
+ * At module scope rather than inside one describe because three suites need it,
+ * and a helper that has to be copied to be reachable from each is a helper whose
+ * copies can drift apart.
+ */
+async function signInOnboarded(
+  count = INITIAL_TOPIC_COUNT,
+): Promise<{
+  app: FastifyInstance;
+  transport: ConsoleEmailTransport;
+  cookie: string;
+}> {
+  const made = await signInFresh();
+  await made.app.inject({
+    method: 'POST',
+    url: '/onboarding/pick-topics',
+    headers: { cookie: made.cookie },
+    payload: { templateIds: await firstTemplateIds(made.app, count) },
+  });
+  await made.app.inject({
+    method: 'POST',
+    url: '/onboarding/delivery-time',
+    headers: {
+      cookie: made.cookie,
+      'content-type': 'application/x-www-form-urlencoded',
+    },
+    payload: 'hour=8&minute=0&timezone=UTC',
+  });
+  return made;
 }
 
 describe('HTTP: /upgrade', () => {
@@ -151,34 +302,6 @@ describe('HTTP: /upgrade', () => {
 describe('HTTP: navigation', () => {
   let app: FastifyInstance;
   let cookie: string;
-
-  /** A signed-in User past onboarding, so none of these redirect on arrival. */
-  async function signInOnboarded(): Promise<{ app: FastifyInstance; cookie: string }> {
-    const made = await signInFresh();
-    await made.app.inject({
-      method: 'POST',
-      url: '/onboarding/pick-topics',
-      headers: { cookie: made.cookie },
-      payload: { templateIds: await firstTemplateIds(made.app, 3) },
-    });
-    await made.app.inject({
-      method: 'POST',
-      url: '/onboarding/delivery-time',
-      headers: {
-        cookie: made.cookie,
-        'content-type': 'application/x-www-form-urlencoded',
-      },
-      payload: 'hour=8&minute=0&timezone=UTC',
-    });
-    return made;
-  }
-
-  async function firstTemplateIds(app: FastifyInstance, count: number): Promise<string[]> {
-    const resp = await app.inject({ method: 'GET', url: '/api/onboarding/templates' });
-    return (resp.json() as { templates: { id: string }[] }).templates
-      .slice(0, count)
-      .map((t) => t.id);
-  }
 
   const get = (url: string) =>
     app.inject({ method: 'GET', url, headers: { cookie } });

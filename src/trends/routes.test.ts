@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 
 import { createApp } from '../app.js';
@@ -260,6 +260,60 @@ describe('GET /topics/:slug/trends', () => {
 
   it('sends an anonymous visitor to sign in', async () => {
     const res = await h.app.inject({ method: 'GET', url: '/topics/world-news/trends' });
+    expect(res.statusCode).toBe(302);
+    expect(res.headers.location).toBe('/signup');
+  });
+});
+
+/**
+ * The across-your-topics page, at the HTTP seam.
+ *
+ * Everything this page renders was covered by calling the page function with a
+ * hand-built rollup, which cannot say whether the route reaches it. That is the
+ * whole of the gap the browser suite had to fill for it: this route had an
+ * injected test for the per-Topic trends page above and none for this one, so a
+ * render failure here would have failed nothing at all.
+ */
+describe('GET /trends', () => {
+  let h: Harness;
+
+  beforeEach(async () => {
+    h = await harness();
+  });
+
+  afterEach(async () => {
+    await h.app.close();
+  });
+
+  it('renders the rollup and a way into the Topic it came from', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/trends',
+      headers: { cookie: h.cookie },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain('Trends');
+    // The chart, named for a reader who cannot see it, with the numbers beside it.
+    expect(res.body).toContain('<svg class="trend-chart"');
+    expect(res.body).toContain('role="img"');
+    expect(res.body).toContain(ENTITY);
+    // And the way down into the per-Topic page, which is the only thing on this
+    // page a User can act on.
+    expect(res.body).toContain('href="/topics/world-news/trends"');
+  });
+
+  it('marks itself as the current page in the shell', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/trends',
+      headers: { cookie: h.cookie },
+    });
+    expect(res.body).toMatch(/<a href="\/trends" aria-current="page">Trends<\/a>/);
+  });
+
+  it('sends an anonymous visitor to sign in', async () => {
+    const res = await h.app.inject({ method: 'GET', url: '/trends' });
     expect(res.statusCode).toBe(302);
     expect(res.headers.location).toBe('/signup');
   });
