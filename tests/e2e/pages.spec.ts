@@ -246,11 +246,12 @@ test.describe('the LivingBrief', () => {
     }
   });
 
-  // Read-only on purpose. Every project runs against one seeded server and one
-  // database, and these specs run in parallel, so a test that recorded a signal
-  // would change the brief the other two viewports are asserting about. What a
-  // signal *does* is covered at the HTTP seam in `src/pages/topic-page.test.ts`,
-  // where each test has its own database.
+  // Read-only on purpose, and no longer the only coverage. Every project runs
+  // against one seeded server and one database, and these specs run in parallel,
+  // so a test here that recorded a signal would change the brief the other two
+  // viewports are asserting about. `feedback.spec.ts` presses the controls, on a
+  // User of their own, and `src/pages/topic-page.test.ts` covers what a signal
+  // does at the HTTP seam, where each test has its own database.
   test('says what a signal would do, before any has been given', async ({ signedInPage: page }) => {
     await page.goto('/topics/world-news');
 
