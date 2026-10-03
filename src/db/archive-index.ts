@@ -37,14 +37,30 @@ type RowsFrom = (where: string) => string;
 /** The columns of `archive_items`, in the order every write names them. */
 const COLUMNS = 'kind, item_id, topic_id, source_ids, entity_ids, created_at, title, body, url';
 
-/** One Cluster. Its Entities are the Entities of the Articles underneath it. */
-const clusterRows: RowsFrom = (where) => `
-  SELECT 'cluster', c.id, c.topic_id, c.source_ids,
-    COALESCE((SELECT group_concat(DISTINCT ae.entity_id)
+/**
+ * The Entities of every Article a Cluster holds, comma-joined.
+ *
+ * Written once because two kinds of row need it: a Cluster carries the Entities of the
+ * reporting underneath it, and a FeedbackEvent is a signal about that same Cluster and
+ * so carries them too. Byte-identical as they were, which is what makes the join worth
+ * having in one place rather than two that a fix to it would not reach.
+ *
+ * `DISTINCT` because a brief's Clusters overlap, so an Entity several Articles share
+ * would otherwise be listed once per Article — and the Archive's filter compares the
+ * list whole, so a duplicate changes nothing but the size of the row.
+ */
+function clusterEntityIds(cluster: string): string {
+  return `COALESCE((SELECT group_concat(DISTINCT ae.entity_id)
       FROM cluster_stories cs
       JOIN articles a ON a.story_id = cs.story_id
       JOIN article_entities ae ON ae.article_id = a.id
-      WHERE cs.cluster_id = c.id), ''),
+      WHERE cs.cluster_id = ${cluster}), '')`;
+}
+
+/** One Cluster. Its Entities are the Entities of the Articles underneath it. */
+const clusterRows: RowsFrom = (where) => `
+  SELECT 'cluster', c.id, c.topic_id, c.source_ids,
+    ${clusterEntityIds('c.id')},
     c.created_at, c.title, c.summary || ' ' || c.bullet_points, ''
   FROM clusters c
   WHERE ${where}`;
@@ -82,11 +98,7 @@ const snapshotRows: RowsFrom = (where) => `
  */
 const feedbackRows: RowsFrom = (where) => `
   SELECT 'feedback', f.id, c.topic_id, c.source_ids,
-    COALESCE((SELECT group_concat(DISTINCT ae.entity_id)
-      FROM cluster_stories cs
-      JOIN articles a ON a.story_id = cs.story_id
-      JOIN article_entities ae ON ae.article_id = a.id
-      WHERE cs.cluster_id = c.id), ''),
+    ${clusterEntityIds('c.id')},
     f.timestamp, c.title, c.summary, ''
   FROM feedback_events f JOIN clusters c ON c.id = f.cluster_id
   WHERE ${where}`;
@@ -111,9 +123,18 @@ const articleRows: RowsFrom = (where) => `
  * A Story with an Active Cluster is not Retired, so it is not indexed. It is on the
  * LivingBrief already, and listing it here would put a category in the Archive whose
  * own definition excludes it.
+ *
+ * Distinct, because the join is one row per Cluster and a Story spans Sources
+ * (ADR 0010), so a dedup Story is normally held by more than one Cluster of the same
+ * Topic. The Archive is keyed by (kind, item, topic), so those rows collide on insert
+ * and the write throws — which is the cluster formation that put the second Cluster
+ * there failing, not the Archive being asked to hold two of something. Every other
+ * column is a function of the Story and the Topic, so the duplicates are identical and
+ * collapsing them costs nothing: one Topic's Retired Story is one row however many
+ * Clusters are still holding it.
  */
 const storyRows: RowsFrom = (where) => `
-  SELECT 'story', s.id, c.topic_id,
+  SELECT DISTINCT 'story', s.id, c.topic_id,
     COALESCE((SELECT group_concat(DISTINCT a.source_id) FROM articles a WHERE a.story_id = s.id), ''),
     COALESCE((SELECT group_concat(DISTINCT ae.entity_id)
       FROM articles a JOIN article_entities ae ON ae.article_id = a.id

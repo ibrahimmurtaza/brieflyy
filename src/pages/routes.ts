@@ -5,7 +5,7 @@ import {
   MAX_CLUSTER_WINDOW_DAYS,
   MIN_CLUSTER_WINDOW_DAYS,
 } from '../domain/cluster-window.js';
-import { resolveTier, topicCapFor, entitlementsFor } from '../domain/tier.js';
+import { resolveTier, topicCapFor } from '../domain/tier.js';
 import { escapeHtml } from '../domain/html.js';
 import { titleKey } from '../domain/slug.js';
 import { INITIAL_TOPIC_COUNT } from '../onboarding/onboarding-service.js';
@@ -375,7 +375,9 @@ export async function registerPageRoutes(
           filters,
           results,
           offset,
-          retentionDays: entitlementsFor(viewer.tier).archiveRetentionDays,
+          // Asked of the service rather than of the tier table, so the sentence on
+          // the page and the window on the rows come from one reading of the tier.
+          retentionDays: opts.archiveSearchService.retentionDaysFor(viewer),
         }),
       );
     },
