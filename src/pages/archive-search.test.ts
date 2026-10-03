@@ -192,6 +192,37 @@ describe('HTTP: /archive/search', () => {
     expect(res.body).toContain('Cluster');
   });
 
+  it('dates every result, in the zone the User keeps their hours in', async () => {
+    // Set to a zone where UTC would give a visibly wrong reading, so a page that
+    // formatted in UTC cannot pass by accident: 23:30 UTC is the next day in Tokyo.
+    harness.driver
+      .prepare(
+        `INSERT INTO delivery_settings (user_id, hour, minute, timezone, updated_at)
+         VALUES (?, 8, 0, 'Asia/Tokyo', 1)
+         ON CONFLICT(user_id) DO UPDATE SET timezone = 'Asia/Tokyo'`,
+      )
+      .run(harness.userId);
+    await clusters.insert(
+      makeCluster({
+        id: 'cluster-1',
+        topicId: harness.topicId,
+        title: 'A regulator opens an inquiry',
+        createdAt: new Date('2026-02-20T23:30:00Z'),
+      }),
+    );
+
+    const res = await get('/archive/search?q=regulator');
+
+    // The Archive is ordered newest-first and has no date filter applied, so the one
+    // result is this one. A result nobody can place in time is half a result — and
+    // note the day is the 21st: 23:30 UTC is already tomorrow in Tokyo, so a page
+    // that formatted in UTC would print "Thu, 20 Feb at 23:30" and fail here.
+    expect(res.body).toContain('Sat, 21 Feb at 08:30');
+    // And the frame it is in, because a clock reading on its own is a claim without
+    // one — the same spelling and the same labelled zone as every other page.
+    expect(res.body).toContain('Asia/Tokyo');
+  });
+
   it('says when a search found nothing', async () => {
     await clusters.insert(
       makeCluster({

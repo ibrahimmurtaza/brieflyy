@@ -363,9 +363,10 @@ export async function registerPageRoutes(
       // rest of the paging rather than here, so a bound written for the page cannot
       // be left out of the route that reads the number off the URL.
       const offset = archiveOffset(Number(req.query.offset ?? 0));
-      const [results, filters] = await Promise.all([
+      const [results, filters, settings] = await Promise.all([
         opts.archiveSearchService.search({ viewer, filter, offset }),
         opts.archiveSearchService.filtersFor(viewer),
+        opts.onboardingService.getDeliveryTime(req.auth.user.id),
       ]);
       return reply.type('text/html').send(
         archiveSearchPage({
@@ -378,6 +379,10 @@ export async function registerPageRoutes(
           // Asked of the service rather than of the tier table, so the sentence on
           // the page and the window on the rows come from one reading of the tier.
           retentionDays: opts.archiveSearchService.retentionDaysFor(viewer),
+          // The User's own zone, falling back to UTC for a User who has not set a
+          // time, which says nothing about where they are rather than guessing —
+          // the same reading, and the same fallback, as every other dated page.
+          timezone: settings?.timezone ?? 'UTC',
         }),
       );
     },
