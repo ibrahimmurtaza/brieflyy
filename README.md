@@ -30,16 +30,12 @@ ticket number on its own says nothing about whether the code is there.
 | 14 | Archive search + tier enforcement | done | `src/archive/page.ts`, `src/services/archive-search-service.ts`, ADR-0016 |
 
 What "done" means is that the issue is closed, and the issue tracker is where the
-state is decided. The work that followed these fourteen is numbered 32 onwards:
-two prefactors that brought the two schemas and the dead clustering path back into
+state is decided. The work that followed these fourteen is numbered 32 onwards: two
+prefactors that brought the two schemas and the dead clustering path back into
 agreement, and the fixes and features that landed on top of them, including tier
 enforcement, topic settings, the app shell and the browser suite. All of those are
-closed too, and none of them is a product ticket, so they are not rows here.
-
-`src/app-wiring.test.ts` holds this to account for the code rather than the prose:
-every exported `*Service` is either constructed by the entrypoint or `createApp`, or
-named in `DEFERRED_SERVICES` in `src/app-wiring.ts` against a ticket number. That
-list is empty, so nothing in `src/` is built and unwired.
+closed too, and none of them is a product ticket, so they are not rows here. What
+is built and not reachable is a separate question, answered under Architecture.
 
 ## Stack
 
@@ -54,39 +50,47 @@ list is empty, so nothing in `src/` is built and unwired.
 
 ## Commands
 
-Every script in `package.json`, and what each one does. Two of the fifteen exist for
-Drizzle's benefit rather than this application's: they are listed because
+Every script in `package.json`, and what each one does. Two of the fourteen exist
+for Drizzle's benefit rather than this application's: they are listed because
 `src/docs-agreement.test.ts` fails the build on a script that is not documented here,
 not because they are the way to change a database.
 
 ```bash
-pnpm install           # install dependencies
-pnpm dev               # the server under --watch, with --env-file=.env
-pnpm start             # the server, once, with --env-file=.env
-pnpm build             # compile src/ to ./dist
-pnpm typecheck         # tsc --noEmit over src/, test files included
-pnpm test              # the unit and HTTP suite (Vitest)
-pnpm test:watch        # the same suite, watching
-pnpm test:e2e:install  # fetch the Chromium the browser suite drives (once)
-pnpm test:e2e          # the browser suite (Playwright)
-pnpm secrets:check     # fail if a credential-shaped value is staged for commit
-pnpm verify            # typecheck + test + test:e2e + secrets:check
-pnpm db:migrate        # apply the DDL in src/db/migrate.ts to DATABASE_URL
-pnpm db:generate       # writes SQL into ./drizzle that nothing here applies
-pnpm db:push           # drizzle's own diff; drops the Archive index. See below
+pnpm install             # install dependencies
+pnpm dev                 # the server under --watch, with --env-file=.env
+pnpm start               # the server, once, with --env-file=.env
+pnpm build               # compile src/ to ./dist
+pnpm typecheck           # tsc --noEmit over src/, test files included
+pnpm test                # the unit and HTTP suite (Vitest)
+pnpm test:watch          # the same suite, watching
+pnpm test:e2e:install    # fetch the Chromium the browser suite drives (once)
+pnpm test:e2e            # the browser suite (Playwright)
+pnpm secrets:check       # fail if a credential-shaped value is staged for commit
+pnpm verify              # typecheck + test + test:e2e + secrets:check
+pnpm db:migrate          # apply the DDL in src/db/migrate.ts to DATABASE_URL
+pnpm db:generate         # writes SQL into ./drizzle that nothing here applies
+pnpm db:push             # drizzle's own diff; drops the Archive index. See below
 pnpm ingest:check-feeds  # poll every registry feed live; non-zero if one is not ingestible
 ```
 
-`pnpm db:push` is not a way to change a database in this repository, and running it
-against one that matters is how you lose the Archive. It diffs the *declared*
-schema — `src/db/schema.ts` — against the live database, and the Archive's full-text
-table and its twenty-one triggers are not declared there: they live in
-`src/db/archive-index.ts`, because they are DDL rather than a table shape. So the
-diff always wants to drop them, and it asks for confirmation at a terminal, which is
-not there in CI. `pnpm db:generate` is the quieter half of the same gap: it writes a
-migration file under `./drizzle/` (which is gitignored) that no part of this
-application ever applies. `pnpm db:migrate` is the command that applies DDL here, and
-it is the one the "Changing the database schema" section below is about.
+`pnpm db:migrate` is the command that applies DDL, and it is the one the "Changing
+the database schema" section below is about. The other two are no-ops here, and
+saying so is the point:
+
+- `pnpm db:generate` writes a migration file under `./drizzle/` (which is gitignored)
+  that no part of this application ever applies.
+- `pnpm db:push` is not merely a no-op. It diffs the *declared* schema —
+  `src/db/schema.ts` — against a live database, and it diffs tables. The Archive's
+  FTS5 virtual table and its shadow tables are DDL rather than a table shape, so
+  they live in `src/db/archive-index.ts` and are invisible to it; the diff therefore
+  wants to drop them, and leaves the twenty-one triggers that maintain the index
+  referring to a table that is gone. It also asks for confirmation at a terminal,
+  which is not there in CI. Run it against a database you can lose.
+
+Closing either gap means deciding that Drizzle's generated migrations replace
+`src/db/migrate.ts`, which also means moving the Archive's DDL into the declared
+schema or teaching the diff about it. That is a decision about how this repository
+applies DDL, not a documentation fix, and it has not been taken.
 
 `pnpm ingest:check-feeds` is the operator's check that the curated registry is
 ingestible, which is not something a test can assert: a feed URL that 404s or
@@ -97,8 +101,7 @@ reaches the network, so it is the one command here that is not part of
 `pnpm typecheck` covers `src/`, which is where the unit tests live, and not
 `tests/e2e/`: `tsconfig.json` includes only `src/**/*.ts`, and Playwright compiles
 the specs without checking their types, so a type error in a spec is found at run
-time or not at all. That gap is known and is why `pnpm build` is a separate CI job
-rather than part of `pnpm verify`.
+time or not at all.
 
 ## Local setup
 
@@ -309,9 +312,9 @@ src/
 ├── verify/                # staged-credential check, reached only by
 │                          # pnpm secrets:check
 │
-├── archive/               # the archive layer's view: the search results page. Its
-│                          # route is in pages/routes.ts, with the rest of the
-│                          # shell's; its full-text index is in db/archive-index.ts
+├── archive/               # the Archive view: the search results page. Its route is
+│                          # in pages/routes.ts, with the rest of the shell's; its
+│                          # full-text index is in db/archive-index.ts
 ├── billing/               # tier routes: /upgrade and the dev-only POST /dev/tier
 ├── discover/              # the discover layer's view: the DiscoverTab page + routes
 ├── email/                 # EmailTransport seam (Console + Resend)
@@ -320,8 +323,8 @@ src/
 ├── auth/                  # AuthService (orchestration) + HTTP routes
 ├── ingest/                # registry ingest + IngestScheduler (poll every Source)
 │                          # (check-feeds.ts is the operator CLI behind
-│                          # pnpm ingest:check-feeds, and test-constants.ts is a
-│                          # shared fixture the ingest tests import)
+│                          # pnpm ingest:check-feeds; test-constants.ts holds the
+│                          # FeedFetcher doubles the ingest suites import)
 ├── onboarding/            # OnboardingService (Directory → Topics) + HTTP routes
 ├── pages/                 # the shell's HTML routes (signup, onboarding, topics,
 │                          # the LivingBrief, the Archive route, ...)
@@ -342,9 +345,9 @@ src/
 the specs run against; `playwright.config.ts` builds its projects from the viewport
 list in `tests/e2e/fixture-data.ts`.
 
-### The five layers
+### The layers
 
-Three of the five have a directory of their own, and two do not:
+Four of the six have a directory of their own, and two do not:
 
 - **Ingest** — `ingest/`. Polls every Source a Topic names, extracts Entities,
   collapses near-duplicate Articles into Stories, then hands the cycle to
@@ -359,6 +362,9 @@ Three of the five have a directory of their own, and two do not:
   Cluster and the route that records a signal on it go through.
 - **Trends** — `trends/` for the pages and routes, `services/trends-service.ts` and
   `repos/trends-repo.ts` for the measurement, `domain/trends.ts` for the arithmetic.
+- **Discover** — `discover/` for the page and routes, `services/discover-service.ts`
+  for the Recommendations and the trending computation, `repos/discover-repo.ts` for
+  the queries.
 - **Archive** — `archive/page.ts` for the view, `services/archive-search-service.ts`
   for the tier's predicate, `repos/archive-repo.ts` for the query,
   `db/archive-index.ts` for the DDL and the triggers.
@@ -388,8 +394,8 @@ so on the entry rather than leaving it to be found.
 ### Seams
 
 The system has a small number of seams where behaviour is plugged in. Every row is
-an interface something holds rather than something it constructs, and every one of
-them has a double in `src/testing/` or a test of its own.
+something the application holds rather than the behaviour it builds, and each has a
+double in `src/testing/`, a lambda a test supplies, or a test of its own.
 
 | Seam | Interface | Implementations |
 | --- | --- | --- |
@@ -400,13 +406,14 @@ them has a double in `src/testing/` or a test of its own.
 | `Clock` | `now()` | `systemClock`, `makeTestClock` (a `set`/`advance` pair) |
 | `RandomSource` | `bytes()`, `uuid()` | `nodeRandom`, `deterministicRandom` |
 | `EnvSource` | `Readonly<Record<string, string \| undefined>>` | `process.env`, a plain object in tests |
-| `FeedFetcher` | `fetch(feedUrl)` | `HttpFeedFetcher`, or a stub in tests |
+| `FeedFetcher` | `fetch(feedUrl)` | `HttpFeedFetcher`, `StaticFeedFetcher`, `FailingFeedFetcher` |
 | `HttpClient` | `get(url)` | `systemHttpClient`, a `FakeHttp` in the feed tests |
 | `OAuthClient` | `buildAuthorizationUrl()`, `exchangeCode()` | `GoogleOAuthClient`, or absent when `OAUTH_PROVIDER` is unset |
+| `cycleIdFn` | `() => string` | `nodeRandom.uuid()`, or a counting lambda in the ingest tests |
 | `afterCycle` | `run(report)` | `ClusterFormationService`, wired into the ingest loop by `createApp` |
 | The whole ingest loop | `IngestScheduler` | `createApp` builds one from a `FeedFetcher`, or takes the caller's |
-| The trends loop | `TrendsService.runForever()` / `.stop()` | itself, on an `IntervalLoop` |
-| `cycleIdFn` | `() => string` | `nodeRandom.uuid()` |
+| The daily brief job | `ScheduledBriefService.runForever()` / `.stop()` | itself, on an `IntervalLoop` |
+| The trends job | `TrendsService.runForever()` / `.stop()` | itself, on an `IntervalLoop` |
 
 `IntervalLoop` is the one thing underneath the three loops rather than beside them:
 it holds the interval, stops on `app.close()`, and waits for the pass in flight
@@ -439,9 +446,11 @@ signed-in User at `/admin/ingest` and `/admin/briefs`.
 pnpm test
 ```
 
-The suite is eighty-six test files across `src/`, one per module, plus however many
-test cases those files hold — Vitest prints the live figure at the end of every run,
-which is the only count worth writing down. Alongside the behavioural suites, five
+The suite is 86 test files across `src/`, one per module, holding 1,296 cases —
+Vitest prints the live figure at the end of every run. `docs-agreement.test.ts`
+checks the file count and cannot check the case count without running the suite it
+lives in, so that one number is worth reading off a run rather than trusting.
+Alongside the behavioural suites, five
 of the files are guards that fail the build when the shape of the system drifts:
 
 - `app-wiring.test.ts` — every `*Service` is constructed by the application
@@ -469,7 +478,7 @@ pnpm test:e2e:install   # once per machine
 pnpm test:e2e
 ```
 
-It is ten spec files, run once per viewport across three of them, so thirty runs. It
+It is 10 spec files, run once per viewport across three of them, so 30 runs. It
 drives the real application on a throwaway SQLite file, so a change
 to the markup, the stylesheet or a page's behaviour has somewhere to fail that an
 injected request cannot reach: no viewport, no reflow, no focus ring, no target

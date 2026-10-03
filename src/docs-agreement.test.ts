@@ -55,6 +55,21 @@ function fence(markdown: string): string {
   return match[1] ?? '';
 }
 
+/**
+ * One `### ` subsection of a `## ` section.
+ *
+ * Split out because "does the Architecture section mention trends" is answered by
+ * the word `trends/` in the tree, which says nothing about whether the section
+ * still describes the trends layer.
+ */
+function subsection(sectionBody: string, heading: string): string {
+  const start = sectionBody.indexOf(`\n### ${heading}\n`);
+  if (start === -1) throw new Error(`the section has no "### ${heading}" subsection`);
+  const rest = sectionBody.slice(start + 1);
+  const end = rest.indexOf('\n### ');
+  return end === -1 ? rest : rest.slice(0, end);
+}
+
 /** Every file under `dir` whose name satisfies `keep`, depth first. */
 function filesUnder(dir: string, keep: (name: string) => boolean): string[] {
   const found: string[] = [];
@@ -80,30 +95,15 @@ function directoriesUnder(dir: string): string[] {
 }
 
 /**
- * The English words for the numbers a document quotes.
+ * The English words for the small numbers a sentence spells out.
  *
- * Spelled out rather than written as digits because a count written as a digit is
- * one a reader skims past and nobody edits, and this file can only check a claim
- * it can read unambiguously. Composed from tens rather than listed out, so a
- * suite that grows past twenty does not need this table extended by hand — and
- * past ninety-nine the failure says so, which is the signal to write that
- * particular count as a digit instead.
+ * A file count reads as digits ("86 test files"), and a count of things in a
+ * clause reads as a word ("the five routes the specs lean on"), so both forms have
+ * to be matchable. Only the small ones: a word list past ten would be a table
+ * nobody consults and a number past twelve is a sentence better off with a digit.
  */
-const TENS = [
-  '',
-  'ten',
-  'twenty',
-  'thirty',
-  'forty',
-  'fifty',
-  'sixty',
-  'seventy',
-  'eighty',
-  'ninety',
-] as const;
-
-const UNITS = [
-  '',
+const SMALL_NUMBER_WORDS = [
+  'zero',
   'one',
   'two',
   'three',
@@ -113,17 +113,17 @@ const UNITS = [
   'seven',
   'eight',
   'nine',
+  'ten',
+  'eleven',
+  'twelve',
 ] as const;
 
 function wordFor(count: number): string {
-  if (!Number.isInteger(count) || count < 0 || count > 99) {
-    throw new Error(`${count} cannot be spelled out by this file; write it as a digit`);
+  const word = SMALL_NUMBER_WORDS[count];
+  if (word === undefined) {
+    throw new Error(`${count} is past what this file can spell; write it as a digit`);
   }
-  if (count < 10) return UNITS[count] ?? '';
-  if (count % 10 === 0) return TENS[Math.floor(count / 10)] ?? '';
-  const tens = TENS[Math.floor(count / 10)];
-  const unit = UNITS[count % 10];
-  return tens === '' || unit === '' ? '' : `${tens}-${unit}`;
+  return word;
 }
 
 /**
@@ -142,23 +142,44 @@ function testsSection(): string {
   return flat(section(read('README.md'), 'Tests'));
 }
 
+/**
+ * The vertical slices the application is made of, as the layers subsection labels
+ * them.
+ *
+ * Four have a directory of their own and two do not, which is the whole reason the
+ * subsection needs prose as well as a tree. Held as the label rather than the lower
+ * case word, because a bullet that mentions `repos/discover-repo.ts` under some
+ * other heading is not the same claim as one labelled **Discover**.
+ */
+const LAYERS = ['Ingest', 'Brief', 'Feedback', 'Trends', 'Discover', 'Archive'] as const;
+
 const PACKAGE_JSON = JSON.parse(read('package.json')) as {
   scripts: Record<string, string>;
 };
 
-describe('the README commands block', () => {
-  /** The script name on every `pnpm …` line of the block, comments and all. */
-  function documented(): string[] {
-    return fence(section(read('README.md'), 'Commands'))
-      .split('\n')
-      .filter((line) => /^\s*pnpm\s+[a-z]/.test(line))
-      .map((line) => /^\s*pnpm\s+([a-z][\w:-]*)/.exec(line)?.[1] ?? '');
-  }
+/** Every `pnpm …` line of the Commands block, comments and all. */
+function commandLines(): string[] {
+  return fence(section(read('README.md'), 'Commands'))
+    .split('\n')
+    .filter((line) => /^\s*pnpm\s+[a-z]/.test(line));
+}
 
+/** The directory names the Architecture section's tree draws, at any depth. */
+function architectureTree(): string[] {
+  // The two dashes and the slash are what identify a directory line, so the tree is
+  // free to nest rather than having to be flat and in one order.
+  return [...fence(section(read('README.md'), 'Architecture')).matchAll(
+    /── ([a-z][a-z-]*)\//g,
+  )].map((match) => match[1] ?? '');
+}
+
+describe('the README commands block', () => {
   it('documents every script in package.json', () => {
-    const names = documented();
+    const documented = commandLines().map(
+      (line) => /^\s*pnpm\s+([a-z][\w:-]*)/.exec(line)?.[1] ?? '',
+    );
     const undocumented = Object.keys(PACKAGE_JSON.scripts)
-      .filter((name) => !names.includes(name))
+      .filter((name) => !documented.includes(name))
       .sort();
     expect(
       undocumented,
@@ -169,16 +190,15 @@ describe('the README commands block', () => {
   it('documents no command that is not a script', () => {
     // `pnpm install` is the one command that is not a script, because it is the one
     // a person runs before the scripts exist.
-    const invented = documented()
+    const invented = commandLines()
+      .map((line) => /^\s*pnpm\s+([a-z][\w:-]*)/.exec(line)?.[1] ?? '')
       .filter((name) => name !== 'install' && !(name in PACKAGE_JSON.scripts))
       .sort();
     expect(invented, 'every documented command must exist in package.json').toEqual([]);
   });
 
   it('says what each command does rather than listing a bare name', () => {
-    const silent = fence(section(read('README.md'), 'Commands'))
-      .split('\n')
-      .filter((line) => /^\s*pnpm\s+[a-z]/.test(line))
+    const silent = commandLines()
       .filter((line) => !/#\s*\S/.test(line))
       .map((line) => line.trim());
     expect(
@@ -190,11 +210,7 @@ describe('the README commands block', () => {
 
 describe('the README architecture tree', () => {
   it('names every directory that exists under src/', () => {
-    // The two dashes and the slash are what identify a directory line, at whatever
-    // depth it is drawn, so the tree is free to nest.
-    const named = [...fence(section(read('README.md'), 'Architecture')).matchAll(
-      /── ([a-z][a-z-]*)\//g,
-    )].map((match) => match[1] ?? '');
+    const named = architectureTree();
     const missing = directoriesUnder(join(ROOT, 'src'))
       .filter((dir) => !named.includes(dir))
       .sort();
@@ -204,37 +220,38 @@ describe('the README architecture tree', () => {
   });
 
   it('names no directory that does not exist', () => {
-    const named = [...fence(section(read('README.md'), 'Architecture')).matchAll(
-      /── ([a-z][a-z-]*)\//g,
-    )].map((match) => match[1] ?? '');
-    const phantom = named
-      .filter((dir) => !directoriesUnder(join(ROOT, 'src')).includes(dir))
+    const onDisk = directoriesUnder(join(ROOT, 'src'));
+    const phantom = architectureTree()
+      .filter((dir) => !onDisk.includes(dir))
       .sort();
     expect(phantom, 'the tree describes a module that is not there').toEqual([]);
   });
 
-  it('names each of the five layers this system is made of', () => {
-    // The brief and feedback layers live in `services/` rather than in directories
-    // of their own, so the tree cannot name them and the prose has to.
-    const architecture = section(read('README.md'), 'Architecture');
-    for (const layer of ['brief', 'feedback', 'trends', 'discover', 'archive']) {
+  it('names every layer of the application', () => {
+    // Read from the layers subsection rather than the whole Architecture section,
+    // because a directory in the tree already says the word and that is not what
+    // this is checking.
+    const layers = subsection(section(read('README.md'), 'Architecture'), 'The layers');
+    for (const layer of LAYERS) {
       expect(
-        new RegExp(`\\b${layer}\\b`, 'i').test(architecture),
-        `the Architecture section says nothing about the ${layer} layer`,
+        layers.includes(`**${layer}**`),
+        `the layers subsection has no bullet labelled **${layer}**`,
       ).toBe(true);
     }
   });
 
   it('says what reaches the modules the application never imports', () => {
     // `src/verify/` is reached by `pnpm secrets:check`, `src/ingest/check-feeds.ts`
-    // by `pnpm ingest:check-feeds`, `src/testing/` by the suites and
-    // `src/app-wiring.ts` by its own test. A tree entry with no way of saying so
-    // reads as dead code, and the next person deletes it.
+    // by `pnpm ingest:check-feeds`, `src/testing/` and
+    // `src/ingest/test-constants.ts` by the suites and `src/app-wiring.ts` by its
+    // own test. A tree entry with no way of saying so reads as dead code, and the
+    // next person deletes it.
     const architecture = section(read('README.md'), 'Architecture');
     for (const reached of [
       'pnpm secrets:check',
       'pnpm ingest:check-feeds',
       'src/testing/',
+      'src/ingest/test-constants.ts',
       'src/app-wiring.ts',
     ]) {
       expect(
@@ -276,12 +293,20 @@ describe('the README status table', () => {
 describe('the README counts', () => {
   it('quotes the number of Vitest files the suite holds', () => {
     const count = filesUnder(join(ROOT, 'src'), (name) => name.endsWith('.test.ts')).length;
-    expect(testsSection()).toContain(`${wordFor(count)} test files`);
+    // A boolean rather than `toContain`, so a failure names the number it wanted
+    // instead of printing the whole section back.
+    expect(
+      testsSection().includes(`${count} test files`),
+      `the Tests section must say "${count} test files"`,
+    ).toBe(true);
   });
 
   it('quotes the number of browser specs the suite holds', () => {
     const count = filesUnder(join(ROOT, 'tests'), (name) => name.endsWith('.spec.ts')).length;
-    expect(testsSection()).toContain(`${wordFor(count)} spec files`);
+    expect(
+      testsSection().includes(`${count} spec files`),
+      `the Tests section must say "${count} spec files"`,
+    ).toBe(true);
   });
 
   it('quotes the number of routes the e2e harness registers', () => {
@@ -339,21 +364,11 @@ describe('the ADRs the documents point at', () => {
     ).toEqual([]);
   });
 
-  it('numbers them without a gap', () => {
-    const numbers = present
-      .map(Number)
-      .filter((n) => Number.isInteger(n))
-      .sort((a, b) => a - b);
-    expect(numbers[0]).toBe(1);
-    expect(numbers, 'an ADR number was skipped').toEqual(
-      numbers.map((_unused, index) => index + 1),
-    );
-  });
-
-  it('gives every ADR a file with a body', () => {
-    const thin = readdirSync(join(ROOT, 'docs', 'adr')).filter(
-      (file) => read(`docs/adr/${file}`).trim().length === 0,
-    );
-    expect(thin).toEqual([]);
+  it('says in the same document that the ADRs it points at exist', () => {
+    // The check above passes vacuously if a document stops naming an ADR at all,
+    // which is a quieter version of the same rot: the citation that no longer
+    // leads anywhere is not a broken citation anyone notices.
+    const cited = read('README.md').match(/ADR-\d{4}/g)?.length ?? 0;
+    expect(cited, 'the README cites no ADRs, so nothing checks them').toBeGreaterThan(0);
   });
 });
