@@ -27,7 +27,24 @@ interface Harness {
   signedInUser: (email: string, tier?: Tier) => Promise<{ userId: string }>;
 }
 
-async function makeHarness(): Promise<Harness> {
+/**
+ * A repository that watches one method and otherwise behaves exactly as the one
+ * it wraps.
+ *
+ * `Object.create` rather than a spread, because the repository's methods live on
+ * its prototype: an object literal holding its fields would satisfy the type and
+ * fail on the first call that is not one of them.
+ */
+function watching<T extends object>(
+  real: T,
+  overrides: Partial<Record<keyof T, unknown>>,
+): T {
+  return Object.assign(Object.create(Object.getPrototypeOf(real)), real, overrides);
+}
+
+async function makeHarness(
+  options: { readonly wrapTopicRepo?: (repo: DrizzleTopicRepo) => DrizzleTopicRepo } = {},
+): Promise<Harness> {
   resetDeterministic();
   const { db } = createTestDb();
   await applyDirectorySeed(db);
@@ -38,7 +55,7 @@ async function makeHarness(): Promise<Harness> {
   const clock = makeTestClock(new Date('2026-01-01T00:00:00Z'));
   const service = new OnboardingService({
     topicTemplateRepo,
-    topicRepo,
+    topicRepo: options.wrapTopicRepo ? options.wrapTopicRepo(topicRepo) : topicRepo,
     userRepo,
     accountRepo,
     deliverySettingsRepo: new DrizzleDeliverySettingsRepo(db),
@@ -320,6 +337,60 @@ describe('OnboardingService.selectTopics', () => {
 
     const user = await userRepo.getById(userId);
     expect(user!.onboardingState).toBe('not_started');
+  });
+});
+
+describe('OnboardingService creating Topics as one unit', () => {
+  beforeEach(() => {
+    resetDeterministic();
+  });
+
+  it('writes the whole picker submission as one call, not one call per Topic', async () => {
+    // Three Topics the User asked for together are one thing, and only a write
+    // that is one thing can be one thing or none of it: three separate inserts
+    // leave the first two committed when the third is refused.
+    const batches: string[][] = [];
+    const { service, signedInUser, topicRepo } = await makeHarness({
+      wrapTopicRepo: (real) =>
+        watching(real, {
+          insertMany: async (batch: Parameters<DrizzleTopicRepo['insertMany']>[0]) => {
+            batches.push(batch.map((topic) => topic.id));
+            return real.insertMany(batch);
+          },
+        }),
+    });
+    const { userId } = await signedInUser('iris@example.com');
+    const chosen = (await service.listTemplates()).slice(0, 3);
+
+    await service.selectTopics({ userId, templateIds: chosen.map((t) => t.id) });
+
+    expect(batches).toHaveLength(1);
+    expect(batches[0]).toHaveLength(3);
+    expect(await topicRepo.listByUser(userId)).toHaveLength(3);
+  });
+
+  it('leaves the onboarding state where it was when the write fails', async () => {
+    // The other half of the same promise, and the one this layer owns: a User must
+    // never be told they have finished choosing when the Topics they chose are not
+    // there. It is also what left them stuck — the retry would hit the free-tier
+    // cap with Topics they had already half-chosen.
+    const { service, signedInUser, userRepo, topicRepo } = await makeHarness({
+      wrapTopicRepo: (real) =>
+        watching(real, {
+          insertMany: async () => {
+            throw new Error('the write was refused');
+          },
+        }),
+    });
+    const { userId } = await signedInUser('iris@example.com');
+    const chosen = (await service.listTemplates()).slice(0, 3);
+
+    await expect(
+      service.selectTopics({ userId, templateIds: chosen.map((t) => t.id) }),
+    ).rejects.toThrow();
+
+    expect(await topicRepo.listByUser(userId)).toEqual([]);
+    expect((await userRepo.getById(userId))?.onboardingState).toBe('not_started');
   });
 });
 

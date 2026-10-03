@@ -40,6 +40,7 @@ import type { OAuthClient } from './oauth/client.js';
 import { OnboardingService } from './onboarding/onboarding-service.js';
 import { registerOnboardingRoutes } from './onboarding/routes.js';
 import { registerPageRoutes } from './pages/routes.js';
+import { registerTopicSettingsRoutes } from './pages/topic-settings-routes.js';
 import { registerDiscoverRoutes } from './discover/routes.js';
 import { DrizzleDiscoverRepo } from './repos/discover-repo.js';
 import { DrizzleArchiveRepo } from './repos/archive-repo.js';
@@ -66,6 +67,7 @@ import {
 import { registerBriefStatusRoutes } from './services/brief-status-routes.js';
 import { FeedbackService } from './services/feedback-service.js';
 import { ArchiveSearchService } from './services/archive-search-service.js';
+import { TopicSettingsService } from './services/topic-settings-service.js';
 import { TrendsService } from './services/trends-service.js';
 import { registerTrendsRoutes } from './trends/routes.js';
 import { DrizzleTrendsRepo } from './repos/trends-repo.js';
@@ -379,9 +381,15 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
       : { intervalMs: opts.trendsIntervalMs }),
   });
 
-  // What a User can find in their own Archive. Built here rather than at the route
-  // because the tier's window is part of the answer, and a route that assembled the
-  // search itself would be the place the window could be left out.
+  // What one of a User's own Topics is set to: how often it briefs, what it reads
+  // from, and what it is called. Built here rather than at the routes because the
+  // six forms that submit these answers and the page that offers them have to
+  // agree about which values exist — and a route that wrote through the repository
+  // would store a cadence or a Source id nothing had checked.
+  const topicSettingsService = new TopicSettingsService({ topicRepo, sourceRepo });
+
+  // The Archive's own repository. One dependency because reading a User's Archive is
+  // one question about one index, and the tier decides how far back the answer goes.
   const archiveSearchService = new ArchiveSearchService({
     archiveRepo,
     clock,
@@ -434,6 +442,17 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     unsubscribeService,
     trendsService,
     archiveSearchService,
+  });
+
+  // One Topic's settings, as its own workflow: the page and the six forms on it
+  // all resolve a slug against the signed-in User and answer through the one
+  // service, so it is registered beside the pages it is reached from rather than
+  // inside them.
+  await registerTopicSettingsRoutes(app, {
+    onboardingService,
+    topicRepo,
+    sourceRepo,
+    topicSettingsService,
   });
 
   await registerTrendsRoutes(app, {

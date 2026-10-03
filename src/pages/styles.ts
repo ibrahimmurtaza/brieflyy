@@ -405,9 +405,17 @@ input, select, textarea {
   min-height: 2.75rem;
   width: 100%;
 }
-input[type="checkbox"] { width: auto; min-height: 0; margin: 0; }
+input[type="checkbox"], input[type="radio"] { width: auto; min-height: 0; margin: 0; }
 input:disabled, select:disabled { background: var(--color-surface); color: var(--color-text-muted); }
 [aria-invalid="true"] { border-color: var(--color-danger); }
+
+/* A group of controls that belong to one question — the brief schedule is three
+   radios that are one setting. The border and the padding are the browser's
+   default for a fieldset and say nothing about the group; the legend is the only
+   part of it that carries meaning, so it is styled like the rest of the small
+   headings rather than left to the user agent. */
+fieldset { border: 0; padding: 0; margin: 0 0 var(--space-3); }
+legend { padding: 0; font-size: var(--text-sm); color: var(--color-text-subtle); }
 
 /* One button shape, one secondary shape, one quiet shape. */
 button, .button {

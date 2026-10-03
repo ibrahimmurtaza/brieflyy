@@ -115,6 +115,7 @@ CREATE TABLE IF NOT EXISTS topics (
   origin_kind TEXT NOT NULL,
   origin_template_id TEXT REFERENCES topic_templates(id) ON DELETE SET NULL,
   cadence TEXT NOT NULL DEFAULT 'daily',
+  cadence_day TEXT,
   created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
   removed_at INTEGER,
   cluster_window_days INTEGER NOT NULL DEFAULT 7,
@@ -626,6 +627,15 @@ const COLUMN_MIGRATIONS: readonly ColumnMigration[] = [
     table: 'topics',
     column: 'removed_at',
     ddl: `ALTER TABLE topics ADD COLUMN removed_at INTEGER`,
+  },
+  {
+    // The weekday a weekly Cadence briefs on. Nullable and with no default,
+    // because the value is a function of the Cadence beside it rather than a fact
+    // about the column: every row written before this existed is a daily Topic,
+    // which has no weekday, and null is exactly that.
+    table: 'topics',
+    column: 'cadence_day',
+    ddl: `ALTER TABLE topics ADD COLUMN cadence_day TEXT`,
   },
   {
     // How far back this Topic looks when it forms Clusters. The glossary makes

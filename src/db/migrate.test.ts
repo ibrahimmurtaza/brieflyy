@@ -443,6 +443,27 @@ describe('applySchema', () => {
     expect(topics[0]?.cadence).toBe('daily');
   });
 
+  it('adds topics.cadence_day to a database created before the column existed', async () => {
+    const driver = createInMemorySqliteDriver();
+    driver.exec(NO_SNAPSHOT_TEXT_SCHEMA_SQL);
+    driver.prepare(`INSERT INTO users (id) VALUES (?)`).run('user-1');
+    driver
+      .prepare(
+        `INSERT INTO topics (id, user_id, slug, title, blurb, category, origin_kind, cadence, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run('topic-1', 'user-1', 'ai', 'AI', 'AI news', 'technology', 'freeform', 'weekly', 1);
+
+    applySchema(driver);
+
+    const db = createDatabase({ driver });
+    const repo = new DrizzleTopicRepo(db);
+    // Every Topic that predates the column is a daily one, and a daily Topic has
+    // no weekday — so null is the truthful reading rather than a made-up default.
+    const [topic] = await repo.listByUser('user-1');
+    expect(topic?.cadenceDay).toBeNull();
+  });
+
   it('adds topics.removed_at to a database created before soft delete existed', async () => {
     const driver = createInMemorySqliteDriver();
     driver.exec(LEGACY_SCHEMA_SQL);

@@ -305,9 +305,9 @@ and asserts what a brief cost instead of what a brief was sent.
 ### Background jobs
 
 Three loops run for the life of the process and all three stop on it. `IngestScheduler`
-polls every Source a Topic names (ADR-0003); `ScheduledBriefService` answers each
-User's daily-Cadence Topics for the DeliverySlot they are owed (ADR-0011), except
-any the User or the Topic has unsubscribed from (ADR-0012); `TrendsService`
+polls every Source a Topic names (ADR-0003); `ScheduledBriefService` answers each of a
+User's Topics for the DeliverySlot its own Cadence puts it on (ADR-0011), except any
+the User or the Topic has unsubscribed from (ADR-0012); `TrendsService`
 recomputes every Topic's trends from stored Articles on an hourly cadence, so a page
 that shows a trend is reading a row rather than measuring one (ADR-0015). All three
 ride on `IntervalLoop`, so closing the application wakes them out of their wait and

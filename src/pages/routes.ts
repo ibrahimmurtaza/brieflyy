@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+﻿import type { FastifyInstance } from 'fastify';
 
 import { type Topic, type TopicTemplate, type Cluster, type Tier, type TrendsRollup } from '../domain/types.js';
 import {
@@ -56,7 +56,7 @@ export interface PageRoutesOptions {
   /**
    * How a User's signals are recorded and read back. Held rather than reached for
    * through the repository so the page and the write share one answer to "what has
-   * this User already said" — the write path that bypassed the service was how a
+   * this User already said" â€” the write path that bypassed the service was how a
    * signal ended up stored as something the page could not show.
    *
    * Required, unlike the two below: a LivingBrief without it renders buttons that
@@ -438,7 +438,7 @@ export async function registerPageRoutes(
       // Handed to the service as plain strings and validated there, rather than
       // narrowed here. A `type` or `scope` that is not one the glossary names is
       // a submission to refuse, and refusing it is the service's one answer to
-      // "is this a signal" — checking it twice, with the two copies able to
+      // "is this a signal" â€” checking it twice, with the two copies able to
       // disagree, would be the thing to avoid. `scope` is passed through even when
       // it is not one of the two, so an unusable scope is refused rather than
       // quietly stored as `this_topic`.
@@ -499,6 +499,7 @@ export async function registerPageRoutes(
     },
   );
 
+
   fastify.post<{ Params: { slug: string } }>(
     '/topics/:slug/send-brief',
     AUTHENTICATED_ROUTE_CONFIG,
@@ -518,7 +519,7 @@ export async function registerPageRoutes(
       // The daily job already skips a User or a Topic that has unsubscribed, and
       // this is the one path that could get around it: a User who has asked not
       // to be emailed and then presses the button asking to be emailed has not
-      // unsubscribed, they have asked for one. So it is honoured — but the page
+      // unsubscribed, they have asked for one. So it is honoured â€” but the page
       // says what happened instead of silently sending.
       if (
         isEmailStopped({
@@ -564,7 +565,7 @@ export async function registerPageRoutes(
       }
       // The stored document, served as stored. A BriefSnapshot is what was
       // emailed, so rendering it again from today's Clusters would show a
-      // different brief from the one the User received — and the one the call to
+      // different brief from the one the User received â€” and the one the call to
       // action in the email points at.
       return reply.type('text/html').send(snapshot.html);
     },
@@ -603,7 +604,7 @@ export async function registerPageRoutes(
 
       // Two ways a Cluster gets hidden, kept apart because only one of them is
       // undone by dropping the query string. A `?hide=` belongs to this request;
-      // a Feedback hide is stored per User and outlives it — though what Feedback
+      // a Feedback hide is stored per User and outlives it â€” though what Feedback
       // hides is a *Source*, applied to the Articles below rather than to the
       // whole Cluster, which is the difference between disliking one outlet and
       // losing every outlet's account of the same story.
@@ -633,8 +634,8 @@ export async function registerPageRoutes(
         ).filter((a) => !hiddenSourceIds.has(a.sourceId));
         clusterArticles.set(c.id, visible);
         relevance.set(c.id, clusterRelevance(visible, feedback.weightByArticleId));
-        // A Cluster left with no Articles at all — every one of them from a Source
-        // this User has hidden — has nothing of this Topic left to show, so it
+        // A Cluster left with no Articles at all â€” every one of them from a Source
+        // this User has hidden â€” has nothing of this Topic left to show, so it
         // goes. Naming the Source is what makes this a Source-level exclusion: a
         // Cluster carried by two outlets keeps the other one's reporting.
         if (visible.length === 0) clustersWithoutArticles.add(c.id);
@@ -793,7 +794,7 @@ function pickTopicsPage(input: {
   // The same rule, not the whole of it, and it is not the server's whole rule
   // either. The free-form field below has no counterpart here, because the
   // Directory does not list it to offer twice. And `selectTopics`, which handles
-  // the POST from the onboarding screen, does no already-held check at all —
+  // the POST from the onboarding screen, does no already-held check at all â€”
   // `/pick-topics` reaches a User who has not onboarded and lets them add Topics
   // first, so that screen is stricter than its own handler. That asymmetry is
   // pre-existing and it only ever hides a card, so it is left rather than
@@ -869,12 +870,12 @@ function pickTopicsPage(input: {
     : '';
 
   const lede = onboarding
-    ? `Choose exactly ${INITIAL_TOPIC_COUNT} — from the Directory below, your own free-form idea, or a mix.`
+    ? `Choose exactly ${INITIAL_TOPIC_COUNT} â€” from the Directory below, your own free-form idea, or a mix.`
     : remaining === 0
       ? `You are using all ${cap} free topics. Remove one to pick a replacement, or upgrade.`
       : remaining === null
-        ? 'Add as many topics as you like — from the Directory below, your own free-form idea, or a mix.'
-        : `Pick up to ${remaining} more topic${remaining === 1 ? '' : 's'} — from the Directory below, your own free-form idea, or a mix.`;
+        ? 'Add as many topics as you like â€” from the Directory below, your own free-form idea, or a mix.'
+        : `Pick up to ${remaining} more topic${remaining === 1 ? '' : 's'} â€” from the Directory below, your own free-form idea, or a mix.`;
 
   const paywallHtml = locked
     ? `    <div class="callout callout--paywall">You have reached the free-topic limit (${cap}). <a href="/upgrade">Upgrade</a> to add more, or remove a topic to swap it.</div>`
@@ -1538,6 +1539,13 @@ ${signalButtons}
   const trendsLink = `    <p class="actions"><a href="/topics/${escapeHtml(
     input.topicSlug,
   )}/trends">Trends for this topic</a></p>`;
+  // And the way into this Topic's settings, for the same reason: when this topic
+  // is briefing at the wrong time, reading the wrong outlets or not at all, the
+  // User is on this page and nowhere else. A control reachable only from a list of
+  // Topics is a control they have to know exists.
+  const settingsLink = `    <p class="actions"><a href="/topics/${escapeHtml(
+    input.topicSlug,
+  )}/settings">Settings for this topic</a></p>`;
   return layout({
     title: input.topic.title,
     width: 'reading',
@@ -1547,6 +1555,7 @@ ${signalButtons}
     <p class="lede">${category}${count}</p>
 ${briefActions}
 ${trendsLink}
+${settingsLink}
 ${sourceFilterBar}
 ${emptyState}
 ${rows}
@@ -1559,14 +1568,14 @@ ${windowForm}`,
  *
  * Two things were wrong with the single "Hide this source" button it replaces.
  * It named no Source, so there was nothing on the event to say which outlet was
- * meant and the only thing to act on was the Cluster — hiding one outlet's
+ * meant and the only thing to act on was the Cluster â€” hiding one outlet's
  * reporting took every other outlet's reporting of the same story with it. And it
  * had no scope on it, so `global` could never be reached: the field was never
  * rendered, so every hide the route stored was `this_topic`.
  *
  * The two selects say both out loud. The scope's selected option is the scope in
  * force for that Source, so a choice made on one page load is the one the next
- * page load shows — the choice persists because it is read back off the stored
+ * page load shows â€” the choice persists because it is read back off the stored
  * signal rather than kept in the page.
  */
 function hideSourceForm(input: {
@@ -1625,7 +1634,7 @@ ${scopeOptions}
  * How a Scope reads on the page.
  *
  * One table rather than a list at each place a scope is named, so the label a User
- * sees and the value the service checks cannot drift apart — the same reason
+ * sees and the value the service checks cannot drift apart â€” the same reason
  * `FEEDBACK_SCOPES` in the domain is a value and not only a type.
  */
 const FEEDBACK_SCOPE_LABELS: Readonly<Record<FeedbackScope, string>> = {
@@ -1651,7 +1660,7 @@ function newestFirst(
  *
  * A User who wants a brief today should not have to wait for the clock. The form
  * posts to a route that plans the Topic, renders it and emails it, and the page
- * comes back saying so — an email that arrives with nothing said about it is
+ * comes back saying so â€” an email that arrives with nothing said about it is
  * indistinguishable from the scheduler being broken.
  */
 function sendBriefSection(input: {
@@ -1703,7 +1712,7 @@ ${list}`;
  * Four different situations, and conflating any two of them misleads the User
  * about their own Topic. An empty Topic has nothing yet. A Topic whose Clusters
  * have all gone Archived has something, just nothing current. A Topic whose
- * Clusters a Source filter or a Dismiss has removed still has Clusters — saying
+ * Clusters a Source filter or a Dismiss has removed still has Clusters â€” saying
  * "no stories yet" there would tell them their ingest is broken when it is
  * working exactly as asked. And a Topic whose Clusters are left with nothing to
  * show because every Source behind them has been hidden is a fourth thing
@@ -1848,7 +1857,7 @@ function humanFeedbackReason(status: string): string {
 }
 
 /**
- * A thing the User named that is not there — a Topic of theirs, a brief of theirs.
+ * A thing the User named that is not there â€” a Topic of theirs, a brief of theirs.
  *
  * Distinct from `unknownUrlPage` because this one can say what was being looked
  * for. The slug used to be reflected back into the page; it is escaped, so it was

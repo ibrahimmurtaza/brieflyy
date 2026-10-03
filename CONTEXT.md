@@ -23,10 +23,10 @@ _Avoid_: send time, schedule time
 **TopicTemplate**: A curated, shared definition in the Directory. Selecting a TopicTemplate clones it into a per-user Topic.
 _Avoid_: preset, default topic
 
-**Topic**: A user-scoped interest that scopes all aggregation, clustering, and briefing for a single user. Created from a TopicTemplate or from a free-form phrase. Has its own source list, cadence, and feedback history. A Topic a User has unsubscribed from keeps an unsubscribed-at date and stops being emailed; it is not removed, and clearing the date starts it again.
+**Topic**: A user-scoped interest that scopes all aggregation, clustering, and briefing for a single user. Created from a TopicTemplate or from a free-form phrase. Has its own source list, cadence, and feedback history. The Topics a User picks in one submission are created as one all-or-nothing write, so a User is never left holding part of what they asked for. A Topic a User has unsubscribed from keeps an unsubscribed-at date and stops being emailed; it is not removed, and clearing the date starts it again. A removed Topic is gone from the application but keeps its brief history, and its slot in the FreeTier cap goes to a Topic the User picks instead.
 _Avoid_: subject, interest, feed
 
-**Source**: A news outlet or RSS feed in the curated Brieflyy registry. Each Topic has a curated default source list that the user can edit.
+**Source**: A news outlet or RSS feed in the curated Brieflyy registry. Each Topic has a curated default source list that the user can edit — shortened as well as lengthened, and only with Sources the registry has, so the list is the User's without being a list of feeds Brieflyy cannot poll. An edit is read by the next ingest cycle.
 _Avoid_: outlet, publisher, feed (when meaning a Source, not an RSS document)
 
 **Article**: A single ingested document from a Source. The atomic input to the pipeline.
@@ -96,8 +96,11 @@ _Avoid_: reaction, vote. "Signal" is kept for one Feedback, which is how ADR-000
 **FeedbackEvent**: The persisted record of a single piece of Feedback. Carries the FeedbackType, target Cluster, target Scope (this topic only vs global, for HideSource), the Source a HideSource is about, and timestamp. Its Cluster is where the User pressed the button, not what they were saying about; a Cluster can carry several Sources, and HideSource is a statement about one of them.
 _Avoid_: feedback log, reaction record
 
-**Cadence**: A Topic-level schedule — daily, weekly, or never. Evaluated against the User's DeliveryTime. Only daily is implemented, because a weekly Cadence needs a day of the week that a Topic does not have.
+**Cadence**: A Topic-level schedule — daily, weekly, or never. Evaluated against the User's DeliveryTime, so the decision is when a brief goes out rather than how often one is written. A weekly Cadence carries the day of the week it falls on, because "every week" on its own has no answer; a daily or never Cadence carries none. Set on the Topic's own settings page, which is where a User changes what a Topic reads from and what it is called as well.
 _Avoid_: schedule, frequency
+
+**Topic settings**: The one surface per Topic where a User controls its Cadence, its Source list, its name, and whether it exists at all. Four answers about one Topic, on one page reached from its LivingBrief, rather than four places a User has to know about. A Topic's settings are its own: they are resolved by slug against the signed-in User, so a slug that is not theirs is a Topic that does not exist on this account rather than a write against somebody else's row.
+_Avoid_: preferences, topic config
 
 ### Trends
 

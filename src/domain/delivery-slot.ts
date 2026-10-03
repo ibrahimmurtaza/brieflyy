@@ -1,3 +1,4 @@
+import { DEFAULT_WEEKLY_DAY, WEEKDAYS, type Cadence, type Weekday } from './types.js';
 import { partsInTz, zonedTimeToUtcMs, type DeliveryTime } from './timezone.js';
 
 /**
@@ -21,6 +22,88 @@ interface LocalDate {
   readonly year: number;
   readonly month: number;
   readonly day: number;
+}
+
+/**
+ * the DeliverySlot this User is owed a brief for at `now` for a Topic on a given
+ * Cadence, or null when there is none.
+ *
+ * `dueDeliverySlot` answers this for a daily Cadence, and it is the whole of the
+ * daily answer. The two other Cadences are questions about *which* local day the
+ * reading falls on, so they are answered here rather than by a second copy of the
+ * "most recent reading, or yesterday's" rule with a date filter bolted on: a
+ * reading that lands on a day, a day of the week, and a moment in a day are three
+ * separate things, and the daily function already settles the third.
+ *
+ * - `daily` is `dueDeliverySlot` unchanged.
+ * - `weekly` is the most recent DeliverySlot on the weekday the Topic briefs on,
+ *   with the same "or the one before it, if the process was down over that one"
+ *   rule the daily reading has. Which means a weekly Topic whose day has not come
+ *   round yet this week is owed last week's, not nothing: it was on offer, and a
+ *   process that was down is how the last one was missed too. And a weekly Topic
+ *   whose day has not come round *since they asked for a brief at all* is owed
+ *   nothing — there was no earlier reading for them to have missed.
+ * - `never` is never owed anything. That is what the User asked for by choosing
+ *   it, and it is answered here rather than by the caller filtering Topics out,
+ *   so there is one place that knows what a Cadence means.
+ *
+ * The two Cadence arguments are required rather than defaulted, because "daily"
+ * and "no weekday" is the reading of every Topic that existed before the weekday
+ * did — and a defaulted parameter nobody omits is a second, quieter answer to the
+ * same question sitting next to the first.
+ */
+export function dueCadenceSlot(
+  deliveryTime: DeliveryTime,
+  now: Date,
+  recordedAt: Date,
+  cadence: Cadence,
+  cadenceDay: Weekday,
+): DeliverySlot | null {
+  if (cadence === 'never') return null;
+  if (cadence === 'daily') return dueDeliverySlot(deliveryTime, now, recordedAt);
+
+  const today = localDateIn(now, deliveryTime.timezone);
+  const mostRecent = mostRecentLocalWeekday(today, cadenceDay);
+  const slot = slotOnDate(deliveryTime, mostRecent);
+  if (slot.getTime() <= now.getTime()) {
+    return isOwed(slot, now, recordedAt) ? slot : null;
+  }
+  // The coming one's reading is still ahead of the clock, so the one still owed —
+  // if there is one — is the previous reading of the same weekday rather than a
+  // later day this week.
+  const previous = slotOnDate(deliveryTime, previousLocalDate(mostRecent));
+  return isOwed(previous, now, recordedAt) ? previous : null;
+}
+
+/**
+ * The most recent local date on or before `from` that falls on `day`.
+ *
+ * Stepping back a calendar day at a time rather than subtracting seven-day
+ * multiples is what reads the same on both sides of a clock change: a week is
+ * seven days of local dates, not one hundred and sixty-eight hours, and the
+ * latter lands on the wrong weekday for half the year wherever the clocks moved in
+ * between.
+ */
+function mostRecentLocalWeekday(from: LocalDate, day: Weekday): LocalDate {
+  const wanted = WEEKDAYS.indexOf(day);
+  let date = from;
+  // At most six steps: a week contains every weekday exactly once.
+  for (let steps = 0; steps < WEEKDAYS.length && weekdayOf(date) !== wanted; steps++) {
+    date = previousLocalDate(date);
+  }
+  return date;
+}
+
+/**
+ * Which day of the week a local date falls on, in `Date`'s own numbering.
+ *
+ * Read off the calendar date as though it were UTC rather than off an instant in
+ * the User's zone, because the question is about the date and not about a moment:
+ * the eighth of September is a Tuesday whatever timezone it is read in, and
+ * converting it first is how the answer comes back as the eighth's neighbour.
+ */
+function weekdayOf(date: LocalDate): number {
+  return new Date(Date.UTC(date.year, date.month - 1, date.day)).getUTCDay();
 }
 
 /**

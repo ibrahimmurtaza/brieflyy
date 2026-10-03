@@ -282,6 +282,11 @@ describe('RegistryIngestService', () => {
   });
 
   it('picks up edits to a topic\'s source list on the next ingest cycle', async () => {
+    // The User's edit is only real if the pipeline reads it. A cycle decides what
+    // to poll from the Topic's current source list rather than from a list captured
+    // when the process started, so an edit lands on the next cycle rather than the
+    // next restart — and in both directions, because a curated default a User can
+    // add to but not take away from is not theirs to edit.
     const { registry, topicRepo, userRepo } = await buildService({});
     const topicId = await insertTopicWithSources(topicRepo, userRepo, {
       id: 't-edit',
@@ -291,10 +296,37 @@ describe('RegistryIngestService', () => {
     const r1 = await registry.ingestOnce();
     expect(r1.sources.map((r) => r.sourceId)).toEqual(['reuters']);
 
-    await topicRepo.insertTopicSource(topicId, 'the-guardian', 1);
+    await topicRepo.addSource(topicId, 'the-guardian');
     const r2 = await registry.ingestOnce();
-    const ids = r2.sources.map((r) => r.sourceId).sort();
-    expect(ids).toEqual(['reuters', 'the-guardian']);
+    expect(r2.sources.map((r) => r.sourceId).sort()).toEqual(['reuters', 'the-guardian']);
+
+    await topicRepo.removeSource(topicId, 'reuters');
+    const r3 = await registry.ingestOnce();
+    expect(r3.sources.map((r) => r.sourceId)).toEqual(['the-guardian']);
+  });
+
+  it('stops clustering a removed source for the topic it was removed from', async () => {
+    // The Articles are still in the database — they are the Archive's, and the
+    // Archive is retained per tier — but a Topic that no longer follows an outlet
+    // must stop clustering it, or removing a Source only changes what is polled
+    // and not what the brief is made of. `storiesForTopic` is the read the
+    // clustering loop actually makes, so this is asserted on that one.
+    const { registry, topicRepo, userRepo } = await buildService({});
+    const topicId = await insertTopicWithSources(topicRepo, userRepo, {
+      id: 't-removed',
+      userId: 'user-a',
+      sourceIds: ['reuters', 'the-guardian'],
+    });
+    await registry.ingestOnce();
+    expect((await registry.storiesForTopic(topicId)).map((s) => s.sourceIds[0]).sort()).toEqual([
+      'reuters',
+      'the-guardian',
+    ]);
+
+    await topicRepo.removeSource(topicId, 'reuters');
+
+    const stories = await registry.storiesForTopic(topicId);
+    expect(stories.map((s) => s.sourceIds)).toEqual([['the-guardian']]);
   });
 
   it('counts failures in totals when a source fails to fetch', async () => {

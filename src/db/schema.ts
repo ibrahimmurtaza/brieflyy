@@ -8,6 +8,8 @@ import {
   index,
 } from 'drizzle-orm/sqlite-core';
 
+import { WEEKDAYS } from '../domain/types.js';
+
 export const users = sqliteTable(
   'users',
   {
@@ -227,6 +229,16 @@ export const topics = sqliteTable(
     cadence: text('cadence', { enum: ['daily', 'weekly', 'never'] })
       .notNull()
       .default('daily'),
+    /**
+     * The weekday a weekly Cadence briefs on, and null for every other Cadence.
+     *
+     * Nullable because the column has to mean one thing, which is "the day this
+     * Topic briefs on when it is weekly": a daily Topic has none, and a weekly one
+     * is never stored without one, because "every week" has no answer on its own.
+     * The fill is in the repository rather than a default, since the default
+     * depends on the Cadence in the row next to it and SQLite cannot express that.
+     */
+    cadenceDay: text('cadence_day', { enum: WEEKDAYS }),
     /**
      * How far back this Topic looks when it forms Clusters, in days. A column
      * rather than a constant because the glossary makes the 7d window a
