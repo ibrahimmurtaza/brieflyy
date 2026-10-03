@@ -9,56 +9,96 @@ personalized brief feed with insights and visual trends.
 
 ## Status
 
-- [x] **[01]** Account & magic-link auth — see `feature/01-magic-link-auth`
-- [x] **[02]** Google OAuth sign-in — see `feature/02-Google-OAuth`
-- [ ] [03] Directory seed & topic selection
-- [ ] [04] DeliveryTime picker & welcome email
-- [ ] [05] Single-source ingest + Story dedup
-- [ ] [06] Full source registry ingest
-- [x] **[07]** Cluster formation & extractive summary
-- [ ] [08] LivingBrief in-app
-- [x] **[09]** Feedback signals — recorded through `FeedbackService`, propagated to
-      Stories and Articles, and used to order the LivingBrief. See ADR-0004.
-- [ ] [10] BriefPlan + scheduled BriefSnapshot
-- [x] **[11]** LLM summary for BriefSnapshot top-N
-- [x] **[12]** Trends view (per-Topic) — `GET /topics/:slug/trends` and the
-      across-your-topics `GET /trends`, both in the shell, plus the rollup on the
-      dashboard. Measured on an hourly cadence and stored; the tier's cutoff is
-      applied server-side and is visible in `/api/topics/:slug/trends`. See
-      ADR-0015.
-- [x] **[13]** DiscoverTab + Recommendations — `GET /discover` in the shell, with
-      Recommendations scored on Entity and Source overlap and trending computed
-      from mention volume over a stated window. See ADR-0014.
-- [x] **[14]** Archive search + tier enforcement — a search box in the shell on every
-      page, `GET /archive/search` over Cluster summaries, BriefSnapshot text, Article
-      bodies, Retired Stories and FeedbackEvents through a full-text index, narrowed
-      by date range, Source, Entity and Topic. Retention is a predicate in the query,
-      not a filter in the page. See ADR-0016.
+All fourteen product tickets are closed. Where each one landed is below, because a
+ticket number on its own says nothing about whether the code is there.
+
+| Ticket | What it delivered | State | Where it lives |
+| --- | --- | --- | --- |
+| 01 | Account & magic-link auth | done | `src/auth/`, `src/http/access.ts` |
+| 02 | Google OAuth sign-in | done | `src/oauth/`, `/auth/google/*` in `src/auth/routes.ts` |
+| 03 | Directory seed & topic selection | done | `src/directory/`, `GET /pick-topics` |
+| 04 | DeliveryTime picker & welcome email | done | `src/domain/timezone.ts`, `src/onboarding/welcome-email.ts`, `GET /settings/delivery` |
+| 05 | Single-source ingest + Story dedup | done | `src/ingest/ingest-service.ts`, `src/domain/story-signature.ts` |
+| 06 | Full source registry ingest | done | `src/ingest/registry-ingest-service.ts`, `src/ingest/ingest-scheduler.ts`, ADR-0003 |
+| 07 | Cluster formation & extractive summary | done | `src/services/cluster-formation-service.ts`, ADR-0005, ADR-0006 |
+| 08 | LivingBrief in-app | done | `GET /topics/:slug` in `src/pages/routes.ts` |
+| 09 | Feedback signals | done | `src/services/feedback-service.ts`, ADR-0004 |
+| 10 | BriefPlan + scheduled BriefSnapshot | done | `src/services/brief-plan-service.ts`, `src/services/scheduled-brief-service.ts`, ADR-0011 |
+| 11 | LLM summary for BriefSnapshot top-N | done | `src/services/llm-summary-service.ts`, ADR-0013 |
+| 12 | Trends view (per-Topic) | done | `src/trends/`, `src/services/trends-service.ts`, ADR-0015 |
+| 13 | DiscoverTab + Recommendations | done | `src/discover/`, ADR-0014 |
+| 14 | Archive search + tier enforcement | done | `src/archive/page.ts`, `src/services/archive-search-service.ts`, ADR-0016 |
+
+What "done" means is that the issue is closed, and the issue tracker is where the
+state is decided. The work that followed these fourteen is numbered 32 onwards:
+two prefactors that brought the two schemas and the dead clustering path back into
+agreement, and the fixes and features that landed on top of them, including tier
+enforcement, topic settings, the app shell and the browser suite. All of those are
+closed too, and none of them is a product ticket, so they are not rows here.
+
+`src/app-wiring.test.ts` holds this to account for the code rather than the prose:
+every exported `*Service` is either constructed by the entrypoint or `createApp`, or
+named in `DEFERRED_SERVICES` in `src/app-wiring.ts` against a ticket number. That
+list is empty, so nothing in `src/` is built and unwired.
 
 ## Stack
 
 - **TypeScript** with Node.js (`type: module`, `NodeNext`)
 - **Fastify 5** HTTP server
-- **Drizzle ORM** + **better-sqlite3** (Postgres-ready; v1 uses SQLite for tests and dev)
+- **Drizzle ORM** + **better-sqlite3**, which is the only driver here — `Db` is a
+  `better-sqlite3` Drizzle type, so a Postgres deployment would mean changing that
+  one alias and writing the repositories against it
 - **Resend** for email delivery (with a `ConsoleEmailTransport` for dev/test)
 - **Zod** for input validation
 - **Vitest** for tests
 
-## Scripts
+## Commands
+
+Every script in `package.json`, and what each one does. Two of the fifteen exist for
+Drizzle's benefit rather than this application's: they are listed because
+`src/docs-agreement.test.ts` fails the build on a script that is not documented here,
+not because they are the way to change a database.
 
 ```bash
-pnpm install          # install dependencies
-pnpm dev              # start the server with --env-file=.env
-pnpm start            # start the server
-pnpm typecheck        # run tsc --noEmit
-pnpm test             # run the unit and HTTP suite (Vitest)
-pnpm test:watch       # vitest --watch
-pnpm test:e2e:install # fetch the Chromium the browser suite drives (once)
-pnpm test:e2e         # run the browser suite (Playwright)
-pnpm secrets:check    # fail if a credential-shaped value is staged for commit
-pnpm verify           # typecheck + test + test:e2e + secrets:check
-pnpm build            # compile to ./dist
+pnpm install           # install dependencies
+pnpm dev               # the server under --watch, with --env-file=.env
+pnpm start             # the server, once, with --env-file=.env
+pnpm build             # compile src/ to ./dist
+pnpm typecheck         # tsc --noEmit over src/, test files included
+pnpm test              # the unit and HTTP suite (Vitest)
+pnpm test:watch        # the same suite, watching
+pnpm test:e2e:install  # fetch the Chromium the browser suite drives (once)
+pnpm test:e2e          # the browser suite (Playwright)
+pnpm secrets:check     # fail if a credential-shaped value is staged for commit
+pnpm verify            # typecheck + test + test:e2e + secrets:check
+pnpm db:migrate        # apply the DDL in src/db/migrate.ts to DATABASE_URL
+pnpm db:generate       # writes SQL into ./drizzle that nothing here applies
+pnpm db:push           # drizzle's own diff; drops the Archive index. See below
+pnpm ingest:check-feeds  # poll every registry feed live; non-zero if one is not ingestible
 ```
+
+`pnpm db:push` is not a way to change a database in this repository, and running it
+against one that matters is how you lose the Archive. It diffs the *declared*
+schema — `src/db/schema.ts` — against the live database, and the Archive's full-text
+table and its twenty-one triggers are not declared there: they live in
+`src/db/archive-index.ts`, because they are DDL rather than a table shape. So the
+diff always wants to drop them, and it asks for confirmation at a terminal, which is
+not there in CI. `pnpm db:generate` is the quieter half of the same gap: it writes a
+migration file under `./drizzle/` (which is gitignored) that no part of this
+application ever applies. `pnpm db:migrate` is the command that applies DDL here, and
+it is the one the "Changing the database schema" section below is about.
+
+`pnpm ingest:check-feeds` is the operator's check that the curated registry is
+ingestible, which is not something a test can assert: a feed URL that 404s or
+returns an empty document looks perfectly fine to a test that never opens it. It
+reaches the network, so it is the one command here that is not part of
+`pnpm verify`.
+
+`pnpm typecheck` covers `src/`, which is where the unit tests live, and not
+`tests/e2e/`: `tsconfig.json` includes only `src/**/*.ts`, and Playwright compiles
+the specs without checking their types, so a type error in a spec is found at run
+time or not at all. That gap is known and is why `pnpm build` is a separate CI job
+rather than part of `pnpm verify`.
 
 ## Local setup
 
@@ -172,7 +212,9 @@ than only recording that somebody asked. See ADR-0012.
 
 ## Changing the database schema
 
-`src/db/schema.ts` is the declared schema (what Drizzle and `pnpm db:push` see).
+`src/db/schema.ts` is the declared schema — the shape Drizzle reads, and the shape
+`pnpm db:push` would diff a database against (which is why that command is not the
+way to change one; see Commands).
 `src/db/migrate.ts` is the DDL the application actually applies, and it is the
 one that has to be right. `src/db/schema-agreement.test.ts` compares the two —
 every index's uniqueness, every foreign key — against a real database built from
@@ -230,7 +272,7 @@ DDL that follows already matches the shape they produced; an index on a column a
 older table does not have would otherwise fail against the table as it stands.
 
 The Archive's text index is the one piece of DDL that is not in `migrate.ts`: its
-table, its FTS5 virtual table and the twenty-odd triggers that keep the two in step
+table, its FTS5 virtual table and the twenty-one triggers that keep the two in step
 live in `src/db/archive-index.ts`, and `applySchema` calls `applyArchiveIndex` from
 it. It is separate for two reasons. `schemaStatements()` cuts `SCHEMA_SQL` on
 semicolons to find indexes worth rebuilding, and a trigger body is full of them. And
@@ -249,6 +291,7 @@ so a shape change that touches nullability has to move both.
 src/
 ├── app.ts                 # createApp() — Fastify factory
 ├── server.ts              # process entrypoint (loads .env, applies schema, listens)
+├── app-wiring.ts          # the deferral list app-wiring.test.ts holds the app to
 ├── env.ts                 # the only module that reads configuration
 ├── config.ts              # shared constants
 │
@@ -256,54 +299,126 @@ src/
 │                          # (archive-index.ts holds the Archive's DDL and its
 │                          # triggers; applySchema calls it)
 ├── directory/             # Seed JSON + directory loader (Sources, TopicTemplates)
-├── domain/                # pure types & helpers (crypto, clock, timezone, DeliverySlot)
+├── domain/                # pure types & helpers (crypto, clock, timezone,
+│                          # DeliverySlot, tier, story signature, trends, LLM contract)
 ├── http/                  # route access declarations, auth guard, rate limiter
-├── repos/                 # persistence adapters (users, accounts, sessions, magic-links, topics, ...)
-├── scheduling/            # IntervalLoop — the loop both background jobs ride on
-├── verify/                # staged-credential check (run by pnpm secrets:check)
+├── repos/                 # persistence adapters (users, accounts, sessions,
+│                          # magic-links, topics, sources, stories, clusters, briefs,
+│                          # feedback, trends, archive, unsubscribe, ...)
+├── scheduling/            # IntervalLoop — the loop every background job rides on
+├── verify/                # staged-credential check, reached only by
+│                          # pnpm secrets:check
 │
-├── archive/               # the Archive view: the search results page. Its route is
-│                          # in pages/routes.ts, with the rest of the shell's; its
-│                          # full-text index is in db/archive-index.ts
+├── archive/               # the archive layer's view: the search results page. Its
+│                          # route is in pages/routes.ts, with the rest of the
+│                          # shell's; its full-text index is in db/archive-index.ts
+├── billing/               # tier routes: /upgrade and the dev-only POST /dev/tier
+├── discover/              # the discover layer's view: the DiscoverTab page + routes
 ├── email/                 # EmailTransport seam (Console + Resend)
+├── oauth/                 # OAuthClient seam (Google) + the PKCE exchange
 │
 ├── auth/                  # AuthService (orchestration) + HTTP routes
 ├── ingest/                # registry ingest + IngestScheduler (poll every Source)
+│                          # (check-feeds.ts is the operator CLI behind
+│                          # pnpm ingest:check-feeds, and test-constants.ts is a
+│                          # shared fixture the ingest tests import)
 ├── onboarding/            # OnboardingService (Directory → Topics) + HTTP routes
 ├── pages/                 # the shell's HTML routes (signup, onboarding, topics,
 │                          # the LivingBrief, the Archive route, ...)
-├── services/              # clustering, BriefPlan/Snapshot, the written summary
-│                          # client, the daily brief job, the trends layer, the
-│                          # Archive search, and the unsubscribe state that job
-│                          # honours
+├── services/              # clustering; the brief layer (BriefPlan, BriefSnapshot
+│                          # renderer, the scheduled job, /admin/briefs); the written
+│                          # summary client; the feedback layer; topic settings; the
+│                          # trends service; Archive search; and the unsubscribe
+│                          # state that job honours
 ├── trends/                # the trends view: inline-SVG chart + sparklines, the
 │                          # per-Topic and across-your-topics pages, HTTP routes
 │
-└── testing/               # test-only helpers (test DB, deterministic clock)
+└── testing/               # test-only helpers (test DB, deterministic clock, story
+                           # fixtures, tier and opt-out builders), reached by the
+                           # suites rather than by the application
 ```
+
+`tests/e2e/` sits beside `src/` and holds the browser suite and the fixture server
+the specs run against; `playwright.config.ts` builds its projects from the viewport
+list in `tests/e2e/fixture-data.ts`.
+
+### The five layers
+
+Three of the five have a directory of their own, and two do not:
+
+- **Ingest** — `ingest/`. Polls every Source a Topic names, extracts Entities,
+  collapses near-duplicate Articles into Stories, then hands the cycle to
+  Cluster formation.
+- **Brief** — no directory: it is `services/brief-plan-service.ts`,
+  `services/brief-snapshot-renderer.ts`, `services/scheduled-brief-service.ts` and
+  `services/brief-status-routes.ts`, plus `repos/brief-*-repo.ts`. A brief is
+  planned, rendered, stored and sent as one step, and the daily job is a trigger
+  for that step rather than a second way of doing it.
+- **Feedback** — no directory: `services/feedback-service.ts`, `domain/feedback.ts`
+  and `repos/feedback-repo.ts`. It is the one rule both the page that renders a
+  Cluster and the route that records a signal on it go through.
+- **Trends** — `trends/` for the pages and routes, `services/trends-service.ts` and
+  `repos/trends-repo.ts` for the measurement, `domain/trends.ts` for the arithmetic.
+- **Archive** — `archive/page.ts` for the view, `services/archive-search-service.ts`
+  for the tier's predicate, `repos/archive-repo.ts` for the query,
+  `db/archive-index.ts` for the DDL and the triggers.
+
+### What is not wired into the application
+
+`src/app-wiring.test.ts` walks the import closure of `server.ts` and `app.ts` and
+fails when an exported `*Service` is in neither, unless `DEFERRED_SERVICES` in
+`src/app-wiring.ts` names it against a ticket number. That list is empty, so there is
+no service that is built and unreachable. These modules are outside the closure on
+purpose, and each is reached by something other than a request:
+
+| Module | Reached by |
+| --- | --- |
+| `src/verify/` | `pnpm secrets:check`, and `pnpm verify` |
+| `src/ingest/check-feeds.ts` | `pnpm ingest:check-feeds` |
+| `src/ingest/test-constants.ts` | the ingest suites |
+| `src/testing/`, `src/app-wiring.ts` | the suites |
+
+`oauth/` and `billing/` are inside the closure but conditional: the OAuth routes
+exist only when `OAUTH_PROVIDER` names a provider, and `billing/` exists only when
+the development-only routes are on, which they are not in production. One thing the
+glossary asks for and no module provides is a LivingBrief derived from a BriefPlan;
+the in-app surface is a rendering of the Topic's Clusters instead. `CONTEXT.md` says
+so on the entry rather than leaving it to be found.
 
 ### Seams
 
-The system has a small number of seams where behaviour is plugged in:
+The system has a small number of seams where behaviour is plugged in. Every row is
+an interface something holds rather than something it constructs, and every one of
+them has a double in `src/testing/` or a test of its own.
 
-| Seam              | Interface                | Implementations                              |
-| ----------------- | ------------------------ | -------------------------------------------- |
-| Persistence       | `Db` (Drizzle)           | SQLite (dev/test), Postgres (planned)       |
-| `UserRepo` etc.  | domain-shaped methods   | `DrizzleUserRepo` (and Postgres variants)    |
-| `EmailTransport`  | `send(message)`          | `ConsoleEmailTransport`, `ResendEmailTransport` |
-| `LLMSummaryClient`| `generateSummary(clusterTitle, clusterSummary, articles)` | `OpenAILLMSummaryService`, or none at all |
-| `Clock`          | `now()`                  | `systemClock`, `fixedClock`, `makeTestClock` |
-| `RandomSource`   | `bytes()`, `uuid()`      | `nodeRandom`, `deterministicRandom`         |
-| `EnvSource`      | `Record<string, string?>` | `process.env`, a plain object in tests      |
-| `afterCycle`     | `run(report)`            | `ClusterFormationService`                    |
-| Scheduler loop  | `IntervalLoop`           | the ingest loop, the daily brief job, the trends job |
-| `TrendsRepo`    | `measure`, `find*`, `save` | `DrizzleTrendsRepo` — counts only, never an ordering |
-Tests at the `AuthService` seam use real SQLite (in-memory), a fake clock, a
-fake random source, and a `ConsoleEmailTransport`. Tests at the HTTP seam use
-Fastify's `inject()` against the same `createApp` factory. The summary client is
-held rather than constructed by `createApp`, so a test injects a counting double
-and asserts what a brief cost instead of what a brief was sent.
+| Seam | Interface | Implementations |
+| --- | --- | --- |
+| Persistence | `Db` (Drizzle) | `createDatabase()` over a `better-sqlite3` driver, in-memory in tests. There is no Postgres driver: `Db` is a `better-sqlite3` type and `createDatabase` is the function that builds one |
+| Repositories | `UserRepo`, `TopicRepo`, `ClusterRepo`, `TrendsRepo`, … — domain-shaped methods | `Drizzle*Repo`, one per file in `repos/` |
+| `EmailTransport` | `send(message)` | `ConsoleEmailTransport`, `ResendEmailTransport` |
+| `LLMSummaryClient` | `generateSummary(clusterTitle, clusterSummary, articles)` | `OpenAILLMSummaryService`, `RecordingSummaryClient`, or none at all |
+| `Clock` | `now()` | `systemClock`, `makeTestClock` (a `set`/`advance` pair) |
+| `RandomSource` | `bytes()`, `uuid()` | `nodeRandom`, `deterministicRandom` |
+| `EnvSource` | `Readonly<Record<string, string \| undefined>>` | `process.env`, a plain object in tests |
+| `FeedFetcher` | `fetch(feedUrl)` | `HttpFeedFetcher`, or a stub in tests |
+| `HttpClient` | `get(url)` | `systemHttpClient`, a `FakeHttp` in the feed tests |
+| `OAuthClient` | `buildAuthorizationUrl()`, `exchangeCode()` | `GoogleOAuthClient`, or absent when `OAUTH_PROVIDER` is unset |
+| `afterCycle` | `run(report)` | `ClusterFormationService`, wired into the ingest loop by `createApp` |
+| The whole ingest loop | `IngestScheduler` | `createApp` builds one from a `FeedFetcher`, or takes the caller's |
+| The trends loop | `TrendsService.runForever()` / `.stop()` | itself, on an `IntervalLoop` |
+| `cycleIdFn` | `() => string` | `nodeRandom.uuid()` |
 
+`IntervalLoop` is the one thing underneath the three loops rather than beside them:
+it holds the interval, stops on `app.close()`, and waits for the pass in flight
+before the database closes. Tests that inject their own `IngestScheduler` take over
+the tail of the cycle as well — `ClusterFormationService` is wired into the
+scheduler `createApp` builds, so a caller supplying their own runs it themselves.
+
+Tests at the `AuthService` seam use real SQLite (in-memory), a fake clock, a fake
+random source, and a `ConsoleEmailTransport`. Tests at the HTTP seam use Fastify's
+`inject()` against the same `createApp` factory. The summary client is held by
+`server.ts` rather than constructed by `createApp`, so a test injects a counting
+double and asserts what a brief cost instead of what a brief was sent.
 
 ### Background jobs
 
@@ -324,8 +439,10 @@ signed-in User at `/admin/ingest` and `/admin/briefs`.
 pnpm test
 ```
 
-Alongside the behavioural suites, four of the tests are guards that fail the
-build when the shape of the system drifts:
+The suite is eighty-six test files across `src/`, one per module, plus however many
+test cases those files hold — Vitest prints the live figure at the end of every run,
+which is the only count worth writing down. Alongside the behavioural suites, five
+of the files are guards that fail the build when the shape of the system drifts:
 
 - `app-wiring.test.ts` — every `*Service` is constructed by the application
   (the entrypoint or `createApp`) or explicitly deferred to a ticket.
@@ -334,9 +451,16 @@ build when the shape of the system drifts:
 - `env-example.test.ts` — configuration is read in one module, and `.env.example`
   documents exactly the variables it reads.
 - `schema-agreement.test.ts` — the declared schema and the applied DDL agree.
+- `docs-agreement.test.ts` — the documents agree with the code: every script in
+  `package.json` is in the commands block and every command in it is a script, the
+  architecture tree names every directory under `src/` and no others, the status
+  table has a row per ticket, the counts above are the counts on disk, and every
+  ADR the README or the glossary points at exists.
 
-The rest cover the auth and OAuth flows, onboarding, ingest, delivery settings,
-the repositories, the migration runner, and the rate limiter.
+The rest cover the auth and OAuth flows, onboarding, ingest, clustering, brief
+planning and rendering, feedback, trends, discover, archive search, unsubscribe,
+topic settings, delivery settings, the repositories, the migration runner, and the
+rate limiter.
 
 The browser suite is separate because it needs a Chromium download:
 
@@ -345,8 +469,9 @@ pnpm test:e2e:install   # once per machine
 pnpm test:e2e
 ```
 
-It drives the real application on a throwaway SQLite file, so a change to the
-markup, the stylesheet or a page's behaviour has somewhere to fail that an
+It is ten spec files, run once per viewport across three of them, so thirty runs. It
+drives the real application on a throwaway SQLite file, so a change
+to the markup, the stylesheet or a page's behaviour has somewhere to fail that an
 injected request cannot reach: no viewport, no reflow, no focus ring, no target
 size, and no reading of what a page actually says. It is part of `pnpm verify`,
 so a change that breaks a page fails the same command as one that breaks a
@@ -359,7 +484,7 @@ being shared: the specs that record a signal or send a brief have their own
 account and their own Topics, and the specs that spend a single-use unsubscribe
 token have one account per viewport, because a token that is single-use by design
 cannot be spent by three of them at once. `tests/e2e/server.ts` holds the fixtures
-and says why each User is there; `tests/e2e/harness-routes.ts` holds the six
+and says why each User is there; `tests/e2e/harness-routes.ts` holds the five
 routes the specs lean on; `tests/e2e/fixture-data.ts` holds the ids and tokens the
 two agree on, and the viewport list the Playwright config builds its projects from.
 

@@ -1,5 +1,5 @@
 /**
- * The six routes the browser specs lean on, none of which is part of the
+ * The five routes the browser specs lean on, none of which is part of the
  * application.
  *
  * A spec runs in its own process against this server, so it cannot reach into the
@@ -28,7 +28,7 @@
  *   sign-in token to anyone who asks, with no session at all.
  *
  * A no-session request is a 401 with a JSON body from all of them, so a spec that
- * forgot a cookie fails on one thing rather than six.
+ * forgot a cookie fails on one thing rather than five.
  */
 import type { FastifyInstance } from 'fastify';
 import type BetterSqlite3 from 'better-sqlite3';
@@ -68,9 +68,9 @@ export async function registerHarnessRoutes(
    * One of the signed-in User's Topics, named by slug.
    *
    * Read with plain SQL rather than through `findBySlug`, because that one
-   * deliberately hides a removed Topic and `/e2e/restore-topic` exists to find one
-   * again. Scoped by user as well, because the fixture holds the same slug for more
-   * than one User and a bare id would be ambiguous the moment it was.
+   * deliberately hides a removed Topic and this handler exists to find one again.
+   * Scoped by user as well, because the fixture holds the same slug for more than
+   * one User and a bare id would be ambiguous the moment it was.
    */
   const topicIdOf = (userId: string, slug: string): string | null => {
     const row = driver
