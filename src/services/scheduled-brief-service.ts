@@ -1,12 +1,12 @@
 import type { Clock } from '../domain/clock.js';
 import type { RandomSource } from '../domain/crypto.js';
-import { dueDeliverySlot } from '../domain/delivery-slot.js';
+import { dueCadenceSlot } from '../domain/delivery-slot.js';
+import { DEFAULT_WEEKLY_DAY, type Topic } from '../domain/types.js';
 import type {
   BriefGeneration,
   BriefJobRun,
   BriefRun,
   DeliverySettings,
-  Topic,
   TopicId,
   UserId,
 } from '../domain/types.js';
@@ -71,14 +71,14 @@ export interface ScheduledBriefStatus {
 
 /**
  * The daily brief job: one pass finds every User whose DeliveryTime has arrived
- * in their own timezone and answers each of their daily-Cadence Topics for that
- * DeliverySlot.
+ * in their own timezone and answers each of their Topics for the DeliverySlot
+ * their own Cadence puts it on.
  *
  * Every User has a different DeliveryTime in a different timezone, so there is no
  * one time of day this runs at and no single cron expression that could mean it.
  * What there is instead is an interval to look on, and one rule for who is owed
  * something: their own clock, in their own timezone, resolved by
- * `dueDeliverySlot`. The pass itself is deliberately the whole of the work — it
+ * `dueCadenceSlot`. The pass itself is deliberately the whole of the work — it
  * reports what it sent and what it failed to send, records both, and leaves the
  * loop to `IntervalLoop`, which knows about waiting and stopping and nothing about
  * briefs.
@@ -138,7 +138,7 @@ export class ScheduledBriefService {
     const startedAt = this.deps.clock.now();
     const settings = await this.deps.deliverySettingsRepo.list();
     const optedOut = new Set(await this.deps.userRepo.listUnsubscribedIds());
-    const topicsByUser = dailyTopicsByUser(
+    const topicsByUser = briefableTopicsByUser(
       (await this.deps.topicRepo.listAll()).filter((t) => t.unsubscribedAt === null),
     );
     let sentCount = 0;
@@ -150,15 +150,21 @@ export class ScheduledBriefService {
 
     for (const setting of settings) {
       if (optedOut.has(setting.userId)) continue;
-      const slot = dueDeliverySlot(
-        deliveryTimeOf(setting),
-        startedAt,
-        setting.updatedAt,
-      );
-      if (slot === null) continue;
 
       for (const topic of topicsByUser.get(setting.userId) ?? []) {
         try {
+          const slot = dueCadenceSlot(
+            deliveryTimeOf(setting),
+            startedAt,
+            setting.updatedAt,
+            topic.cadence,
+            topic.cadenceDay ?? DEFAULT_WEEKLY_DAY,
+          );
+          // A Topic set to never is owed nothing at all, and a Cadence whose day
+          // has not come round is not owed anything either. Both are answered by
+          // the slot being null rather than by the pass filtering Topics out, so
+          // there is one place that knows what a Cadence means.
+          if (slot === null) continue;
           const sent = await this.sendIfOwed(setting, topic, slot);
           if (sent === null) continue;
           sentCount += 1;
@@ -262,18 +268,19 @@ export class ScheduledBriefService {
 }
 
 /**
- * A User's Topics the daily job answers, by User.
+ * The Topics this job answers, by User.
  *
- * Only a daily Cadence. The glossary makes Cadence what the User asked for, and a
- * weekly Topic asked for weekly — which nothing implements yet, because weekly
- * needs a day of the week the Topic does not have.
+ * Every Topic, because which of them are owed a brief on this pass is a question
+ * about their Cadence and the moment rather than about the Topic: a daily one is
+ * owed today's reading, a weekly one only on the day it is pinned to, and one set
+ * to never never at all. Filtering here would put that rule in two places — this
+ * list and the slot — and the two could disagree about what a Cadence means.
  */
-function dailyTopicsByUser(
+function briefableTopicsByUser(
   topics: readonly Topic[],
 ): Map<UserId, readonly Topic[]> {
-const out = new Map<UserId, Topic[]>();
+  const out = new Map<UserId, Topic[]>();
   for (const topic of topics) {
-    if (topic.cadence !== 'daily') continue;
     const list = out.get(topic.userId);
     if (list) {
       list.push(topic);

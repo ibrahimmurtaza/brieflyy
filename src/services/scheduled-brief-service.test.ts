@@ -32,7 +32,7 @@ import {
   resetDeterministic,
   type TestClock,
 } from '../testing/test-clocks.js';
-import type { Cadence, Tier, TopicId, UserId } from '../domain/types.js';
+import type { Cadence, Tier, TopicId, UserId, Weekday } from '../domain/types.js';
 import type { DeliveryTime } from '../domain/timezone.js';
 
 const APP_BASE_URL = 'https://app.brieflyy.test';
@@ -193,6 +193,7 @@ async function seedTopic(
   topicId: string,
   overrides: {
     readonly cadence?: Cadence;
+    readonly cadenceDay?: Weekday | null;
     readonly title?: string;
     readonly unsubscribedAt?: Date | null;
   } = {},
@@ -203,6 +204,7 @@ async function seedTopic(
       userId,
       title: overrides.title ?? `Topic ${topicId}`,
       ...(overrides.cadence ? { cadence: overrides.cadence } : {}),
+      ...(overrides.cadenceDay === undefined ? {} : { cadenceDay: overrides.cadenceDay }),
       ...(overrides.unsubscribedAt === undefined
         ? {}
         : { unsubscribedAt: overrides.unsubscribedAt }),
@@ -582,17 +584,103 @@ await seedUser({
     expect(harness.count('brief_snapshots')).toBe(0);
   });
 
-  it('leaves a Topic that is not on a daily Cadence alone', async () => {
+  it('sends a brief for a weekly Topic on the day it is pinned to', async () => {
+    // 2 September 2026 is a Wednesday. The User's 08:00 has passed today, and the
+    // Topic they pinned to Wednesday is owed today's reading — the same one a
+    // daily Topic would get.
     await seedUser({ id: 'iris' });
-    await seedTopic('iris', 'topic-weekly', { cadence: 'weekly' });
-    await seedTopic('iris', 'topic-never', { cadence: 'never' });
-    await seedTopic('iris', 'topic-daily', { cadence: 'daily' });
+    await seedTopic('iris', 'topic-weekly', { cadence: 'weekly', cadenceDay: 'wednesday' });
 
     const run = await harness.scheduler.run();
 
-    // The Cadence is what the User asked for; a weekly Topic asked for weekly.
     expect(run.sentCount).toBe(1);
-    expect(harness.transport.snapshot()[0]?.subject).toBe('Topic topic-daily - Brieflyy');
+    const [served] = await harness.briefRunRepo.listByUser('iris');
+    expect(served?.scheduledFor).toEqual(new Date('2026-09-02T08:00:00Z'));
+  });
+
+  it('sends a brief for a weekly Topic on its day a week later, and not in between', async () => {
+    await seedUser({ id: 'iris' });
+    await seedTopic('iris', 'topic-weekly', { cadence: 'weekly', cadenceDay: 'wednesday' });
+
+    expect((await harness.scheduler.run()).sentCount).toBe(1);
+
+    // The four days in between are not owed anything, even though a daily Topic
+    // would have been sent one on each.
+    for (const day of ['2026-09-03', '2026-09-04', '2026-09-05', '2026-09-06']) {
+      harness.clock.set(new Date(`${day}T12:00:00Z`));
+      expect((await harness.scheduler.run()).sentCount, day).toBe(0);
+    }
+
+    // And the following Wednesday is owed, so "weekly" means a week rather than
+    // "the one reading that has already happened".
+    harness.clock.set(new Date('2026-09-09T12:00:00Z'));
+    expect((await harness.scheduler.run()).sentCount).toBe(1);
+  });
+
+  it('answers a weekly Topic on the reading of the day before its own day', async () => {
+    // A Topic pinned to Saturday, on the Friday before: last Saturday is the
+    // reading still owed, because this week's is still to come.
+    await seedUser({ id: 'iris' });
+    await seedTopic('iris', 'topic-weekly', { cadence: 'weekly', cadenceDay: 'saturday' });
+    harness.clock.set(new Date('2026-09-04T12:00:00Z'));
+
+    const run = await harness.scheduler.run();
+
+    expect(run.sentCount).toBe(1);
+    const [served] = await harness.briefRunRepo.listByUser('iris');
+    expect(served?.scheduledFor).toEqual(new Date('2026-08-29T08:00:00Z'));
+  });
+
+  it('serves a daily and a weekly Topic of the same User on their own readings', async () => {
+    // Two Users would be two DeliverySettings rows; one User with two Topics is
+    // the harder case, because the two Cadences can disagree about which day is
+    // owed and the pass has to answer for each rather than for the User. Thursday,
+    // so the Friday Topic's reading is still to come and last Friday's is the one
+    // it is owed.
+    await seedUser({ id: 'iris' });
+    await seedTopic('iris', 'topic-daily', { title: 'Daily', cadence: 'daily' });
+    await seedTopic('iris', 'topic-weekly', {
+      title: 'Weekly',
+      cadence: 'weekly',
+      cadenceDay: 'friday',
+    });
+    harness.clock.set(new Date('2026-09-03T12:00:00Z'));
+
+    const run = await harness.scheduler.run();
+
+    expect(run.sentCount).toBe(2);
+    const runs = await harness.briefRunRepo.listByUser('iris');
+    const byTopic = new Map(runs.map((r) => [r.topicId, r.scheduledFor.toISOString()]));
+    expect(byTopic.get('topic-daily')).toBe('2026-09-03T08:00:00.000Z');
+    expect(byTopic.get('topic-weekly')).toBe('2026-08-28T08:00:00.000Z');
+  });
+
+  it('stops briefing a Topic the User set to never', async () => {
+    await seedUser({ id: 'iris' });
+    await seedTopic('iris', 'topic-one', { title: 'Daily', cadence: 'daily' });
+    await seedTopic('iris', 'topic-quiet', { title: 'Quiet', cadence: 'never' });
+
+    const first = await harness.scheduler.run();
+    expect(first.sentCount).toBe(1);
+    expect(harness.transport.snapshot()[0]?.subject).toBe('Daily - Brieflyy');
+
+    // And it stays quiet on the next day too, rather than being a Topic that was
+    // skipped once.
+    harness.clock.set(new Date('2026-09-03T12:00:00Z'));
+    const second = await harness.scheduler.run();
+    expect(second.sentCount).toBe(1);
+    expect(harness.count('brief_snapshots')).toBe(2);
+  });
+
+  it('briefs a weekly Topic again once the User puts it back on a daily Cadence', async () => {
+    await seedUser({ id: 'iris' });
+    await seedTopic('iris', 'topic-one', { cadence: 'weekly', cadenceDay: 'monday' });
+
+    expect((await harness.scheduler.run()).sentCount).toBe(1);
+
+    await harness.topicRepo.setCadence('topic-one', 'daily', null);
+    harness.clock.set(new Date('2026-09-03T12:00:00Z'));
+    expect((await harness.scheduler.run()).sentCount).toBe(1);
   });
 
   it('leaves a removed Topic alone', async () => {

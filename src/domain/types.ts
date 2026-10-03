@@ -176,6 +176,15 @@ export interface Topic {
   readonly sourceIds: readonly SourceId[];
   readonly cadence: Cadence;
   /**
+   * The weekday a weekly Cadence briefs on, and null for every other Cadence.
+   *
+   * Nullable because the column has to mean one thing: "the day this Topic
+   * briefs on when it is weekly". A daily Topic carries none, and
+   * `DEFAULT_WEEKLY_DAY` is what a weekly one gets when the User chose the
+   * frequency without choosing the day.
+   */
+  readonly cadenceDay: Weekday | null;
+  /**
    * How far back this Topic looks when it forms Clusters, in days. The glossary
    * makes the 7d window a per-Topic tunable; `DEFAULT_CLUSTER_WINDOW_DAYS` is
    * what a Topic starts on.
@@ -291,7 +300,47 @@ export type FeedbackType = (typeof FEEDBACK_TYPES)[number];
 
 export type FeedbackScope = 'this_topic' | 'global';
 
-export type Cadence = 'daily' | 'weekly' | 'never';
+/**
+ * How often a Topic briefs, as a value rather than only a type.
+ *
+ * A value because a form submission arrives as a string and "is this one of the
+ * three" is a question that has exactly one answer in the application. Written
+ * out here so the settings page can offer all three and the service can check
+ * against all three without either of them spelling them differently.
+ */
+export const CADENCES = ['daily', 'weekly', 'never'] as const;
+export type Cadence = (typeof CADENCES)[number];
+
+
+/**
+ * The days of the week a weekly Cadence can be pinned to.
+ *
+ * Named rather than numbered because the column is stored as text and a row
+ * somebody reads in a database dump should say `monday`, not `1`. Sunday is
+ * first because that is the order `Date.prototype.getUTCDay` counts in, and the
+ * settings form offers them in it.
+ */
+export const WEEKDAYS = [
+  'sunday',
+  'monday',
+  'tuesday',
+  'wednesday',
+  'thursday',
+  'friday',
+  'saturday',
+] as const;
+export type Weekday = (typeof WEEKDAYS)[number];
+
+/**
+ * The day a weekly Cadence falls on when none was chosen.
+ *
+ * A weekly Cadence is meaningless without one — "every week" has no answer — so
+ * the storage layer puts every weekly Topic on a day rather than leaving the
+ * column null and hoping. Monday is the reading because it is the first working
+ * day: a Topic nobody chose a day for should read at the start of their week
+ * rather than over a weekend they may not read it on.
+ */
+export const DEFAULT_WEEKLY_DAY: Weekday = 'monday';
 
 export interface BriefPlan {
   readonly id: string;

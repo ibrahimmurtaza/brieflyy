@@ -27,6 +27,7 @@ import type {
   TopicOrigin,
   User,
   UserId,
+  Weekday,
 } from '../domain/types.js';
 
 export interface UserFixture {
@@ -54,11 +55,14 @@ export function makeUser(input: UserFixture): User {
 export interface TopicFixture {
   readonly id: string;
   readonly userId: string;
+  /** Defaults to the id, which is what every fixture that does not care wants. */
+  readonly slug?: string;
   readonly title?: string;
   readonly category?: TopicCategory;
   readonly origin?: TopicOrigin;
   readonly sourceIds?: readonly string[];
   readonly cadence?: Cadence;
+  readonly cadenceDay?: Weekday | null;
   readonly clusterWindowDays?: number;
   readonly createdAt?: Date;
   readonly removedAt?: Date | null;
@@ -73,13 +77,14 @@ export function makeTopic(input: TopicFixture): Topic {
   return {
     id: input.id as TopicId,
     userId: input.userId as UserId,
-    slug: input.id,
+    slug: input.slug ?? input.id,
     title: input.title ?? `Topic ${input.id}`,
     blurb: '',
     category: input.category ?? ('news' as TopicCategory),
     origin: input.origin ?? { kind: 'freeform' },
     sourceIds: input.sourceIds ?? [],
     cadence: input.cadence ?? 'daily',
+    cadenceDay: input.cadenceDay ?? null,
     clusterWindowDays: input.clusterWindowDays ?? DEFAULT_CLUSTER_WINDOW_DAYS,
     createdAt: input.createdAt ?? new Date('2026-09-01T00:00:00Z'),
     removedAt: input.removedAt ?? null,

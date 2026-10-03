@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { Clock } from '../domain/clock.js';
 import { DEFAULT_CLUSTER_WINDOW_DAYS } from '../domain/cluster-window.js';
 import type { RandomSource } from '../domain/crypto.js';
-import { slugify, titleKey } from '../domain/slug.js';
+import { slugify, titleKey, TOPIC_TITLE_MAX_LENGTH } from '../domain/slug.js';
 import { computeFirstBriefAt, deliveryTimeOf, isValidIanaTimezone, isValidDeliveryHour, isValidDeliveryMinute, type DeliveryTime } from '../domain/timezone.js';
 import { DEFAULT_TIER, resolveTier, topicCapFor } from '../domain/tier.js';
 import type { DeliverySlot } from '../domain/delivery-slot.js';
@@ -42,7 +42,17 @@ export interface OnboardingServiceDeps {
 }
 
 const templateIdSchema = z.string().min(1).max(128);
-const freeformTitleSchema = z.string().trim().min(1).max(80);
+/**
+ * What a free-form Topic can be called, and — because a rename is the same decision
+ * about the same thing — what any Topic can be called. Exported so the settings
+ * page's rename and the picker's free-form field are bounded by one rule rather
+ * than by two that happen to agree today.
+ */
+export const freeformTitleSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(TOPIC_TITLE_MAX_LENGTH);
 
 export interface SelectTopicsInput {
   readonly userId: UserId;
@@ -311,7 +321,7 @@ export class OnboardingService {
 
     for (const t of input.templates) {
       const slug = this.allocateUniqueSlug(t.slug, input.takenSlugs);
-      const topic: Topic = {
+      created.push({
         id: this.random.uuid() as TopicId,
         userId: input.userId,
         slug,
@@ -323,45 +333,44 @@ export class OnboardingService {
           templateId: t.id as TopicTemplateId,
         },
         sourceIds: [...t.defaultSourceIds],
+        // A Topic starts on the frequency the glossary names, and on no weekday:
+        // the settings page is where a User picks either, and a Topic that was
+        // never asked about has to keep briefing in the meantime.
         cadence: 'daily',
+        cadenceDay: null,
         clusterWindowDays: DEFAULT_CLUSTER_WINDOW_DAYS,
         createdAt: now,
         removedAt: null,
         unsubscribedAt: null,
-      };
-      await this.topicRepo.insert(topic);
-      for (let i = 0; i < t.defaultSourceIds.length; i++) {
-        await this.topicRepo.insertTopicSource(
-          topic.id,
-          t.defaultSourceIds[i]!,
-          i,
-        );
-      }
-      created.push(topic);
+      });
     }
 
     if (input.freeformTitle) {
       const baseSlug = slugify(input.freeformTitle);
-      const slug = this.allocateUniqueSlug(baseSlug, input.takenSlugs);
-      const topic: Topic = {
+      created.push({
         id: this.random.uuid() as TopicId,
         userId: input.userId,
-        slug,
+        slug: this.allocateUniqueSlug(baseSlug, input.takenSlugs),
         title: input.freeformTitle,
         blurb: '',
         category: 'unspecified',
         origin: { kind: 'freeform' },
         sourceIds: [],
         cadence: 'daily',
+        cadenceDay: null,
         clusterWindowDays: DEFAULT_CLUSTER_WINDOW_DAYS,
         createdAt: now,
         removedAt: null,
         unsubscribedAt: null,
-      };
-      await this.topicRepo.insert(topic);
-      created.push(topic);
+      });
     }
 
+    // All of them or none of them. The three Topics of one picker submission are
+    // one thing the User asked for, and a failure on the last of them used to
+    // leave the first two committed: the retry then hit the free-tier cap with
+    // Topics the User had already half-chosen, so onboarding could be neither
+    // finished nor started.
+    await this.topicRepo.insertMany(created);
     return created;
   }
 

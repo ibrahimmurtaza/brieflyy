@@ -43,6 +43,7 @@ const SIGNED_IN_PAGES: readonly (readonly [string, number])[] = [
   ['/admin/briefs', 200],
   ['/topics/probe', 404],
   ['/topics/probe/trends', 404],
+  ['/topics/probe/settings', 404],
   ['/briefs/probe', 404],
 ];
 

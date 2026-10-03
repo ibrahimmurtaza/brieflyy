@@ -1,3 +1,13 @@
+/**
+ * How long a Topic's name may be.
+ *
+ * One number rather than one per form: the picker and the settings page's rename
+ * are the same decision about the same thing, and a bound written out twice is a
+ * bound that lets one of them accept a name the other refuses. Long enough for a
+ * phrase, short enough to render on the dashboard and in a brief's subject line.
+ */
+export const TOPIC_TITLE_MAX_LENGTH = 80;
+
 export function slugify(input: string): string {
   return input
     .trim()

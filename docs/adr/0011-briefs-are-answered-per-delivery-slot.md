@@ -1,16 +1,31 @@
 # Briefs are answered per DeliverySlot, in the User's own timezone
 
-A `ScheduledBriefService` pass runs on an interval (default one minute), and for each User who has recorded a `DeliveryTime` asks one question: is that User owed a brief for their daily-Cadence Topics, and for which DeliverySlot? It answers it by calling `dueDeliverySlot`, plans each Topic's brief, sends it through the one `BriefPlanService`, and records a `BriefRun` for the DeliverySlot.
+A `ScheduledBriefService` pass runs on an interval (default one minute), and for each User who has recorded a `DeliveryTime` asks, of each of their Topics: is this Topic owed a brief for this DeliverySlot? It answers it by calling `dueCadenceSlot`, plans each brief, sends it through the one `BriefPlanService`, and records a `BriefRun` for the DeliverySlot.
 
 ## Why a DeliverySlot and not a time of day
 
 Every User picks their own `DeliveryTime` in their own timezone, so there is no one time of day the job runs at and no cron expression that could mean it across the globe. The unit that can be compared with the clock, and that can be keyed, is the instant a reading falls on for one local day in that User's timezone — the DeliverySlot. Two passes over the same local day resolve the same instant, which is what makes "already sent" a fact about the database rather than about a timer.
+
+## Why the Cadence is a property of the question, not of the list
+
+Which Topics a pass considers is not a filter: it is every Topic of a User who is owed something. A Topic's `Cadence` — daily, weekly or never — decides the question, and `dueCadenceSlot` is where it is answered:
+
+- **daily** is `dueDeliverySlot` unchanged: the most recent reading at or before now, or yesterday's.
+- **weekly** is the most recent reading *on the weekday the Topic is pinned to*, with the same "or the one before it, if the process was down over that one" rule. A week is stepped back a calendar day at a time rather than by subtracting 168 hours, because a week is seven local dates and the latter lands on the wrong weekday for half the year wherever the clocks moved in between.
+- **never** is owed nothing, ever, which is the whole of what the User asked for by choosing it.
+
+Answering all three in one function rather than filtering the pass is what keeps the rule in one place. The alternative — the pass skipping non-daily Topics, and a second place deciding what "weekly" means — is two answers to one question that can disagree, and the disagreement is a User who set a weekly brief and quietly stopped getting one.
+
+A weekly Cadence carries its weekday on the Topic, because "every week" has no answer on its own. It is never stored without one, so a row cannot come to mean a frequency with no day, which is the one reading of the pair the pass has no way to serve.
+
 
 ## Why the DeliverySlot is the most recent one, not the next one
 
 Asking for the *next* DeliverySlot would make a pass that runs late silently skip the period: a process that was down over a User's 07:00 would return at 09:00, find 07:00 already past, and wait until tomorrow. Asking for the most recent DeliverySlot at or before now means the period is owed the moment it passes, so a run missed while the process was down is recovered by the next pass after it comes back. It is deliberately one DeliverySlot rather than a backlog: three days of downtime is one brief, for the period the User is actually in, not three on the same morning.
 
 The one case where a past DeliverySlot is *not* owed is when it fell before the User recorded their `DeliveryTime`. A User who records a 23:00 reading at 09:00 has missed nothing, and without that bound they would be sent yesterday's 23:00 DeliverySlot the moment the job next ran. The bound is the `updatedAt` of the settings row, which is only moved by a *different* reading: re-saving the same time records nothing new, and a User who opens the delivery-time screen and saves it again does not silently lose the periods the job had not yet got to.
+
+The bound reads the same on a weekly Topic, and it is the rule that stops a Friday-pinned brief being sent on the Saturday a User set up. There was no earlier Friday reading for them to have missed, so nothing is owed until the next one — rather than the previous week's arriving seven days late.
 
 ## Why the record is written after the send
 
