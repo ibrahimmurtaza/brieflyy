@@ -1,5 +1,13 @@
 # Brieflyy — UI/UX Audit & Improvement Plan
 
+**A snapshot, not a baseline.** Everything below describes the application at the
+base commit named in the header. Where it says something is absent, check it
+against the code before acting on it: the app shell, the design-token layer and the
+Playwright suite this plan asked for have all landed since (issues #46 and #51), so
+several findings here are closed. Nothing below was re-verified as part of the
+documentation reconciliation in #52, because a dated audit is allowed to be a
+dated audit.
+
 **Date:** 2026-09-29 · **Branch:** `feature/14-archive-search` · **Base commit:** `e825016`
 **Scope:** Read-only when written. Phase 1 and the Phase 2 foundation were
 implemented afterwards; see §8 for the six decisions and what each one became.

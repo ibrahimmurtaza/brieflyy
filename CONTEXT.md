@@ -2,6 +2,23 @@
 
 A SaaS tool that aggregates content around user-specified topics, clusters related items, summarizes them via AI, and surfaces the most relevant ones in a personalized brief feed with insights and visual trends.
 
+## How to read this
+
+This is the vocabulary of the product, so an entry describes the thing rather than
+the code that implements it. Where the two differ, the difference is written down
+rather than left for a reader to find:
+
+- A claim about what a User can see or do is a promise. If the code does not do it
+  yet, the entry says **Not built:** and names the entry it would live in.
+- A number here is the number the code enforces. Where a number is only copy on a
+  page, it says so.
+- Where a term is a rendering rather than a stored artefact, it says so, because
+  "regenerates" and "is regenerated" are different claims.
+
+`README.md` lists where each piece of behaviour lives and
+`src/docs-agreement.test.ts` fails the build when a document and the code stop
+agreeing about a file, a command or a count.
+
 ## Language
 
 ### Identity
@@ -12,7 +29,8 @@ _Avoid_: customer, member, account holder
 **Account**: The authentication record for a User. Holds email, linked OAuth providers (Google), and active sessions.
 _Avoid_: profile, credentials
 
-**OnboardingState**: A User's progress through first-run topic selection and delivery-time setup. Drives the activation moment (first brief landing within 24h of signup).
+**OnboardingState**: A User's progress through first-run topic selection and delivery-time setup. It is what decides which screen a User lands on after signing in, and nothing else: there is no activation event, no time limit and no measurement of one.
+**Not built**: the activation moment — a first brief landing within 24h of signup. Nothing in the application records one or waits for one, so this is a number with no counter behind it rather than a behaviour that is merely unmeasured.
 _Avoid_: signup flow, first-run
 
 **DeliveryTime**: A per-User clock time at which that User's scheduled BriefSnapshots are generated and emailed. All of a User's Topics share one DeliveryTime.
@@ -35,16 +53,16 @@ _Avoid_: post, item, document
 **Entity**: A named thing (person, organization, place, product, or concept) extracted from an Article by named-entity recognition. The key used for Cluster overlap and the unit of Trends. One Entity however many ways outlets write its name: a spelling is not the identity.
 _Avoid_: tag, keyword, named entity
 
-**Story**: A deduped event — one thing that happened, however many outlets reported it — held as a group of near-duplicate Articles published within a 48–72h window of each other. The working unit of the pipeline; the user never sees a Story directly.
+**Story**: A deduped event — one thing that happened, however many outlets reported it — held as a group of near-duplicate Articles published within a 72h window of each other. The working unit of the pipeline. A User does not meet a Story on the surfaces a brief is built from; they meet a Retired Story in the Archive, labelled as one, which is why "never sees a Story" would be the wrong claim to make absolutely.
 _Avoid_: event, article group
 
-**Story signature**: An Article's text-derived identity: its content words and its key phrases, stored and compared rather than hashed. Two Articles are one Story when enough of their signatures agree, and the threshold is a measured property of real wire copies rather than a constant that looks right.
+**Story signature**: An Article's text-derived identity: its content words and its key phrases, stored and compared rather than hashed. Two Articles are one Story when enough of their signatures agree, and the threshold they have to clear is measured rather than guessed — a test holds both margins of it against a set of near-duplicate fixtures, and fails if either has moved closer than a stated distance. What it is *not* measured against is a corpus of real wire copies; the fixtures are hand-written, so the number is a defensible constant rather than a measured property of live syndication.
 _Avoid_: fingerprint, fingerprint hash, article hash
 
 **Cluster**: The unit the user sees. A grouping of related Stories by Entity overlap, within a 7d window (per-topic tunable). Receives Feedback and is the target of Summarization. Its one-liner and bullets are its Cluster summary. A Cluster that is still picking up Stories is a new Cluster, not a new version of the old one.
 _Avoid_: story, topic, thread
 
-**Cluster window**: How far back a Topic looks when it groups Stories into Clusters. Seven days by default, and a User can change it per Topic.
+**Cluster window**: How far back a Topic looks when it groups Stories into Clusters. Seven days by default, and a User can change it per Topic, from the control on the Topic's own LivingBrief rather than from its settings page. One to thirty days; a stored value outside that range is clamped rather than obeyed, because a window of zero clusters nothing and a window of years puts a Topic's whole history into one Cluster.
 _Avoid_: cluster TTL, retention window
 
 **Cluster summary**: The one-liner and the bullet points a Cluster is shown with. Every line is quoted from an Article in that Cluster, never written afresh, so nothing reaches a User that a Source did not write. A feed's own metadata about an item — the link and score a feed with no description gives instead of text — is not a statement a Source made about the story, so it is not quoted either, and the Article's headline is used instead.
@@ -56,19 +74,22 @@ _Avoid_: AI summary, paraphrase
 **Generation report**: What writing a brief cost — the Clusters written, the calls made, and the bullets discarded for failing the citation constraint. Held on the EmailDelivery for every brief that was sent, and added up on the BriefJobRun for every pass of the job. It exists because a written summary and a quoted one are the same document to a reader, so nothing a User can see distinguishes a feature that is working from a deployment whose credential expired; the report is the only place that can be noticed. Never part of a BriefSnapshot, which is a document and is served forever.
 _Avoid_: stats, telemetry, metrics
 
-**BriefPlan**: A selection and ordering of Clusters for a Topic at a moment in time. The regenerable artifact that BriefSnapshots and LivingBriefs are derived from.
+**BriefPlan**: A selection and ordering of Clusters for a Topic at a moment in time. The artefact a BriefSnapshot is derived from.
+**Not built**: regenerating a plan, and reading one back. A plan is written in the same step that renders and sends a brief, and nothing in the application ever reads a stored one, so "the regenerable artifact" is the intended shape rather than the current one.
 _Avoid_: brief, digest
 
 **BriefSnapshot**: An immutable, linkable rendering of a BriefPlan — the form of a brief that is emailed. Once sent, does not change. Retained forever regardless of tier, since it is what was sent.
 _Avoid_: email brief, sent brief
 
-**LivingBrief**: The in-app rendering of a Topic's current BriefPlan. Regenerates as the Topic's Clusters change.
+**LivingBrief**: What a Topic looks like in the app: its Clusters, ordered by what the User's Feedback says, read fresh on each visit and so reflecting the Topic as of that moment. It is a rendering, not a stored artefact — there is no LivingBrief table, type or route, and the word names the in-app surface rather than anything the database holds.
+**Not built**: deriving it from a BriefPlan. The plan an emailed brief is built from has no in-app counterpart, which is why the two halves of **Brief** below are described separately.
 _Avoid_: feed, topic view
 
-**Brief**: The conceptual product artifact. A specific instance is either a BriefSnapshot (email) or a LivingBrief (in-app), both produced from a BriefPlan.
+**Brief**: The conceptual product artifact. A specific instance is either a BriefSnapshot (email) or a LivingBrief (in-app). Only the first is produced from a BriefPlan today; the second is read from the Topic's Clusters directly.
 _Avoid_: digest, summary, newsletter
 
-**EmailDelivery**: A record that a BriefSnapshot was emailed to a User. Carries the per-Topic and global one-click unsubscribe tokens the brief went out with, and is what those tokens are looked up on. Distinct from the BriefSnapshot so a snapshot can be re-sent, re-linked, or unsubscribed from.
+**EmailDelivery**: A record that a BriefSnapshot was emailed to a User. Carries the per-Topic and global one-click unsubscribe tokens the brief went out with, and is what those tokens are looked up on. Distinct from the BriefSnapshot so a snapshot can be re-linked or unsubscribed from independently of the mail that carried it.
+**Not built**: re-sending one. Every send plans, renders and stores a fresh BriefSnapshot and a fresh EmailDelivery, so the two rows being separate is what makes the tokens and the document addressable rather than what makes a resend possible.
 _Avoid_: email log, sent mail
 **Unsubscribe**: One use of an unsubscribe link from a sent brief, recorded. Carries the UnsubscribeScope, the EmailDelivery the link arrived in, and the token that was spent. Single-use — the token is unique — and time-limited, so a link in a brief stays usable for as long as a reader would expect and no longer. The state the daily job honours is the unsubscribed-at date on the Topic or the User; the Unsubscribe is the record of the ask, and survives a resubscribe.
 _Avoid_: opt-out event, suppression record, bounce
@@ -117,6 +138,7 @@ _Avoid_: trend report, analytics snapshot
 _Avoid_: anomaly, outlier, event
 
 **Trends rollup**: Every Topic a User holds, added together, from the stored TopicTrends rather than from a fresh measurement. One Entity however many of their Topics it rose in.
+The exception is a Topic added since the hourly job last passed, which has no stored trend to read: it is measured once, on the first read, and read from the row after that. Every other read is a read, so a page measuring on every request is the thing being avoided rather than the thing that happens.
 _Avoid_: dashboard stats, summary
 
 ### State
@@ -124,7 +146,8 @@ _Avoid_: dashboard stats, summary
 **Active (Cluster)**: A Cluster's state while it is still picking up Stories — while its velocity (Stories per unit time) is above a threshold. Active Clusters appear in LivingBriefs and in new BriefPlans. A Cluster that stops getting covered loses Active on its own, rather than being switched off.
 _Avoid_: live, current
 
-**Retired (Story)**: A Story's state once none of its Clusters is Active. Retired Stories are retained per tier but are not surfaced in new Briefs.
+**Retired (Story)**: A Story's state once none of its Clusters is Active. Retired Stories are retained per tier but are not surfaced in new Briefs, which plan from Active Clusters and never consult a Story.
+**Not built**: retirement as a stored fact. `stories` has no state column; "Retired" is derived where it is needed — the Archive's index asks whether any of a Story's Clusters is Active — so a Story is Retired by the absence of evidence rather than by a row of its own.
 _Avoid_: dead, expired
 
 **Archive**: The persisted history of Clusters, BriefSnapshots, Articles, Stories, and FeedbackEvents beyond their active lifetime, held per Topic so it is one User's and no other's. Searchable by the User, by whole words through a full-text index. Retention is tiered, with BriefSnapshots exempt (retained forever).
@@ -135,7 +158,7 @@ _Avoid_: history, log
 **Directory**: The curated set of TopicTemplates Brieflyy ships. A User selecting a Directory entry clones it into a per-user Topic.
 _Avoid_: catalog, library
 
-**DiscoverTab**: The in-app surface showing Directory entries, "topics like yours" Recommendations, and "trending this week" — used to find and add Topics. One Directory entry is cloned at a time, not three. See ADR-0014.
+**DiscoverTab**: The in-app surface showing Directory entries, "Topics like yours" Recommendations, and what is trending over a stated window — used to find and add Topics. One Directory entry is cloned at a time, not three. See ADR-0014.
 _Avoid_: explore, browse
 
 **Recommendation**: A suggested Topic surfaced in DiscoverTab, derived from the User's existing Topics' Entity and Source overlap. Each distinct Entity and each distinct Source shared counts once.
@@ -146,8 +169,10 @@ _Avoid_: popularity, buzz, score
 
 ### Monetization
 
-**FreeTier**: 3 Topics, realtime briefs, 30-day retention on Archive (Clusters, Retired Stories, FeedbackEvents), BriefSnapshots retained forever, trends rollup visible only for the last 3 days.
+**FreeTier**: 3 Topics, 30-day retention on Archive, BriefSnapshots retained forever, trends history visible only for the last 3 days. The 30 days reaches Articles as well as Clusters, Retired Stories and FeedbackEvents — the Archive's predicate is one window over every kind except a snapshot, not three windows.
+**Not built**: realtime briefs. There is no realtime anything: a brief goes out when the User's DeliveryTime arrives and is answered for, and no tier changes that.
 _Avoid_: free plan, basic
 
-**PaidTier**: $15/mo. Unlimited Topics, indefinite Archive retention, BriefSnapshots retained forever, full trends history. The trends layer is the paid differentiator.
+**PaidTier**: Unlimited Topics, indefinite Archive retention, BriefSnapshots retained forever, full trends history. The trends layer is the paid differentiator.
+**Not built**: billing, and so the price. $15/mo is what the upgrade page says; there is no provider behind it, and the only way onto this tier is the development-only `POST /dev/tier`, which a production instance does not register.
 _Avoid_: pro, premium
