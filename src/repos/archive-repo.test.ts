@@ -109,9 +109,15 @@ describe('DrizzleArchiveRepo', () => {
    * A Cluster is the one kind whose ownership is obvious from the row, and a test
    * that only proves that one proves the page a User happens to look at. An Article
    * joins the Archive through the Sources a Topic follows, a Retired Story through
-   * the Clusters that hold it and a FeedbackEvent through the Cluster the button was
-   * on — three different routes to a row, each of which could have lost the
-   * `topics.user_id` condition on the way.
+   * the Clusters that hold it, a FeedbackEvent through the Cluster the button was
+   * on and a BriefSnapshot through the Topic the plan was written for — four
+   * different routes to a row, each of which could have lost the `topics.user_id`
+   * condition on the way.
+   *
+   * A snapshot is the one kind worth isolating hardest, because it is the one kind
+   * no tier's window narrows. A leak through the other four would show up as an item
+   * too old or too new; a leak through a snapshot would be the brief itself, in
+   * full, to a User it was never sent to.
    */
   describe('another User’s Archive is not reachable through any kind', () => {
     beforeEach(async () => {
@@ -156,6 +162,17 @@ describe('DrizzleArchiveRepo', () => {
           timestamp: new Date('2026-09-04T00:00:00Z'),
         }),
       );
+      await plans.insert(makeBriefPlan({ id: 'plan-theirs', topicId: 'topic-2', userId: 'user-2' }));
+      await snapshots.insert(
+        makeBriefSnapshot({
+          id: 'snap-theirs',
+          briefPlanId: 'plan-theirs',
+          userId: 'user-2',
+          topicId: 'topic-2',
+          createdAt: new Date('2026-09-05T00:00:00Z'),
+          text: 'Their Turbine brief\n\nGearing was replaced.',
+        }),
+      );
     });
 
     it('sees none of their Articles, Stories or signals', async () => {
@@ -163,6 +180,8 @@ describe('DrizzleArchiveRepo', () => {
       // is visible on its own.
       expect(ids((await search({ query: 'Sprockets' })).items)).toEqual([]);
       expect(ids((await search({ query: 'counted' })).items)).toEqual([]);
+      // The brief, which is the whole of it rather than a word in it.
+      expect(ids((await search({ query: 'Gearing' })).items)).toEqual([]);
     });
 
     it('and does not get them by browsing rather than searching', async () => {
@@ -174,6 +193,7 @@ describe('DrizzleArchiveRepo', () => {
         'article:a-theirs',
         'cluster:cluster-theirs',
         'feedback:fe-theirs',
+        'snapshot:snap-theirs',
         'story:story-theirs',
       ]);
     });
@@ -698,6 +718,36 @@ describe('DrizzleArchiveRepo', () => {
     });
     expect(second.items.map((i) => i.id)).toEqual(['cluster-old']);
     expect(second.total).toBe(2);
+  });
+
+  it('counts only what the window leaves, so the total cannot leak either', async () => {
+    await clusters.insert(
+      makeCluster({
+        id: 'cluster-old',
+        topicId: 'topic-1',
+        title: 'Old',
+        createdAt: new Date('2026-08-01T00:00:00Z'),
+      }),
+    );
+    await clusters.insert(
+      makeCluster({
+        id: 'cluster-new',
+        topicId: 'topic-1',
+        title: 'New',
+        createdAt: new Date('2026-09-20T00:00:00Z'),
+      }),
+    );
+    const counted = (retainedSince: Date | null): Promise<ArchiveSearchResult> =>
+      repo.search({ userId: 'user-1', filter: {}, retainedSince, limit: 25, offset: 0 });
+
+    // Both are in the Archive, which is what makes the difference the window's doing.
+    expect((await counted(NO_WINDOW)).total).toBe(2);
+    // The one outside the window is not in the page, so it must not be in the number
+    // beside it either: "2 results" on a page showing one row is a free User told the
+    // size of the Archive their tier does not reach.
+    const windowed = await counted(THIRTY_DAYS_AGO);
+    expect(windowed.items.map((i) => i.id)).toEqual(['cluster-new']);
+    expect(windowed.total).toBe(1);
   });
 
   it('offers only the Topics, Sources and Entities its own Archive holds', async () => {

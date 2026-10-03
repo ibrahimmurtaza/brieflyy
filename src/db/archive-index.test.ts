@@ -255,6 +255,49 @@ describe('the Archive text index', () => {
     expect(matchIds('Prototype')).toContain('story-1');
   });
 
+  it('indexes one row for a Story two Clusters of the same Topic both hold', async () => {
+    await stories.insert(STORY_ONE);
+    await articles.insert({
+      article: makeArticle({
+        id: 'a-1',
+        sourceId: 'src-a',
+        storyId: 'story-1',
+        title: 'Wire copy one',
+        body: 'A Prototype that never shipped.',
+      }),
+      entityIds: [],
+    });
+    // A Story spans Sources (ADR 0010), so a dedup Story is normally held by more
+    // than one Cluster of the same Topic. Both are Archived, so it is Retired.
+    await clusters.insert(
+      makeCluster({
+        id: 'cluster-old',
+        topicId: 'topic-1',
+        state: 'archive',
+        createdAt: new Date('2026-08-01T00:00:00Z'),
+      }),
+      ['story-1' as StoryId],
+    );
+    await clusters.insert(
+      makeCluster({
+        id: 'cluster-old-2',
+        topicId: 'topic-1',
+        state: 'archive',
+        createdAt: new Date('2026-08-02T00:00:00Z'),
+      }),
+      ['story-1' as StoryId],
+    );
+
+    // One row, not two: the Archive is keyed by (kind, item, topic), and two Clusters
+    // of one Topic are still one Topic's Story. A second row here is the same
+    // reporting listed twice.
+    const rows = driver
+      .prepare(`SELECT topic_id FROM archive_items WHERE kind = 'story' AND item_id = ?`)
+      .all('story-1') as { topic_id: string }[];
+    expect(rows).toEqual([{ topic_id: 'topic-1' }]);
+    expect(matchIds('Prototype')).toContain('story-1');
+  });
+
   it('picks up a second Article landing on a Story it already indexes', async () => {
     await stories.insert(STORY_ONE);
     await articles.insert({

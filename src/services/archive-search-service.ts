@@ -63,7 +63,13 @@ export class ArchiveSearchService {
   ) {}
 
   /**
-   * How far back this tier's Archive reaches, or null when it reaches all of it.
+   * How far back this viewer's tier reaches, in days, or null when it reaches all.
+   *
+   * Public because the results page has to say so on the page, and reading it from
+   * `entitlementsFor` at the route would make the tier a thing two layers decide
+   * things about — the second place a retuned retention window would have to be
+   * remembered. Asked of the service, the sentence and the rows that answer to it
+   * cannot come to disagree.
    *
    * The number comes from the one table that describes tiers rather than from a
    * literal here, so a test exercising the paywall has to put a User on the tier it
@@ -74,8 +80,18 @@ export class ArchiveSearchService {
    * of what was sent, and age has nothing to say about that — so it belongs with the
    * rows. Restating it per tier would be a second place for the same rule to live.
    */
-  private windowFor(tier: Tier): Date | null {
-    const days = entitlementsFor(tier).archiveRetentionDays;
+  retentionDaysFor(viewer: ArchiveViewer): number | null {
+    return entitlementsFor(viewer.tier).archiveRetentionDays;
+  }
+
+  /**
+   * The same window as a date the repository can apply, or null for all of it.
+   *
+   * The days are read through `retentionDaysFor` so the sentence on the page and the
+   * predicate on the rows come from one reading of the tier rather than two.
+   */
+  private windowFor(viewer: ArchiveViewer): Date | null {
+    const days = this.retentionDaysFor(viewer);
     if (days === null) return null;
     // Copied before it is moved: the Date comes from a Clock the caller owns, and a
     // search that shifted a shared instance backwards by thirty days would change
@@ -100,7 +116,7 @@ export class ArchiveSearchService {
     return this.deps.archiveRepo.search({
       userId: input.viewer.userId,
       filter: input.filter,
-      retainedSince: this.windowFor(input.viewer.tier),
+      retainedSince: this.windowFor(input.viewer),
       limit: ARCHIVE_RESULT_LIMIT,
       offset: input.offset ?? 0,
     });
@@ -117,7 +133,7 @@ export class ArchiveSearchService {
   async filtersFor(viewer: ArchiveViewer): Promise<ArchiveFilters> {
     return this.deps.archiveRepo.listFilters({
       userId: viewer.userId,
-      retainedSince: this.windowFor(viewer.tier),
+      retainedSince: this.windowFor(viewer),
     });
   }
 }

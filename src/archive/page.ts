@@ -2,13 +2,13 @@ import { ARCHIVE_RESULT_LIMIT, type ArchiveViewer } from '../services/archive-se
 import { ARCHIVE_SEARCH_PATH, clusterAnchor, layout, TIER_LABELS, type ShellAccount } from '../pages/layout.js';
 import { hasDroppedWords, wordsSearched, type ArchiveSearchFilter } from '../domain/archive-query.js';
 import { escapeHtml } from '../domain/html.js';
+import { formatHumanTime } from '../pages/human-time.js';
 import type {
   ArchiveChoice,
   ArchiveFilters,
   ArchiveItemKind,
   ArchiveResultItem,
   ArchiveSearchResult,
-  ArchiveTopic,
 } from '../repos/archive-repo.js';
 
 /**
@@ -74,11 +74,18 @@ function field(input: {
   return `      <label for="archive-${input.name}">${escapeHtml(input.label)}${input.control}</label>`;
 }
 
-/** A `<select>` whose first option is "no filter", with the current choice kept. */
+/**
+ * A `<select>` over whatever the Archive can be narrowed by, with the current choice kept.
+ *
+ * One function for the Source, Entity and Topic selects rather than three: they are
+ * the same control over a list of choices, and the only thing that differed between
+ * them was which list they were handed — so a fourth filter would have been a fourth
+ * copy of the same markup to keep in step with the other three.
+ */
 function choiceSelect(input: {
   readonly name: string;
   readonly label: string;
-  readonly options: readonly ArchiveChoice[];
+  readonly options: readonly { readonly id: string; readonly name: string }[];
   readonly chosen: string | undefined;
 }): string {
   const options = input.options
@@ -92,24 +99,6 @@ function choiceSelect(input: {
     label: input.label,
     control: `
       <select id="archive-${input.name}" name="${input.name}">
-        <option value="">Any</option>
-${options}
-      </select>`,
-  });
-}
-
-function topicSelect(topics: readonly ArchiveTopic[], chosen: string | undefined): string {
-  const options = topics
-    .map(
-      (t) =>
-        `        <option value="${escapeHtml(t.id)}"${t.id === chosen ? ' selected' : ''}>${escapeHtml(t.title)}</option>`,
-    )
-    .join('\n');
-  return field({
-    name: 'topic',
-    label: 'Topic',
-    control: `
-      <select id="archive-topic" name="topic">
         <option value="">Any</option>
 ${options}
       </select>`,
@@ -193,18 +182,23 @@ function sourceNames(
 function resultsList(
   items: readonly ArchiveResultItem[],
   sources: readonly ArchiveChoice[],
+  timezone: string,
 ): string {
   return `    <ul class="results">
 ${items
   .map((item) => {
     const body = excerpt(item.body);
     const outlets = sourceNames(item, sources);
-    const where =
-      outlets.length === 0
-        ? ''
-        : ` &middot; ${escapeHtml(outlets.join(', '))}`;
+    const parts = [
+      ARCHIVE_KINDS[item.kind].label,
+      item.topicTitle,
+      ...outlets,
+      // The date last, and in the User's own zone, for the reason the whole list is
+      // ordered the way it is: this is what tells one row from the one above it.
+      `${formatHumanTime(item.createdAt, timezone)} (${timezone})`,
+    ];
     return `      <li>
-        <p class="results__kind">${escapeHtml(ARCHIVE_KINDS[item.kind].label)} &middot; ${escapeHtml(item.topicTitle)}${where}</p>
+        <p class="results__kind">${escapeHtml(parts.join(' · '))}</p>
         <p class="results__title"><a href="${escapeHtml(ARCHIVE_KINDS[item.kind].href(item))}">${escapeHtml(item.title)}</a></p>
 ${body === '' ? '' : `        <p class="muted">${escapeHtml(body)}</p>`}
       </li>`;
@@ -262,6 +256,15 @@ export function archiveSearchPage(input: {
   readonly offset: number;
   /** How far back this tier reaches, or null when it reaches all of it. */
   readonly retentionDays: number | null;
+  /**
+   * The User's own zone, so a date here is one they would have written.
+   *
+   * The Archive is the one page whose rows are instants the User chose to look for
+   * rather than instants something happened to them, and "when was this" is the first
+   * question about a hit — answered newest-first, so an undated list is a list that
+   * only makes sense in one order.
+   */
+  readonly timezone: string;
 }): string {
   const { filter, filters, results, offset } = input;
 
@@ -294,7 +297,7 @@ export function archiveSearchPage(input: {
           ? `${results.total} result${results.total === 1 ? '' : 's'}`
           : `Showing ${offset + 1}&ndash;${offset + results.items.length} of ${results.total}`
       }</p>
-${resultsList(results.items, filters.sources)}
+${resultsList(results.items, filters.sources, input.timezone)}
 ${paging({ filter, results, offset })}`;
 
   return layout({
@@ -308,7 +311,7 @@ ${paging({ filter, results, offset })}`;
     <form class="archive-search" method="GET" action="${ARCHIVE_SEARCH_PATH}" role="search">
 ${choiceSelect({ name: 'source', label: 'Source', options: filters.sources, chosen: filter.source })}
 ${choiceSelect({ name: 'entity', label: 'Entity', options: filters.entities, chosen: filter.entity })}
-${topicSelect(filters.topics, filter.topic)}
+${choiceSelect({ name: 'topic', label: 'Topic', options: filters.topics.map((t) => ({ id: t.id, name: t.title })), chosen: filter.topic })}
 ${dateField('from', 'From', filter.from)}
 ${dateField('to', 'To', filter.to)}
       <label for="archive-words">Search words</label>

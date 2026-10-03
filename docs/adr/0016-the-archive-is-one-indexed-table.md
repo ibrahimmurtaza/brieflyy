@@ -31,8 +31,14 @@ User's tier window:
   appears. There is no way to reach these tables that is not through SQL, so there is
   nothing for a trigger to miss. This is the trade the record should be honest about:
   a view would be current by construction, where these are only as current as the
-  triggers. `src/db/archive-index.test.ts` drives every one of them through a
-  repository, which is the only way the rest of the application writes these rows.
+  triggers. `src/db/archive-index.test.ts` drives the triggers whose paths the
+  repositories actually take, through a repository, which is the only way the rest of
+  the application writes these rows. The ones it cannot drive are named here rather
+  than left to be assumed: the delete triggers for Articles, BriefSnapshots,
+  FeedbackEvents, Entity links and Cluster-Story links — no repository deletes any of
+  those rows — and the update trigger on `archive_items` itself, which nothing fires
+  because every write above is a delete and an insert. Those guard paths that do not
+  exist yet, so this record should not be read as saying they have been proved.
 - **Matching is FTS5, and it is asked of the index.** `archive_items_fts` is an
   external-content table over `archive_items`, synced by three triggers on
   `archive_items` itself. `toFtsMatch` quotes every term the User typed, so nothing

@@ -260,8 +260,9 @@ src/
 ├── scheduling/            # IntervalLoop — the loop both background jobs ride on
 ├── verify/                # staged-credential check (run by pnpm secrets:check)
 │
-├── archive/               # the Archive view: the search results page. Its route and
-│                          # its full-text index live in db/archive-index.ts
+├── archive/               # the Archive view: the search results page. Its route is
+│                          # in pages/routes.ts, with the rest of the shell's; its
+│                          # full-text index is in db/archive-index.ts
 ├── email/                 # EmailTransport seam (Console + Resend)
 │
 ├── auth/                  # AuthService (orchestration) + HTTP routes
