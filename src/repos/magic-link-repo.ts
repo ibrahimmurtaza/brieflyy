@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, gt, isNull } from 'drizzle-orm';
 
 import type { Db } from '../db/client.js';
 import { magicLinks, type MagicLinkRow } from '../db/schema.js';
@@ -21,7 +21,12 @@ export interface MagicLinkRepo {
   getByTokenHash(tokenHash: string): Promise<MagicLink | null>;
   /** Point a link at the account it turned into, once one exists. */
   attachAccount(id: MagicLinkId, accountId: AccountId): Promise<void>;
-  markConsumed(id: MagicLinkId, at: Date): Promise<void>;
+  /**
+   * Spend the link in one conditional write: true only for the caller that
+   * moves consumedAt from null, so two concurrent verifications cannot both
+   * spend it.
+   */
+  markConsumed(id: MagicLinkId, at: Date): Promise<boolean>;
 }
 
 export class DrizzleMagicLinkRepo implements MagicLinkRepo {
@@ -55,17 +60,18 @@ export class DrizzleMagicLinkRepo implements MagicLinkRepo {
       .where(eq(magicLinks.id, id));
   }
 
-  async markConsumed(id: MagicLinkId, at: Date): Promise<void> {
-    await this.db
+  async markConsumed(id: MagicLinkId, at: Date): Promise<boolean> {
+    const rows = await this.db
       .update(magicLinks)
       .set({ consumedAt: at })
-      .where(eq(magicLinks.id, id));
+      .where(
+        and(
+          eq(magicLinks.id, id),
+          isNull(magicLinks.consumedAt),
+          gt(magicLinks.expiresAt, at),
+        ),
+      )
+      .returning();
+    return rows.length > 0;
   }
-}
-
-export function isMagicLinkUsable(
-  link: MagicLink,
-  now: Date,
-): boolean {
-  return link.consumedAt === null && link.expiresAt.getTime() > now.getTime();
 }
