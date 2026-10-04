@@ -1,0 +1,15 @@
+# An unexpected failure answers a page or a JSON body
+
+The application had no error handler. Every thrown error became Fastify's own reply — `{"statusCode":500,"error":"Internal Server Error","message":"sqlite: no such column: accounts.emial"}` — which is a document, carrying the failure itself, handed to whoever asked a page. ADR-0009 decided what an address that leads nowhere answers, and the not-found handler implemented it; nothing decided what a route that *failed* answers, so the two questions had different shapes and only one of them had an answer a User could act on. Clicking "Sign in with Google" on an instance with no Google configured produced exactly that document.
+
+There is now one handler, installed on the instance every route is registered against (`setApplicationErrorHandler` in `src/http/errors.ts`), and it follows the rule the not-found handler already follows because it is the same rule seen from the other side: `/api/` is a JSON surface and answers `{"error":"internal_error"}`, and everything else is a page. A User gets a page they can read and leave; a machine gets a body it can branch on. The page carries the shell when there is a signed-in User to put it on, which is ADR-0009's rule rather than a new one — a failure inside the application is as likely to arrive on `/topics` as on the way in, and a page with no navigation is a dead end for the User who already had one.
+
+Three things the handler does not do.
+
+**It does not send the failure.** It goes to the request log, which `server.ts` turns on with `logger: true`, and a SQL message is not something to hand to a stranger. `pnpm dev` builds the application through the same factory, so a developer reads the error where it was logged rather than in the browser window — which is the trade being made: a faster local loop is not worth a stack trace on a page a User reads.
+
+**It does not turn a client error into a server error.** A body Fastify could not parse carries a 4xx of its own, and answering 500 says the application broke over somebody's missing brace. Anything without a usable 4xx–5xx `statusCode` is a 500. The status is carried through to the answer, so a caller's own mistake stays the caller's: the page for a 4xx says the request could not be completed rather than that Brieflyy failed, and the body a `/api/` surface gets is the code that route would have used — `unauthorized`, `rate_limited`, `not_found` — rather than one word for every 4xx, which would tell a caller that had been rate limited that it had sent something wrong.
+
+**It does not try twice.** The session is resolved by a hook before the handler runs, and that hook is a database read like any other — so `req.auth` may be absent because the failure *is* the session lookup. The shell is resolved only when there is an auth to resolve it from, and a second failure there is logged rather than raised: a header is not worth turning one failed request into two.
+
+`reply.sent` is honoured. A stream that failed midway has already put bytes on the wire, and the one thing worse than a bare 500 is a second response written into the middle of it.

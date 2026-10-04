@@ -206,6 +206,33 @@ response is the same for an address that has an account and one that has not.
 Requests are counted per address and per caller, and a caller that is out of
 quota gets 429 with a `Retry-After`.
 
+Google sign-in is offered only where a provider is configured. `AuthService`
+holds the client, and `googleSignInAvailable()` is the one answer to "is there a
+Provider on this instance": the two `/auth/google/*` routes ask it per request and
+`createApp` asks it once for the sign-in page, so the button and the route behind
+it cannot disagree. On an instance without one the button and its divider are not
+rendered and both routes answer 503 with a page naming what is missing. They are
+registered either way: `PUBLIC_ROUTES` is the whole public surface of an
+instance, and a surface that changed shape with a deployment variable would be a
+surface the route guard could not check. See ADR-0019.
+
+An address is stored in one form whichever door it came through. A magic link has
+always normalised the address it stores, and the Google path applies the same
+rule to what Google returns, so `Iris@Example.com` finds the Account a magic link
+made for `iris@example.com` instead of nearly creating a second one for the same
+human. An address the application will not store refuses the sign-in rather than
+becoming an Account row no lookup could find. See ADR-0020.
+
+An unexpected failure answers a page or a JSON body, never a bare 500. The
+handler in `src/http/errors.ts` is installed on the instance every route is
+registered against and follows the same rule as the not-found handler: `/api/` is
+a JSON surface and answers `{"error":"internal_error"}`, everything else is a
+page — with the shell on it when there is a signed-in User, so a failure inside
+the application does not become a page with no way out. A 4xx keeps its own status
+and its own code, and its page says the request could not be completed rather than
+that Brieflyy failed; the failure itself goes to the request log rather than to
+the caller. See ADR-0018.
+
 The four `/unsubscribe/*` routes are public for the same reason the magic link
 is: a reader following a link in their inbox is not signed in, so the token in
 the URL is the whole authorisation. Each Topic's opt-out is `topics.unsubscribed_at`
@@ -304,7 +331,8 @@ src/
 ├── directory/             # Seed JSON + directory loader (Sources, TopicTemplates)
 ├── domain/                # pure types & helpers (crypto, clock, timezone,
 │                          # DeliverySlot, tier, story signature, trends, LLM contract)
-├── http/                  # route access declarations, auth guard, rate limiter
+├── http/                  # route access declarations, auth guard, rate limiter,
+│                          # and the error handler every route's failures reach
 ├── repos/                 # persistence adapters (users, accounts, sessions,
 │                          # magic-links, topics, sources, stories, clusters, briefs,
 │                          # feedback, trends, archive, unsubscribe, ...)
@@ -384,12 +412,14 @@ purpose, and each is reached by something other than a request:
 | `src/ingest/test-constants.ts` | the ingest suites |
 | `src/testing/`, `src/app-wiring.ts` | the suites |
 
-`oauth/` and `billing/` are inside the closure but conditional: the OAuth routes
-exist only when `OAUTH_PROVIDER` names a provider, and `billing/` exists only when
-the development-only routes are on, which they are not in production. One thing the
-glossary asks for and no module provides is a LivingBrief derived from a BriefPlan;
-the in-app surface is a rendering of the Topic's Clusters instead. `CONTEXT.md` says
-so on the entry rather than leaving it to be found.
+`oauth/` and `billing/` are inside the closure but conditional: `oauth/` builds a
+client only when `OAUTH_PROVIDER` names a provider, and where there is none the
+sign-in page offers no Google and the two Google routes refuse rather than throw
+(ADR-0019); `billing/` exists only when the development-only routes are on, which
+they are not in production. One thing the glossary asks for and no module provides
+is a LivingBrief derived from a BriefPlan; the in-app surface is a rendering of
+the Topic's Clusters instead. `CONTEXT.md` says so on the entry rather than leaving
+it to be found.
 
 ### Seams
 
@@ -446,7 +476,7 @@ signed-in User at `/admin/ingest` and `/admin/briefs`.
 pnpm test
 ```
 
-The suite is 86 test files across `src/`, one per module, holding 1,296 cases —
+The suite is 87 test files across `src/`, one per module, holding 1,313 cases —
 Vitest prints the live figure at the end of every run. `docs-agreement.test.ts`
 checks the file count and cannot check the case count without running the suite it
 lives in, so that one number is worth reading off a run rather than trusting.

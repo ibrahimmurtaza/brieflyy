@@ -26,8 +26,11 @@ agreeing about a file, a command or a count.
 **User**: A human who has signed up for Brieflyy. One account = one human. A User who has asked to stop receiving every brief carries an unsubscribed-at date; it is what the daily job reads to skip them.
 _Avoid_: customer, member, account holder
 
-**Account**: The authentication record for a User. Holds email, linked OAuth providers (Google), and active sessions.
+**Account**: The authentication record for a User. Holds email, linked OAuth providers (Google), and active sessions. One User has one Account however many doors they came through, and an Account's address is stored in one form however it was written when they arrived.
 _Avoid_: profile, credentials
+
+**Provider**: A sign-in Brieflyy offers that hands the identity check to somebody else, currently only Google. Whether one is offered is a property of the deployment, not of the User or the request: an instance with no Provider configured offers no Google button, and the routes behind one refuse rather than fail. See ADR-0019.
+_Avoid_: social login, SSO (when meaning the identity check rather than the protocol)
 
 **OnboardingState**: A User's progress through first-run topic selection and delivery-time setup. It is what decides which screen a User lands on after signing in, and nothing else: there is no activation event, no time limit and no measurement of one.
 **Not built**: the activation moment — a first brief landing within 24h of signup. Nothing in the application records one or waits for one, so this is a number with no counter behind it rather than a behaviour that is merely unmeasured.

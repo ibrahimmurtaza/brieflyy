@@ -12,6 +12,7 @@ import {
 import type { Db } from './db/client.js';
 import { applyDirectorySeed } from './directory/seed.js';
 import { attachRouteManifest } from './http/access.js';
+import { setApplicationErrorHandler } from './http/errors.js';
 import { FixedWindowRateLimiter } from './http/rate-limit.js';
 import { DrizzleAccountRepo } from './repos/account-repo.js';
 import { DrizzleArticleRepo } from './repos/article-repo.js';
@@ -418,6 +419,11 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     clock,
   );
 
+  // Asked once, of the service that holds the client, and handed to the sign-in
+  // page: whether this instance offers Google is a question about the deployment,
+  // and the two Google routes ask the same service for themselves.
+  const googleSignInAvailable = authService.googleSignInAvailable();
+
   await registerAuthRoutes(app, {
     authService,
     sessionTtlMs: opts.sessionTtlMs ?? SESSION_TTL_MS_DEFAULT,
@@ -429,6 +435,12 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
   await registerOnboardingRoutes(app, {
     onboardingService,
   });
+
+  // One handler for every route, installed on the instance they are all
+  // registered against — which is why the two modules registered above are covered
+  // by it as well: the answer is a property of the instance, not of where in
+  // createApp it was set.
+  setApplicationErrorHandler(app, { onboardingService });
 
   await registerPageRoutes(app, {
     appBaseUrl: opts.appBaseUrl,
@@ -442,6 +454,7 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     unsubscribeService,
     trendsService,
     archiveSearchService,
+    googleSignInAvailable,
   });
 
   // One Topic's settings, as its own workflow: the page and the six forms on it
