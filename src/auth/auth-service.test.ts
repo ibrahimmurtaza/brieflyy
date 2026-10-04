@@ -270,6 +270,24 @@ describe('AuthService.verifyMagicLink', () => {
     expect(count('users')).toBe(1);
   });
 
+  it('gives overlapping verifications of the same link exactly one session', async () => {
+    const { service, transport, driver } = makeService();
+    await service.requestMagicLink({ email: 'iris@example.com' });
+    const token = extractToken(transport.snapshot()[0]!);
+
+    const [one, two] = await Promise.all([
+      service.verifyMagicLink({ token }),
+      service.verifyMagicLink({ token }),
+    ]);
+
+    const oks = [one, two].filter((o) => o.status === 'ok');
+    const refused = [one, two].filter((o) => o.status === 'invalid');
+    expect(oks).toHaveLength(1);
+    expect(refused).toHaveLength(1);
+    expect(refused[0]).toEqual({ status: 'invalid', reason: 'already_used' });
+    expect(countRows(driver, 'sessions')).toBe(1);
+  });
+
   it('gives two links for one fresh address the same account when both are opened', async () => {
     const { service, transport, count } = makeService();
     await service.requestMagicLink({ email: 'iris@example.com' });

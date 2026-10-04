@@ -272,6 +272,14 @@ export class AuthService {
     }
     const { account, user } = resolved;
 
+    // The spend is the single conditional write. Whoever wins it owns the
+    // session; the loser gets the same answer an already-used link gets and
+    // creates nothing.
+    const consumed = await this.magicLinkRepo.markConsumed(link.id, now);
+    if (!consumed) {
+      return { status: 'invalid', reason: 'already_used' };
+    }
+
     const sessionId = generateSessionId(this.random);
     const session: Session = {
       id: sessionId,
@@ -285,7 +293,6 @@ export class AuthService {
     if (account.emailVerifiedAt === null) {
       await this.accountRepo.markEmailVerified(account.id, now);
     }
-    await this.magicLinkRepo.markConsumed(link.id, now);
 
     return { status: 'ok', session, user, account };
   }
