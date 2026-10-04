@@ -18,6 +18,7 @@
  */
 
 import type { EntityKind } from './types.js';
+import { stripFeedMetadata } from './feed-text.js';
 import {
   CONNECTORS,
   DETERMINERS,
@@ -89,7 +90,15 @@ const SHOUTING_RATIO = 3;
 
 const SENTENCE_SPLIT = /(?<=[.!?])\s+|(?<=.{40,})\n/;
 const WORD = /[A-Za-z]+(?:['’-][A-Za-z]+)*/g;
-const POSSESSIVE = /(?:'s|s')$/;
+/**
+ * A possessive, in either of the apostrophes an outlet writes.
+ *
+ * The typographic one is not an edge case: a feed that serves curly prose is
+ * the majority of them, and `Russia’s` scanned as `Russia’s` rather than as
+ * `Russia` — so the Entity a User is shown carries a possessive no name has, and
+ * the run it opens is one word longer than the name in it.
+ */
+const POSSESSIVE = /(?:['’]s|s')$/;
 const ALLCAPS = /^[A-Z0-9&.]+$/;
 
 interface Word {
@@ -406,8 +415,18 @@ interface Candidate {
  */
 export function extractEntities(text: string): ExtractedEntity[] {
   if (text.length === 0) return [];
+  // A feed's own bookkeeping is removed before anything is read out of the text.
+  // It carries no names, and the word pattern cannot tell that on its own: it
+  // throws the digits away, so `Points: 6 # Comments: 0` arrives as two ordinary
+  // capitalised words and is read as one name called `Points Comments`. Because
+  // an Entity is what two Articles are matched on, such a name does not merely
+  // look wrong — it matches every Article the same feed ever sent, which is
+  // precisely how a Hacker News Article and an obituary were found to be about
+  // the same thing. The parser strips this too; doing it here as well means the
+  // rule holds for any caller rather than only the one that tidies its input
+  // first.
   const words: Word[] = [];
-  for (const sentence of text.split(SENTENCE_SPLIT)) {
+  for (const sentence of stripFeedMetadata(text).split(SENTENCE_SPLIT)) {
     words.push(...tokenize(sentence.trim()));
   }
   if (words.length === 0) return [];

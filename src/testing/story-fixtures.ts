@@ -15,6 +15,7 @@
  */
 
 import { extractSignature } from '../domain/extract.js';
+import { articleText } from '../domain/feed-text.js';
 import { normalizeSignature, type StorySignature } from '../domain/story-signature.js';
 
 export interface WireCopy {
@@ -27,6 +28,22 @@ export interface WireCopy {
 /** The signature the pipeline gives a piece of text. */
 export function signatureOf(text: string): StorySignature {
   return normalizeSignature(extractSignature(text));
+}
+
+/**
+ * The signature the pipeline gives an Article, which is its headline and its
+ * body together rather than either alone.
+ *
+ * Two derivations of "the signature of an Article" is one too many, and they had
+ * drifted: a boot-time backfill read the body while ingest read the headline as
+ * well, so a backfilled Story and a freshly-ingested one were matched on
+ * different keys.
+ */
+export function articleSignatureOf(
+  headline: string,
+  body: string,
+): StorySignature {
+  return signatureOf(articleText(headline, body));
 }
 
 /**
@@ -185,5 +202,119 @@ export const SAME_COMPANY_REPORTS: readonly UnrelatedReport[] = [
   {
     headline: 'Acme Corp to shut Riverton plant, 340 jobs affected',
     body: 'Acme Corp said it would close its Riverton plant in March, affecting about 340 jobs. A union said it would consult on redundancy terms before any announcement is made to staff. Acme blamed a fall in orders from European customers. The site has made batteries for the group since 1998.',
+  },
+];
+
+/**
+ * Items the way a feed with no description serves them: a headline, and in the
+ * body nothing but the feed's own bookkeeping.
+ *
+ * This is hnrss.org's shape, and it is the reason a set of fixtures written as
+ * ordinary prose could not see the defect. Every body here differs only in the
+ * digits and the link, and the word pattern throws digits away — so signed as
+ * text, seventy-six of these were one Story and the six most-mentioned Entities
+ * in the database were `Points Comments`, `Comments`, `URL` and `Article`.
+ *
+ * Nothing here is a rewrite of anything else, so the only correct answer is one
+ * Story per item.
+ */
+export const METADATA_ONLY_ITEMS: readonly WireCopy[] = [
+  {
+    headline: "I stopped reviewing my agents' code. Here's what I do instead",
+    body: 'Article URL: https://alexeyindeev.substack.com/p/i-stopped-reviewing-my-agents-code Comments URL: https://news.ycombinator.com/item?id=49951081 Points: 6 # Comments: 0',
+  },
+  {
+    headline: "Why don't more developers \"use the platform\"?",
+    body: 'Article URL: https://nolanlawson.com/2026/10/03/why-dont-more-developers-use-the-platform/ Comments URL: https://news.ycombinator.com/item?id=49950554 Points: 38 # Comments: 18',
+  },
+  {
+    headline: "We're working on a new RuneScape MMO",
+    body: 'Article URL: https://play.runescape.com/4 Comments URL: https://news.ycombinator.com/item?id=49949588 Points: 12 # Comments: 5',
+  },
+  {
+    headline: "We're going to need default hard budget caps on pretty much everything",
+    body: 'Article URL: https://simonwillison.net/2026/Oct/3/default-hard-budget-caps/ Comments URL: https://news.ycombinator.com/item?id=49949235 Points: 328 # Comments: 163',
+  },
+  {
+    headline: 'Tell HN: Bob Cringely has died',
+    body: 'Article URL: https://news.ycombinator.com/item?id=49949438 Comments URL: https://news.ycombinator.com/item?id=49949438 Points: 118 # Comments: 47',
+  },
+  {
+    headline: 'Someone got Doom in an SQL database',
+    body: 'Article URL: https://github.com/lukesampson/sql-doom Comments URL: https://news.ycombinator.com/item?id=49948006 Points: 512 # Comments: 121',
+  },
+];
+
+/**
+ * Items the way a feed that cites its own articles serves them: a fixed prefix
+ * naming the publication, the date and the DOI, then a real standfirst.
+ *
+ * This is nature.com's shape. The prefix is most of the text, so signed whole it
+ * made every Nature Article look alike — twenty-two of them became one Story,
+ * and `Nature Published`, `Published` and `September` were among the most
+ * mentioned Entities in the database.
+ */
+export const CITATION_PREFIXED_REPORTS: readonly UnrelatedReport[] = [
+  {
+    headline: 'Von Neumann’s party',
+    body: 'Nature, Published online: 02 October 2026; doi:10.1038/d41586-026-02976-6 A tricky question.',
+  },
+  {
+    headline: 'How to respond to hate speech without fuelling it further',
+    body: 'Nature, Published online: 02 October 2026; doi:10.1038/d41586-026-03058-3 Psychologist Mirta Galesic discusses an increase in hateful comments online, and the science-backed way to react.',
+  },
+  {
+    headline: 'Location, location, location: how to edit genes only in the cells you want',
+    body: 'Nature, Published online: 02 October 2026; doi:10.1038/d41586-026-03037-8 Gene-editing CRISPR enzymes controlled by light and sound target tissues of interest.',
+  },
+  {
+    headline: 'A dopamine-like molecule makes brain tissue come alive',
+    body: 'Nature, Published online: 02 October 2026; doi:10.1038/d41586-026-03012-4 Researchers report that a fluorescent compound reversibly brightens neural tissue in living mice.',
+  },
+  {
+    headline: 'The mystery of the Moon’s far-side missions',
+    body: 'Nature, Published online: 02 October 2026; doi:10.1038/d41586-026-02988-1 Two robotic landers failed in 2023 and the cause is still being argued over.',
+  },
+  {
+    headline: 'Why desert soils stay fertile for millennia',
+    body: 'Nature, Published online: 02 October 2026; doi:10.1038/d41586-026-03022-7 Analysis of carbonate crusts in the Atacama shows dust delivering nitrogen far faster than rainfall.',
+  },
+];
+
+/**
+ * The standfirsts an outlet writes rather than the feed's bookkeeping about the
+ * item, as they reach the pipeline.
+ *
+ * A short body is not a broken body. BBC, CNBC, Wired, Ars Technica,
+ * MarketWatch, Scientific American, Politico, Sky News and NPR all serve one
+ * editorial sentence in `<description>` and nothing else, which is the best
+ * sentence an Article has — and 1,032 of 1,483 Articles in a day of live
+ * ingest were under 200 characters because of it. These exist so that a rule
+ * built to strip feed metadata cannot quietly start stripping prose: none of
+ * them contains a `doi:`, a `Label: number` run or a URL, and every one has to
+ * survive intact.
+ */
+export const STANDFIRST_REPORTS: readonly UnrelatedReport[] = [
+  {
+    headline: 'I clawed my way to the top but need a break - Azpilicueta',
+    body: 'Cesar Azpilicueta says it is time to move to "a different stage of life" following a glorious 20-year playing career, notably captaining Chelsea to several titles.',
+  },
+  {
+    headline: 'How to Collect CDs',
+    body: "Fed up with paying to stream music you’ll never actually own? Give the little silver disc a spin. Here’s how to start a CD collection or get more out of one you already have.",
+  },
+  {
+    headline: 'Someone got Doom in an SQL database',
+    body: '1,300 lines of SQL querying renders accurate bitmapped views of Hell at 35 fps.',
+  },
+  {
+    headline: 'Delhi Cut Electricity Loss from 50 to 5 Percent',
+    body: 'The utility says a decade of metering and remote disconnection has cut losses more than any new generation could have.',
+  },
+  {
+    headline: 'Russia’s spy agency opens criminal case against Lib Dem councillor',
+    // Straight apostrophes, so this fixture is about the standfirst surviving the
+    // metadata cut rather than about which apostrophe an outlet writes.
+    body: "Russia's spy agency has opened a criminal case against a Russian exile living in London, accusing her of being part of a terrorist organisation.",
   },
 ];

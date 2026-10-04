@@ -1,3 +1,4 @@
+import { stripFeedMetadata } from './feed-text.js';
 import type { Article } from './types.js';
 
 /**
@@ -9,32 +10,6 @@ const MIN_SENTENCE_CHARS = 24;
 const SENTENCE_SPLIT = /(?<=[.!?])\s+|\n+/;
 
 /**
- * A citation header a feed puts in front of the text it does have.
- *
- * Some feeds prepend the publication's own details to the only text they
- * offer, so an Article arrives reading "Nature, Published online: 28 September
- * 2026; doi:10.1038/... China tests these therapies faster than the rest of
- * the world." Nothing in prose contains `doi:`, which is what makes it a safe
- * place to cut: the boundary is the feed's, not a guess about the sentence.
- */
-const CITATION_HEADER = /^\s*[^\n]{0,200}?doi:\S+\s*/i;
-
-/**
- * A "Label: value" run whose value is a link or a bare number.
- *
- * A feed with no description reports on the item instead of describing it, and
- * what it produces reads "Article URL: <link> Comments URL: <link> Points: 33
- * # Comments: 10". Cutting the runs leaves nothing but connective text, which
- * is how such a sentence is recognised. The label has to be capitalised and the
- * value has to be a link or a number, so a sentence that merely contains a
- * colon mid-claim is left alone.
- */
-const LABEL_VALUE_RUN =
-  /\b[A-Z][A-Za-z ]{0,24}:[ \t]*(?:https?:\/\/\S*|\d[\d,.]*)[ \t]*(?:#)?[ \t]*/g;
-
-const URL = /https?:\/\/\S+/g;
-
-/**
  * The part of a sentence that is actually a statement.
  *
  * Feed metadata is removed and what is left has to be long enough to be a
@@ -42,18 +17,14 @@ const URL = /https?:\/\/\S+/g;
  * not a statement at all — which is what lets the callers fall back to the
  * Article's title rather than showing a User a URL as though it were news.
  *
- * The two cuts are measured against the 1,098 sentences a day's ingest produced
- * across 20 Sources: they remove all 34 Hacker News metadata blobs and one
- * Nature line that was nothing but a citation, and no real prose from any
- * Source.
+ * The cut itself lives in `feed-text.ts` and is shared with the parser, because
+ * this was where it used to live alone. That is not a tidiness point: the
+ * parser is what decides what an Article's text *is*, so a cut implemented only
+ * here protected every quoted sentence and left the signature and the Entities
+ * reading a DOI and a comment count as though an outlet had written them.
  */
 function statementOf(sentence: string): string {
-  return sentence
-    .replace(CITATION_HEADER, '')
-    .replace(LABEL_VALUE_RUN, ' ')
-    .replace(URL, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return stripFeedMetadata(sentence);
 }
 
 /**

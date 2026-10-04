@@ -11,7 +11,7 @@ import { DrizzleTopicRepo } from '../repos/topic-repo.js';
 import { DrizzleUserRepo } from '../repos/user-repo.js';
 import { DrizzleStoryRepo } from '../repos/story-repo.js';
 import { decodeSignature, encodeSignature } from '../domain/story-signature.js';
-import { signatureOf, WIRE_COPIES } from '../testing/story-fixtures.js';
+import { articleSignatureOf, signatureOf, WIRE_COPIES } from '../testing/story-fixtures.js';
 import type { StoryId } from '../domain/types.js';
 
 const LEGACY_SCHEMA_SQL = `
@@ -958,9 +958,10 @@ describe('applySchema', () => {
       last_published_at: number;
     };
     // Left empty, this Story would match nothing and the next poll of the feed
-    // would re-form it from scratch alongside the original.
+    // would re-form it from scratch alongside the original. Derived from the
+    // headline as well as the body, because that is how the pipeline derives one.
     expect(decodeSignature(row.signature)).toEqual(
-      signatureOf(WIRE_COPIES[0]!.body),
+      articleSignatureOf('A headline', WIRE_COPIES[0]!.body),
     );
     expect(row.first_published_at).toBe(1000);
     expect(row.last_published_at).toBe(2000);
@@ -1025,7 +1026,7 @@ describe('applySchema', () => {
       .prepare(`SELECT signature FROM articles WHERE id = ?`)
       .get('a-1') as { signature: string };
     expect(decodeSignature(row.signature)).toEqual(
-      signatureOf(WIRE_COPIES[0]!.body),
+      articleSignatureOf('A headline', WIRE_COPIES[0]!.body),
     );
   });
 
@@ -1085,7 +1086,9 @@ describe('applySchema', () => {
         `INSERT INTO articles (id, source_id, external_id, url, title, body, published_at, ingested_at, fingerprint)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run('a-1', 'src-1', 'ext-1', 'https://example.com/1', 'A headline', '', 1000, 1000, 'old-hash');
+      // Neither a headline nor a body: a feed that gave this Article nothing to
+      // read at all.
+      .run('a-1', 'src-1', 'ext-1', 'https://example.com/1', '', '', 1000, 1000, 'old-hash');
 
     applySchema(driver);
 
@@ -1094,10 +1097,49 @@ describe('applySchema', () => {
       .get('a-1') as { signature: string };
     // A signed Article with nothing in its signature is a different claim from
     // an Article that was never signed at all, and only the first is true here:
-    // the body was read, and it had no words. The default '{}' is kept for rows
+    // the text was read, and it had no words. The default '{}' is kept for rows
     // the backfill cannot reach, so it stays the "not signed" marker.
     expect(row.signature).not.toBe('{}');
     expect(decodeSignature(row.signature)).toEqual({ words: [], phrases: [] });
+  });
+
+  it('derives a signature from the headline alone, for a feed that gave no description', () => {
+    // What hnrss.org serves: a headline, and nothing else an outlet wrote. A
+    // backfill that read the body alone would sign this empty, which matches
+    // nothing and so re-forms the Story beside itself on the next poll.
+    const driver = createInMemorySqliteDriver();
+    driver.exec(PRE_SIGNATURE_SQL);
+    driver
+      .prepare(
+        `INSERT INTO sources (id, slug, name, homepage_url) VALUES (?, ?, ?, ?)`,
+      )
+      .run('src-1', 'outlet', 'Outlet', 'https://example.com');
+    driver
+      .prepare(
+        `INSERT INTO articles (id, source_id, external_id, url, title, body, published_at, ingested_at, fingerprint)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        'a-1',
+        'src-1',
+        'ext-1',
+        'https://example.com/1',
+        'Parley: Federated, decentralised chat that speaks plain IRC',
+        '',
+        1000,
+        1000,
+        'old-hash',
+      );
+
+    applySchema(driver);
+
+    const row = driver
+      .prepare(`SELECT signature FROM articles WHERE id = ?`)
+      .get('a-1') as { signature: string };
+    expect(decodeSignature(row.signature)).toEqual(
+      articleSignatureOf('Parley: Federated, decentralised chat that speaks plain IRC', ''),
+    );
+    expect(decodeSignature(row.signature).words.length).toBeGreaterThan(0);
   });
 
   it('lets a magic link exist before the account it will create', () => {
