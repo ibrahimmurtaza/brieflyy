@@ -384,6 +384,68 @@ describe('the across-your-topics rollup', () => {
     expect(rollup.entities[0]?.topicTitle).toBe('Fusion energy');
   });
 
+  it('carries the winning Topic\'s own series, rather than summing the Topics', () => {
+    // The lift on a rollup entry is one Topic's measurement, so the days drawn under
+    // it have to be that Topic's too. A summed series would be evidence for a ratio
+    // measured somewhere else, which is the disagreement the entry exists to avoid.
+    const shared: EmergingEntity = {
+      entityId: 'e1',
+      canonicalName: 'Acme',
+      lift: 2,
+      observationMentions: 4,
+      baselineMentions: 2,
+      daily: [],
+    };
+    const rollup = aggregateRollup(
+      [
+        trendFor('t1', [], [{ ...shared, daily: [{ date: '2024-06-14', mentions: 5 }] }]),
+        trendFor('t2', [], [{ ...shared, lift: 7, daily: [{ date: '2024-06-14', mentions: 1 }] }]),
+      ],
+      [topic('t1', 'World news'), topic('t2', 'Fusion energy')],
+      w,
+      'paid',
+      NOW,
+    );
+    expect(rollup.entities).toHaveLength(1);
+    // t2's day alone — not 5 + 1, which would be a figure for neither Topic.
+    expect(rollup.entities[0]?.daily).toEqual([{ date: '2024-06-14', mentions: 1 }]);
+    expect(rollup.entities[0]?.topicId).toBe('t2');
+  });
+
+  it('narrows a rollup entry\'s series to the tier, and drops one with nothing left', () => {
+    const entity: EmergingEntity = {
+      entityId: 'e1',
+      canonicalName: 'Acme',
+      lift: 2,
+      observationMentions: 4,
+      baselineMentions: 2,
+      daily: [
+        { date: '2024-06-10', mentions: 2 },
+        { date: '2024-06-14', mentions: 2 },
+      ],
+    };
+    const narrowed = aggregateRollup(
+      [trendFor('t1', [], [entity])],
+      [topic('t1', 'World news')],
+      w,
+      'free',
+      NOW,
+    );
+    expect(narrowed.entities[0]?.daily).toEqual([{ date: '2024-06-14', mentions: 2 }]);
+    // And a series that fell entirely before the cutoff takes the Entity with it,
+    // so the rollup never prints a multiple over days the User was not shown.
+    const beforeCutoff = aggregateRollup(
+      [
+        trendFor('t1', [], [{ ...entity, daily: [{ date: '2024-06-01', mentions: 4 }] }]),
+      ],
+      [topic('t1', 'World news')],
+      w,
+      'free',
+      NOW,
+    );
+    expect(beforeCutoff.entities).toEqual([]);
+  });
+
   it('skips a Topic whose trend has not been computed yet', () => {
     const rollup = aggregateRollup(
       [trendFor('t1', volume([['2024-06-14', 1]]), [])],
