@@ -29,8 +29,8 @@ export const EMPTY_SIGNATURE: StorySignature = { words: [], phrases: [] };
  * How much of two signatures has to agree before two Articles are one Story.
  *
  * Measured on the wire-copy fixtures in `src/testing/story-fixtures.ts`: two
- * rewrites of the same story never score below 0.21, and two reports about
- * different things never score above 0.09 — including two different reports
+ * rewrites of the same story never score below 0.20, and two reports about
+ * different things never score above 0.10 — including two different reports
  * about the same company, which is the case a looser reading would get wrong.
  * This sits between the two, closer to the middle than to either edge, so a copy
  * that drifts a little either way still lands on the right side.

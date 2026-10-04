@@ -1,6 +1,7 @@
 import type { Clock } from '../domain/clock.js';
 import { extractSignature } from '../domain/extract.js';
 import { extractEntities } from '../domain/entity-extraction.js';
+import { articleText } from '../domain/feed-text.js';
 import { safeExternalUrl } from '../domain/url.js';
 import {
   bestStoryMatch,
@@ -130,11 +131,12 @@ export class IngestService {
         continue;
       }
 
-      const entities = await this.resolveEntities(
-        entry.title,
-        entry.body,
-      );
-      const signature = normalizeSignature(extractSignature(entry.body));
+      // One definition of the Article's text, shared with the Entity read below,
+      // because a headline and a body are both what the Source wrote and only
+      // one of them is ever the whole of it.
+      const text = articleText(entry.title, entry.body);
+      const entities = await this.resolveEntities(text);
+      const signature = normalizeSignature(extractSignature(text));
 
       const candidates = await this.storyRepo.listCandidates({
         publishedAt: entry.publishedAt,
@@ -204,12 +206,9 @@ export class IngestService {
     };
   }
 
-  private async resolveEntities(
-    title: string,
-    body: string,
-  ): Promise<readonly Entity[]> {
+  private async resolveEntities(text: string): Promise<readonly Entity[]> {
     const out: Entity[] = [];
-    for (const extracted of extractEntities(`${title}\n${body}`)) {
+    for (const extracted of extractEntities(text)) {
       const id = this.random.uuid() as EntityId;
       out.push(
         await this.entityRepo.upsertByKey({

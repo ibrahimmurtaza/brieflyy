@@ -4,6 +4,7 @@ import type { SqliteDriver } from './client.js';
 import { applyArchiveIndex } from './archive-index.js';
 import { extractSignature } from '../domain/extract.js';
 import { canonicalEntityKey } from '../domain/entity-extraction.js';
+import { articleText } from '../domain/feed-text.js';
 import {
   encodeSignature,
   normalizeSignature,
@@ -865,17 +866,17 @@ function backfillStorySignatures(driver: SqliteDriver): void {
     `UPDATE stories SET signature = ?, first_published_at = ?, last_published_at = ? WHERE id = ?`,
   );
   const oldestBody = driver.prepare(
-    `SELECT body FROM articles
+    `SELECT title, body FROM articles
      WHERE story_id = ? AND published_at = ?
      ORDER BY id
      LIMIT 1`,
   );
   for (const story of stories) {
     const row = oldestBody.get(story.id, story.first_published_at) as
-      | { body: string }
+      | { title: string; body: string }
       | undefined;
     if (!row) continue;
-    const signature = normalizeSignature(extractSignature(row.body));
+    const signature = signatureOfArticle(row.title, row.body);
     update.run(
       encodeSignature(signature),
       story.first_published_at,
@@ -903,16 +904,31 @@ function backfillArticleSignatures(driver: SqliteDriver): void {
     return;
   }
   const unsigned = driver
-    .prepare(`SELECT id, body FROM articles WHERE signature = '{}'`)
-    .all() as { id: string; body: string }[];
+    .prepare(`SELECT id, title, body FROM articles WHERE signature = '{}'`)
+    .all() as { id: string; title: string; body: string }[];
   if (unsigned.length === 0) return;
   const update = driver.prepare(`UPDATE articles SET signature = ? WHERE id = ?`);
   for (const article of unsigned) {
     // An Article with no text to take a signature from has none, and an empty
     // signature says exactly that. Writing one for a body that was never read
     // would be inventing a claim about it.
-    update.run(encodeSignature(normalizeSignature(extractSignature(article.body))), article.id);
+    update.run(encodeSignature(signatureOfArticle(article.title, article.body)), article.id);
   }
+}
+
+/**
+ * The signature the pipeline gives an Article, derived the one way it derives
+ * it.
+ *
+ * A boot-time backfill that derived a signature by a different rule would write
+ * a value the build that wrote it would not have written, and the next Article
+ * placed against that Story would be compared against a key that build does not
+ * produce. That is not a hypothetical: this derived from the body alone for a
+ * while after the pipeline had started reading the headline too, so a backfilled
+ * Story and a freshly-ingested one were matched on different keys.
+ */
+function signatureOfArticle(title: string, body: string) {
+  return normalizeSignature(extractSignature(articleText(title, body)));
 }
 
 /**

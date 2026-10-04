@@ -45,6 +45,27 @@ describe('extractEntities', () => {
     expect(names('the cat sat on the mat')).toEqual([]);
   });
 
+  it('reads a feed reporting on an item as no names at all', () => {
+    // What hnrss.org puts in place of a description. The word pattern throws the
+    // digits away, so `Points` and `Comments` arrive as two ordinary
+    // capitalised words and are read as one name — which is how `Points
+    // Comments` became the most-mentioned Entity in the database, attached to
+    // every Hacker News Article. The parser removes this text before the
+    // Article is stored, but a rule that reads bookkeeping as a name is wrong
+    // wherever the text arrives from.
+    expect(names('Article URL: https://example.com/a Comments URL: https://example.com/b Points: 33 # Comments: 10')).toEqual([]);
+    expect(names('Published online: 02 October 2026')).toEqual([]);
+  });
+
+  it('still reads a name out of a sentence that happens to carry a colon', () => {
+    // The guard is about a label followed by a link or a bare number, not about
+    // colons: "Renata Ostberg said: Acme Corp held its guidance" is a sentence
+    // with two names in it.
+    expect(names('Renata Ostberg said: Acme Corp held its guidance')).toContain(
+      'Acme Corp',
+    );
+  });
+
   it('reads the casing an outlet actually writes with', () => {
     const found = names(
       'IBM confirmed the report. eBay and McDonald also said so. NATO and the FDA were briefed.',

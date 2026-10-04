@@ -137,4 +137,144 @@ describe('parseRss', () => {
     expect(feed.entries).toHaveLength(1);
     expect(feed.entries[0]?.externalId).toBe('');
   });
+
+  it('stores no body for an entry whose description is only the feed reporting on the item', () => {
+    // What hnrss.org serves. It is the feed's own metadata about a link, not
+    // anything the outlet wrote about the story, and CONTEXT.md is explicit that
+    // this is not a statement a Source made about the story. Stored as text it
+    // signs every Hacker News item almost identically and reads "Points: 6 #,
+    // Comments: 0" as two names.
+    const xml = `<rss><channel><item>
+      <title>Parley: Federated, decentralised chat that speaks plain IRC</title>
+      <link>https://git.mills.io/prologic/parley</link>
+      <guid>49875913</guid>
+      <description>Article URL: https://git.mills.io/prologic/parley Comments URL: https://news.ycombinator.com/item?id=49875913 Points: 33 # Comments: 10</description>
+    </item></channel></rss>`;
+
+    expect(parseRss(xml).entries[0]?.body).toBe('');
+  });
+
+  it('keeps the link an entry reports in its metadata, which is not in its body', () => {
+    // Stripping the metadata must not cost the Article its link: the body's copy
+    // is redundant with the <link> element, and a brief that cannot link a
+    // quotation asks a reader to take it on trust.
+    const xml = `<rss><channel><item>
+      <title>Parley</title>
+      <link>https://git.mills.io/prologic/parley</link>
+      <guid>49875913</guid>
+      <description>Article URL: https://git.mills.io/prologic/parley Points: 33</description>
+    </item></channel></rss>`;
+
+    const entry = parseRss(xml).entries[0]!;
+    expect(entry.url).toBe('https://git.mills.io/prologic/parley');
+    expect(entry.externalId).toBe('49875913');
+  });
+
+  it('stores the standfirst without the citation header a feed puts in front of it', () => {
+    // What nature.com serves: a fixed prefix naming the publication and the DOI,
+    // then the real standfirst. Stored whole, the prefix is most of the text, so
+    // every Nature Article signs alike.
+    const xml = `<rss><channel><item>
+      <title>How to respond to hate speech without fuelling it further</title>
+      <link>https://www.nature.com/articles/d41586-026-03058-3</link>
+      <guid>d41586-026-03058-3</guid>
+      <description>Nature, Published online: 02 October 2026; doi:10.1038/d41586-026-03058-3 Psychologist Mirta Galesic discusses an increase in hateful comments online, and the science-backed way to react.</description>
+    </item></channel></rss>`;
+
+    expect(parseRss(xml).entries[0]?.body).toBe(
+      'Psychologist Mirta Galesic discusses an increase in hateful comments online, and the science-backed way to react.',
+    );
+  });
+
+  it('decodes the named and numeric entities an outlet writes its prose with', () => {
+    // Scientific American, MarketWatch and The Verge all arrive this way. Left
+    // encoded, these strings are quoted back to a User verbatim in a brief, and
+    // "&ldquo;" in an email is not prose anybody wrote.
+    const xml = `<rss><channel><item>
+      <title>T</title><link>https://x/1</link><guid>g1</guid>
+      <description>MacArthur &ldquo;genius grant&rdquo; recipient Felipe De Brigard &mdash; the end &#8230;</description>
+    </item></channel></rss>`;
+
+    expect(parseRss(xml).entries[0]?.body).toBe(
+      'MacArthur “genius grant” recipient Felipe De Brigard — the end …',
+    );
+  });
+
+  it('decodes a numeric entity without swallowing the ampersand of a real one', () => {
+    const xml = `<rss><channel><item>
+      <title>T</title><link>https://x/1</link><guid>g1</guid>
+      <description>Revenue rose &amp; fell &#8212; Tom &amp; Jerry</description>
+    </item></channel></rss>`;
+
+    expect(parseRss(xml).entries[0]?.body).toBe('Revenue rose & fell — Tom & Jerry');
+  });
+
+  it('stores no trailing "Continue reading" marker a feed appends to a truncated item', () => {
+    // What theguardian.com puts at the end of every item on its world and
+    // environment feeds — seventy of the Articles in one day's ingest. It is a
+    // link to the rest of the article, not a sentence the paper wrote, so it
+    // named an Entity called `Continue` and it was quoted back to a User as the
+    // tail of a brief's one-liner.
+    const xml = `<rss><channel><item>
+      <title>Libyan unity talks upended</title><link>https://x/1</link><guid>g1</guid>
+      <description>The deputy commander has been seen by the US as an important figure. Continue reading...</description>
+    </item></channel></rss>`;
+
+    expect(parseRss(xml).entries[0]?.body).toBe(
+      'The deputy commander has been seen by the US as an important figure.',
+    );
+  });
+
+  it('keeps a sentence that merely says someone will continue reading', () => {
+    const xml = `<rss><channel><item>
+      <title>T</title><link>https://x/1</link><guid>g1</guid>
+      <description>She said she would continue reading the report aloud to the committee.</description>
+    </item></channel></rss>`;
+
+    expect(parseRss(xml).entries[0]?.body).toBe(
+      'She said she would continue reading the report aloud to the committee.',
+    );
+  });
+
+  it('stores no newsletter promotion even when something follows it', () => {
+    // The promotion is not always last: a correction notice appended after it
+    // leaves the marker mid-text, and it is the correction that is the
+    // publication's own statement about the story.
+    const xml = `<rss><channel><item>
+      <title>The NY governor race pollster scrum</title><link>https://x/1</link><guid>g1</guid>
+      <description>A rare turnout is expected. Missed this morning’s New York Playbook? We forgive you. Read it here . CORRECTION: This newsletter has been updated to accurately reflect the funding figure.</description>
+    </item></channel></rss>`;
+
+    expect(parseRss(xml).entries[0]?.body).toBe(
+      'A rare turnout is expected. CORRECTION: This newsletter has been updated to accurately reflect the funding figure.',
+    );
+  });
+
+  it('stores no trailing "first appeared on" attribution a feed appends', () => {
+    // What quantamagazine.org appends to every item. It repeats the Article's
+    // own headline inside its body, so the headline was counted twice in the
+    // signature and six words of publisher furniture were signed as though the
+    // story were about Quanta Magazine.
+    const xml = `<rss><channel><item>
+      <title>Gravity Seems Holographic. What Does That Mean for Reality?</title>
+      <link>https://x/1</link><guid>g1</guid>
+      <description>The biggest breakthrough in modern theoretical physics is the discovery that gravity can collapse the dimensions of space. The post Gravity Seems Holographic. What Does That Mean for Reality? first appeared on Quanta Magazine</description>
+    </item></channel></rss>`;
+
+    expect(parseRss(xml).entries[0]?.body).toBe(
+      'The biggest breakthrough in modern theoretical physics is the discovery that gravity can collapse the dimensions of space.',
+    );
+  });
+
+  it('stores no trailing newsletter promotion a feed appends to an item', () => {
+    const xml = `<rss><channel><item>
+      <title>New York grapples with kinks in $1B Medicaid system</title>
+      <link>https://x/1</link><guid>g1</guid>
+      <description>The administration unveiled 12 districts where housing will be fast-tracked. ( POLITICO Pro ) Missed this morning’s New York Playbook? We forgive you. Read it here .</description>
+    </item></channel></rss>`;
+
+    expect(parseRss(xml).entries[0]?.body).toBe(
+      'The administration unveiled 12 districts where housing will be fast-tracked. ( POLITICO Pro )',
+    );
+  });
 });

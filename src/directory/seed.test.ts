@@ -279,6 +279,39 @@ describe('the curated Source registry', () => {
     const slugs = directorySeed.sources.map((s) => s.slug);
     expect(new Set(slugs).size).toBe(slugs.length);
   });
+
+  it('gives a Subject TopicTemplate no Source that reports on everything', () => {
+    // A general-interest feed in a Climate brief is not a matter of degree. It is
+    // a whole front page, so the Topic reads Lewandowski hat-tricks, a Love
+    // Island cast argument and Manchester City accounts alongside its own
+    // subject, and no clustering threshold decides otherwise — every one of
+    // those Articles genuinely is about what it says it is about. A brief built
+    // from a Climate Topic came out titled Climate and containing snooker.
+    //
+    // Stated for the Subject categories rather than for the template that broke,
+    // because it is a class of mistake: a front page in a science or technology
+    // brief is wrong whichever of them it lands in. The news and policy
+    // templates are left alone — World news and Breaking news are about
+    // everything on purpose, and a regional or a parliamentary brief reading a
+    // broad feed is a defensible editorial choice rather than a fault.
+    const GENERAL_INTEREST = new Set([
+      'bbc-news',
+      'npr-news',
+      'the-guardian',
+      'sky-news',
+    ]);
+    const SUBJECT_CATEGORIES = new Set(['science', 'technology']);
+
+    const broad = directorySeed.templates
+      .filter((t) => SUBJECT_CATEGORIES.has(t.category))
+      .flatMap((t) =>
+        t.defaultSourceSlugs
+          .filter((slug) => GENERAL_INTEREST.has(slug))
+          .map((slug) => `${t.slug} (${t.category}) -> ${slug}`),
+      );
+
+    expect(broad).toEqual([]);
+  });
 });
 
 describe('the curated Directory', () => {

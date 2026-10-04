@@ -37,4 +37,34 @@ describe('extractSignature', () => {
       expect(signature.words, stopword).not.toContain(stopword);
     }
   });
+
+  it('never builds a key phrase across the boundary between two sentences', () => {
+    // The words are the whole Article, so a two- and three-word window taken
+    // over them straddles the end of one sentence and the start of the next —
+    // and 'hell views' is a phrase that occurs in neither sentence. It then
+    // counts towards the similarity of two Articles that share no sentence, and
+    // against two copies of one story that happen to break after a different
+    // word. A phrase is only evidence when it was written as one.
+    const phrases = phrasesOf('The site renders views of Hell. Views of Hell at speed.');
+
+    expect(phrases).toContain('views hell');
+    expect(phrases).toContain('hell speed');
+    expect(phrases).not.toContain('hell views');
+  });
+
+  it('takes phrases from every sentence rather than only from the first', () => {
+    const phrases = phrasesOf('Acme Corp unveiled Foo today. Rivcom declined to comment.');
+
+    expect(phrases).toContain('acme corp');
+    expect(phrases).toContain('rivcom declined');
+  });
+
+  it('keeps a sentence whole across the newline that separates it from the next', () => {
+    // A feed's description is one line per paragraph, and a full stop is not
+    // guaranteed at the end of it.
+    const phrases = phrasesOf('Acme Corp unveiled Foo today\nRivcom declined to comment');
+
+    expect(phrases).toContain('acme corp');
+    expect(phrases).toContain('rivcom declined');
+  });
 });

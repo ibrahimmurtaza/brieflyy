@@ -21,6 +21,12 @@ import {
   resetDeterministic,
 } from '../testing/test-clocks.js';
 import { UNRELATED_REPORTS, WIRE_COPIES } from '../testing/story-fixtures.js';
+import {
+  CITATION_PREFIXED_REPORTS,
+  METADATA_ONLY_ITEMS,
+  STANDFIRST_REPORTS,
+} from '../testing/story-fixtures.js';
+import { parseRss } from './rss-parser.js';
 import type { Source, SourceId } from '../domain/types.js';
 import { isSafeExternalUrl } from '../domain/url.js';
 
@@ -29,6 +35,50 @@ class StaticFeedFetcher implements FeedFetcher {
   async fetch(_url: string): Promise<RawFeed> {
     return this.feed;
   }
+}
+
+/**
+ * A fetcher that serves XML and parses it with the production parser.
+ *
+ * The other tests here hand `IngestService` entries that have already been
+ * parsed, which is a shape the pipeline is never actually given. That is how the
+ * defect survived: what a feed reports about an item rather than describing it
+ * was removed by the renderer and by nothing else, and every test signed
+ * hand-written prose. Building the feed as XML and letting `parseRss` produce
+ * the entries is the only version of this test that describes what happens.
+ */
+class XmlFeedFetcher implements FeedFetcher {
+  constructor(private readonly xml: string) {}
+  async fetch(_url: string): Promise<RawFeed> {
+    return parseRss(this.xml);
+  }
+}
+
+/** An RSS 2.0 document carrying these items, in the order they are given. */
+function rssDocument(
+  items: readonly { headline: string; body: string }[],
+  linkFor: (item: { headline: string; body: string }, i: number) => string,
+  published: (i: number) => Date,
+): string {
+  const escape = (s: string): string =>
+    s
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>Fixture</title>
+${items
+  .map(
+    (item, i) => `  <item>
+    <title>${escape(item.headline)}</title>
+    <link>${escape(linkFor(item, i))}</link>
+    <guid isPermaLink="false">item-${i}</guid>
+    <pubDate>${published(i).toUTCString()}</pubDate>
+    <description>${escape(item.body)}</description>
+  </item>`,
+  )
+  .join('\n')}
+</channel></rss>`;
 }
 
 class FailingFeedFetcher implements FeedFetcher {
@@ -712,5 +762,321 @@ describe('IngestService', () => {
     expect(hostileStory).toBe(safeStory);
     const story = await storyRepo.getById(safeStory as never);
     expect(story?.articleCount).toBe(2);
+  });
+});
+
+/**
+ * What the pipeline does with the text a real feed actually serves.
+ *
+ * Every test above hands `IngestService` entries that have already been parsed,
+ * which is the one shape the defect got through: the fixtures were written as
+ * ordinary prose, so nothing in the suite ever saw what hnrss.org or nature.com
+ * put in `<description>`, and a rule built only for the renderer protected the
+ * sentences a User reads while the signature and the Entities went on reading a
+ * DOI and a comment count as though an outlet had written them.
+ */
+describe('IngestService over a real feed document', () => {
+  beforeEach(() => {
+    resetDeterministic();
+  });
+
+  const publishedAt = (i: number): Date =>
+    new Date(new Date('2026-09-02T10:00:00Z').getTime() + i * 60_000);
+
+  it('gives every item of a feed that reports rather than describes a Story of its own', async () => {
+    // These six have nothing to do with one another — an obituary, a RuneScape
+    // announcement and a database project among them — and the only text they
+    // carry is hnrss.org's own bookkeeping. Signed as it stands, they differ
+    // only in digits the word pattern discards, so they collapsed into one Story
+    // and every Hacker News Article in the database was compared against every
+    // other one.
+    const { service, articleRepo, storyRepo, source } = await buildService({
+      fetcher: new XmlFeedFetcher(
+        rssDocument(
+          METADATA_ONLY_ITEMS,
+          (item, i) => `https://news.ycombinator.com/item?id=4995${1000 + i}`,
+          publishedAt,
+        ),
+      ),
+    });
+
+    const report = await service.ingestSource(source.id);
+
+    expect(report.success).toBe(true);
+    expect(report.inserted).toBe(METADATA_ONLY_ITEMS.length);
+    expect(report.merged).toBe(0);
+    expect(report.storiesAffected).toBe(METADATA_ONLY_ITEMS.length);
+
+    const storyIds = new Set<string>();
+    for (let i = 0; i < METADATA_ONLY_ITEMS.length; i++) {
+      const stored = await articleRepo.findByExternalId(source.id, `item-${i}`);
+      expect(stored, `item-${i}`).not.toBeNull();
+      if (stored?.storyId) storyIds.add(stored.storyId);
+    }
+    expect(storyIds.size).toBe(METADATA_ONLY_ITEMS.length);
+  });
+
+  it('keeps the headline of an item the feed gave no prose for', async () => {
+    // The body's text is the feed's bookkeeping, so the headline is the only
+    // thing an outlet wrote. Signed from the body alone, every one of these
+    // signed as the same empty signature, and CONTEXT.md's rule that a feed's
+    // metadata is not a statement a Source made became a rule that left nothing
+    // to compare at all.
+    const { service, articleRepo, source } = await buildService({
+      fetcher: new XmlFeedFetcher(
+        rssDocument(
+          METADATA_ONLY_ITEMS,
+          (_item, i) => `https://news.ycombinator.com/item?id=4995${1000 + i}`,
+          publishedAt,
+        ),
+      ),
+    });
+    await service.ingestSource(source.id);
+
+    const stored = await articleRepo.findByExternalId(source.id, 'item-0');
+    expect(stored?.signature.words.length).toBeGreaterThan(0);
+    expect(stored?.signature.phrases.length).toBeGreaterThan(0);
+  });
+
+  it('stores no feed bookkeeping as an Article body, while keeping the link', async () => {
+    const { service, articleRepo, source } = await buildService({
+      fetcher: new XmlFeedFetcher(
+        rssDocument(
+          METADATA_ONLY_ITEMS,
+          (_item, i) => `https://news.ycombinator.com/item?id=4995${1000 + i}`,
+          publishedAt,
+        ),
+      ),
+    });
+    await service.ingestSource(source.id);
+
+    const stored = await articleRepo.findByExternalId(source.id, 'item-0');
+    expect(stored?.body).toBe('');
+    expect(stored?.body).not.toMatch(/Points:/);
+    // The body's copy of the link is redundant with the <link> element, and
+    // dropping it must not cost the Article something a brief can point at.
+    expect(stored?.url).toBe('https://news.ycombinator.com/item?id=49951000');
+  });
+
+  it('names nothing out of a feed reporting on an item', async () => {
+    const { service, articleRepo, source } = await buildService({
+      fetcher: new XmlFeedFetcher(
+        rssDocument(
+          METADATA_ONLY_ITEMS,
+          (_item, i) => `https://news.ycombinator.com/item?id=4995${1000 + i}`,
+          publishedAt,
+        ),
+      ),
+    });
+    await service.ingestSource(source.id);
+
+    for (let i = 0; i < METADATA_ONLY_ITEMS.length; i++) {
+      const stored = await articleRepo.findByExternalId(source.id, `item-${i}`);
+      const names = (stored?.entities ?? []).map((e) => e.canonicalName);
+      for (const noise of ['Points Comments', 'Comments', 'URL', 'Article']) {
+        expect(names, `item-${i} named ${noise}`).not.toContain(noise);
+      }
+    }
+  });
+
+  it('does not let a citation header make every Article of a feed look alike', async () => {
+    // nature.com prefixes its standfirst with the publication, the date and the
+    // DOI. That prefix is most of the text, so twenty-two unrelated Nature
+    // Articles were one Story and `Nature Published` was attached to 75 of them.
+    const { service, articleRepo, source } = await buildService({
+      fetcher: new XmlFeedFetcher(
+        rssDocument(
+          CITATION_PREFIXED_REPORTS,
+          (_item, i) => `https://www.nature.com/articles/d41586-026-0300${i}`,
+          publishedAt,
+        ),
+      ),
+    });
+
+    const report = await service.ingestSource(source.id);
+
+    expect(report.success).toBe(true);
+    expect(report.merged).toBe(0);
+    const storyIds = new Set<string>();
+    for (let i = 0; i < CITATION_PREFIXED_REPORTS.length; i++) {
+      const stored = await articleRepo.findByExternalId(source.id, `item-${i}`);
+      expect(stored?.body, `item-${i}`).not.toMatch(/doi:/);
+      expect(stored?.body, `item-${i}`).not.toMatch(/Published online/);
+      if (stored?.storyId) storyIds.add(stored.storyId);
+    }
+    expect(storyIds.size).toBe(CITATION_PREFIXED_REPORTS.length);
+  });
+
+  it('keeps the standfirst an outlet wrote, which is the sentence an Article has', async () => {
+    // A short body is not a broken body. Nine of the twenty registry Sources
+    // serve one editorial sentence in `<description>` and nothing else, and it
+    // is the best text they give — 1,032 of 1,483 Articles in a day of live
+    // ingest were under 200 characters because of it. A rule built to strip feed
+    // metadata that also ate these would leave those Sources with nothing.
+    const { service, articleRepo, source } = await buildService({
+      fetcher: new XmlFeedFetcher(
+        rssDocument(
+          STANDFIRST_REPORTS,
+          (_item, i) => `https://example.com/standfirst-${i}`,
+          publishedAt,
+        ),
+      ),
+    });
+    await service.ingestSource(source.id);
+
+    for (let i = 0; i < STANDFIRST_REPORTS.length; i++) {
+      const expected = STANDFIRST_REPORTS[i]!.body;
+      const stored = await articleRepo.findByExternalId(source.id, `item-${i}`);
+      expect(stored?.body, `item-${i}`).toBe(expected);
+      expect(stored?.signature.words.length, `item-${i}`).toBeGreaterThan(0);
+    }
+  });
+
+  it('reads the entities in a standfirst, which is where a short Article names its subject', async () => {
+    const { service, articleRepo, source } = await buildService({
+      fetcher: new XmlFeedFetcher(
+        rssDocument(
+          STANDFIRST_REPORTS,
+          (_item, i) => `https://example.com/standfirst-${i}`,
+          publishedAt,
+        ),
+      ),
+    });
+    await service.ingestSource(source.id);
+
+    const russia = await articleRepo.findByExternalId(source.id, 'item-4');
+    const names = (russia?.entities ?? []).map((e) => e.canonicalName);
+    expect(names).toContain('Russia');
+  });
+
+  it('decodes the entities an outlet writes its prose with, before anything is read out of it', async () => {
+    // Left encoded, "&ldquo;" is a word nothing else in the Article shares, so it
+    // is a phrase and a name that no rewrite of the same sentence will ever
+    // match — and it reaches a User verbatim inside a quoted brief.
+    const { service, articleRepo, source } = await buildService({
+      fetcher: new XmlFeedFetcher(
+        rssDocument(
+          [
+            {
+              headline: 'How the brain uses memory to imagine what might have been',
+              body: 'Philosopher and 2026 MacArthur &ldquo;genius grant&rdquo; recipient Felipe De Brigard &mdash; the end &#8230;',
+            },
+          ],
+          () => 'https://www.scientificamerican.com/article/brain-memory',
+          publishedAt,
+        ),
+      ),
+    });
+    await service.ingestSource(source.id);
+
+    const stored = await articleRepo.findByExternalId(source.id, 'item-0');
+    expect(stored?.body).toContain('MacArthur “genius grant”');
+    expect(stored?.body).not.toContain('&ldquo;');
+    expect(stored?.body).not.toContain('&#8230;');
+    const names = (stored?.entities ?? []).map((e) => e.canonicalName);
+    expect(names).toContain('Felipe De Brigard');
+  });
+
+  it('names nothing out of the furniture a feed appends to an item', async () => {
+    // The same class as the metadata blob, at the other end of the text: a link
+    // to the rest of the article, a syndication credit, a newsletter promotion.
+    // `Continue reading…` named an Entity called `Continue` on every item on two
+    // Guardian feeds, and the Quanta credit repeats the Article's own headline
+    // inside its body — so the headline was counted twice in the signature and
+    // the story was signed as though it were about Quanta Magazine.
+    const items = [
+      {
+        headline: 'Libyan unity talks upended as warlord’s son linked to drone attacks',
+        body: 'The deputy commander has been seen by the US as an important figure. Continue reading...',
+      },
+      {
+        headline: 'Sea Monkeys Show Scientists How To Rewrite a Rule of Turbulence',
+        body: 'Energy does not flow in only one direction in a turbulent system. The post Sea Monkeys Show Scientists How To Rewrite a Rule of Turbulence first appeared on Quanta Magazine',
+      },
+      {
+        headline: 'New York grapples with kinks in $1B Medicaid system',
+        body: "The administration unveiled 12 districts where housing will be fast-tracked. Missed this morning’s New York Playbook? We forgive you. Read it here .",
+      },
+    ];
+    const { service, articleRepo, source } = await buildService({
+      fetcher: new XmlFeedFetcher(
+        rssDocument(items, (_item, i) => `https://example.com/furniture-${i}`, publishedAt),
+      ),
+    });
+    await service.ingestSource(source.id);
+
+    for (let i = 0; i < items.length; i++) {
+      const stored = await articleRepo.findByExternalId(source.id, `item-${i}`);
+      expect(stored?.body, `item-${i}`).not.toMatch(/Continue reading/);
+      expect(stored?.body, `item-${i}`).not.toMatch(/first appeared on/);
+      expect(stored?.body, `item-${i}`).not.toMatch(/New York Playbook/);
+      const names = (stored?.entities ?? []).map((e) => e.canonicalName);
+      expect(names, `item-${i}`).not.toContain('Continue');
+      expect(names, `item-${i}`).not.toContain('Quanta Magazine');
+    }
+  });
+
+  it('counts an item headline once, not once for itself and again inside its body', async () => {
+    // A feed that appends the Article's own headline to its body has its title in
+    // the signature twice, so the headline weighs double against the prose — and
+    // two Articles with different stories and a shared headline drift together.
+    const items = [
+      {
+        headline: 'Sea Monkeys Rewrite a Rule of Turbulence',
+        body: 'Energy does not flow in one direction in a turbulent system. The post Sea Monkeys Rewrite a Rule of Turbulence first appeared on Quanta Magazine',
+      },
+      {
+        headline: 'A Different Story Entirely',
+        body: 'The city council approved a budget on Tuesday after a long debate.',
+      },
+    ];
+    const { service, articleRepo, source } = await buildService({
+      fetcher: new XmlFeedFetcher(
+        rssDocument(items, (_item, i) => `https://example.com/dupe-${i}`, publishedAt),
+      ),
+    });
+    await service.ingestSource(source.id);
+
+    const first = await articleRepo.findByExternalId(source.id, 'item-0');
+    const headlineWords = (first?.title.toLowerCase().match(/[a-z]+/g) ?? []).filter(
+      (w) => ['sea', 'monkeys', 'rewrite', 'rule', 'turbulence'].includes(w),
+    );
+    for (const word of headlineWords) {
+      const occurrences = (first?.signature.words ?? []).filter((w) => w === word).length;
+      // normalizeSignature dedupes, so a repeated headline word is one entry —
+      // the point being that the body's copy of the title adds nothing at all.
+      expect(occurrences, `"${word}" appears ${occurrences} times`).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('still collapses a wire story when the feed wraps it in a citation header', async () => {
+    // The point of the two rules above is not only that they separate. A Source
+    // that copies another outlet's story behind its own header still has to
+    // deduplicate, so the cut cannot cost a real match.
+    const copy = WIRE_COPIES[0]!;
+    const items = [0, 1, 2].map((i) => ({
+      headline: WIRE_COPIES[i]!.headline,
+      body: `Nature, Published online: 02 October 2026; doi:10.1038/d41586-026-0300${i} ${WIRE_COPIES[i]!.body}`,
+    }));
+    const { service, articleRepo, storyRepo, source } = await buildService({
+      fetcher: new XmlFeedFetcher(
+        rssDocument(items, (_item, i) => `https://www.nature.com/articles/wire-${i}`, publishedAt),
+      ),
+    });
+
+    const report = await service.ingestSource(source.id);
+
+    expect(report.merged).toBe(2);
+    expect(report.storiesAffected).toBe(1);
+    const storyIds = new Set<string>();
+    for (let i = 0; i < items.length; i++) {
+      const stored = await articleRepo.findByExternalId(source.id, `item-${i}`);
+      if (stored?.storyId) storyIds.add(stored.storyId);
+    }
+    expect(storyIds.size).toBe(1);
+    expect(
+      (await storyRepo.getById([...storyIds][0] as never))?.articleCount,
+    ).toBe(3);
+    expect(copy.body.length).toBeGreaterThan(0);
   });
 });

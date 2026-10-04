@@ -1,7 +1,9 @@
 {
   "sources": [
     { "slug": "the-guardian", "name": "The Guardian", "homepageUrl": "https://www.theguardian.com", "feedUrl": "https://www.theguardian.com/world/rss" },
+    { "slug": "guardian-environment", "name": "The Guardian Environment", "homepageUrl": "https://www.theguardian.com/environment", "feedUrl": "https://www.theguardian.com/environment/rss" },
     { "slug": "bbc-news", "name": "BBC News", "homepageUrl": "https://www.bbc.com/news", "feedUrl": "https://feeds.bbci.co.uk/news/rss.xml" },
+    { "slug": "bbc-science", "name": "BBC Science & Environment", "homepageUrl": "https://www.bbc.com/news/science_and_environment", "feedUrl": "https://feeds.bbci.co.uk/news/science_and_environment/rss.xml" },
     { "slug": "npr-news", "name": "NPR", "homepageUrl": "https://www.npr.org", "feedUrl": "https://feeds.npr.org/1001/rss.xml" },
     { "slug": "sky-news", "name": "Sky News", "homepageUrl": "https://news.sky.com", "feedUrl": "https://feeds.skynews.com/feeds/rss/world.xml" },
     { "slug": "the-verge", "name": "The Verge", "homepageUrl": "https://www.theverge.com", "feedUrl": "https://www.theverge.com/rss/index.xml" },
@@ -279,7 +281,7 @@
       "title": "Climate",
       "blurb": "Climate science, policy, and the energy transition.",
       "category": "science",
-      "defaultSourceSlugs": ["phys-org", "scientific-american", "the-guardian", "bbc-news"]
+      "defaultSourceSlugs": ["phys-org", "scientific-american", "bbc-science", "guardian-environment"]
     },
     {
       "slug": "space-science",

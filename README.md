@@ -18,7 +18,7 @@ ticket number on its own says nothing about whether the code is there.
 | 02 | Google OAuth sign-in | done | `src/oauth/`, `/auth/google/*` in `src/auth/routes.ts` |
 | 03 | Directory seed & topic selection | done | `src/directory/`, `GET /pick-topics` |
 | 04 | DeliveryTime picker & welcome email | done | `src/domain/timezone.ts`, `src/onboarding/welcome-email.ts`, `GET /settings/delivery` |
-| 05 | Single-source ingest + Story dedup | done | `src/ingest/ingest-service.ts`, `src/domain/story-signature.ts` |
+| 05 | Single-source ingest + Story dedup | done | `src/ingest/ingest-service.ts`, `src/domain/story-signature.ts`, `src/domain/feed-text.ts`, ADR-0017 |
 | 06 | Full source registry ingest | done | `src/ingest/registry-ingest-service.ts`, `src/ingest/ingest-scheduler.ts`, ADR-0003 |
 | 07 | Cluster formation & extractive summary | done | `src/services/cluster-formation-service.ts`, ADR-0005, ADR-0006 |
 | 08 | LivingBrief in-app | done | `GET /topics/:slug` in `src/pages/routes.ts` |
@@ -476,7 +476,7 @@ signed-in User at `/admin/ingest` and `/admin/briefs`.
 pnpm test
 ```
 
-The suite is 87 test files across `src/`, one per module, holding 1,313 cases —
+The suite is 87 test files across `src/`, one per module, holding 1,341 cases —
 Vitest prints the live figure at the end of every run. `docs-agreement.test.ts`
 checks the file count and cannot check the case count without running the suite it
 lives in, so that one number is worth reading off a run rather than trusting.
