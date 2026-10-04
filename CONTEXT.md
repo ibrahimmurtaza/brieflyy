@@ -75,7 +75,7 @@ _Avoid_: AI summary, paraphrase
 _Avoid_: stats, telemetry, metrics
 
 **BriefPlan**: A selection and ordering of Clusters for a Topic at a moment in time. The artefact a BriefSnapshot is derived from.
-**Not built**: regenerating a plan, and reading one back. A plan is written in the same step that renders and sends a brief, and nothing in the application ever reads a stored one, so "the regenerable artifact" is the intended shape rather than the current one.
+**Not built**: regenerating a plan, and reading one back. A plan is written in the same step that renders and sends a brief, and nothing reads a stored one back *as a plan* — the Archive index reads a snapshot's plan for the `cluster_ids` it needs to name that snapshot's Sources and Entities, in the same statement that writes the row. So "the regenerable artifact" is the intended shape rather than the current one.
 _Avoid_: brief, digest
 
 **BriefSnapshot**: An immutable, linkable rendering of a BriefPlan — the form of a brief that is emailed. Once sent, does not change. Retained forever regardless of tier, since it is what was sent.
@@ -174,5 +174,5 @@ _Avoid_: popularity, buzz, score
 _Avoid_: free plan, basic
 
 **PaidTier**: Unlimited Topics, indefinite Archive retention, BriefSnapshots retained forever, full trends history. The trends layer is the paid differentiator.
-**Not built**: billing, and so the price. $15/mo is what the upgrade page says; there is no provider behind it, and the only way onto this tier is the development-only `POST /dev/tier`, which a production instance does not register.
+**Not built**: billing, and so the price. $15/mo is what the upgrade page says; there is no provider behind it, and the only way onto this tier is the development-only `POST /dev/tier`, which is registered only when `DEV_TOOLS_ENABLED` is set — off by default, and a production instance is expected to leave it off.
 _Avoid_: pro, premium

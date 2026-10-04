@@ -95,13 +95,15 @@ wordmark is set in the system font rather than a generated mark.
 - A page cannot be added without saying who is signed in, because `layout()`
   requires an account and will not default one. Stating `null` is the only way to
   get a page with no navigation on it, which is what the sign-in page, the two
-  sign-in failure pages and the not-found page for an anonymous visitor do — each
-  of them because there is no signed-in User yet, not by omission. The list of
+  sign-in failure pages, the `signInRequiredPage` a signed-out request to a guarded
+  address is answered with, and the not-found page for an anonymous visitor do —
+  each of them because there is no signed-in User yet, not by omission. The list of
   signed-in pages is written out in `src/pages/shell.test.ts` so each one fails on
   its own, and reconciled against the route manifest by a second test so a route
   added later and not listed fails too.
-- The observability views of the two background jobs (`/admin/ingest`,
-  `/admin/briefs`) are pages of the application and get the shell like any other.
+- The observability views of the background jobs that have one (`/admin/ingest`,
+  `/admin/briefs`; the trends job has no page) are pages of the application and get
+  the shell like any other.
   They were the last two documents rendering through `layout()` with no account,
   which left an operator with no way out of them. They are deliberately absent
   from `PRIMARY_NAV`: they are the two background jobs' observability views, not
