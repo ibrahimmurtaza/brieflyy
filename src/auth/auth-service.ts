@@ -134,8 +134,19 @@ export type CompleteGoogleOutcome =
         | 'state_consumed'
         | 'verifier_mismatch'
         | 'unverified_email'
+        | 'unusable_email'
         | 'provider_exchange_failed';
     };
+
+/**
+ * Why a Google sign-in did not complete, as one name per reason.
+ *
+ * Read off the outcome rather than written out, so the page that explains one of
+ * them cannot be missing one: adding a reason here fails the switch that turns it
+ * into a sentence.
+ */
+export type CompleteGoogleFailure =
+  Extract<CompleteGoogleOutcome, { status: 'invalid' }>['reason'];
 
 function makeMagicLinkUrl(appBaseUrl: string, token: string): string {
   const base = appBaseUrl.replace(/\/+$/, '');
@@ -364,6 +375,19 @@ export class AuthService {
     return { status: 'ok' };
   }
 
+  /**
+   * Whether this deployment has an OAuth provider to sign in with.
+   *
+   * One answer, asked by the sign-in page and by both Google routes, because
+   * whether Brieflyy offers Google at all is a property of the instance rather
+   * than of any one request. A deployment with no `OAUTH_PROVIDER` has no client
+   * here, so the button is not rendered and the routes refuse: a sign-in offered
+   * that cannot complete is a dead end with an error page at the end of it.
+   */
+  googleSignInAvailable(): boolean {
+    return this.oauthClient !== null;
+  }
+
   async startGoogleOAuth(): Promise<StartGoogleOAuthOutcome> {
     if (!this.oauthClient || !this.oauthStateRepo) {
       throw new Error('Google OAuth is not configured on this AuthService');
@@ -425,6 +449,16 @@ export class AuthService {
     if (!exchange.profile.emailVerified) {
       return { status: 'invalid', reason: 'unverified_email' };
     }
+    // The address Google returns is put through the same rule as one a User typed,
+    // so the two ways into an Account store it in one form. Used raw, a Google
+    // sign-in of `Iris@Example.com` did not find the Account the magic link had
+    // made for `iris@example.com`, and the link missed: the same human, two
+    // Accounts, one of which is about to be sent a second sign-in link.
+    const parsedEmail = emailSchema.safeParse(exchange.profile.email);
+    if (!parsedEmail.success) {
+      return { status: 'invalid', reason: 'unusable_email' };
+    }
+    const email = parsedEmail.data;
 
     await this.oauthStateRepo.markConsumed(stateRow.id, now);
 
@@ -438,7 +472,6 @@ export class AuthService {
       account = (await this.accountRepo.getById(existingLink.accountId))!;
       user = (await this.userRepo.getById(account.userId))!;
     } else {
-      const email = exchange.profile.email;
       const found = await this.accountRepo.getByEmail(email);
       if (found) {
         account = found;

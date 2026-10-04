@@ -7,7 +7,7 @@ import {
   OAUTH_VERIFIER_COOKIE_NAME,
   SESSION_COOKIE_NAME,
 } from '../config.js';
-import type { AuthService, CurrentAuth } from './auth-service.js';
+import type { AuthService, CompleteGoogleFailure, CurrentAuth } from './auth-service.js';
 import { emailSchema, googleCallbackPath, makeGoogleCallbackUrl } from './auth-service.js';
 import { postSigninPath } from './post-signin.js';
 import { PUBLIC_ROUTE_CONFIG } from '../http/access.js';
@@ -193,6 +193,12 @@ export async function registerAuthRoutes(
   });
 
   fastify.get('/auth/google/start', PUBLIC_ROUTE_CONFIG, async (_req, reply) => {
+    // Asked of the service rather than passed in, so the route and the sign-in
+    // page that offers this button cannot disagree about whether Google exists on
+    // this instance.
+    if (!authService.googleSignInAvailable()) {
+      return refuseGoogle(reply);
+    }
     const start = await authService.startGoogleOAuth();
     const stateHash = hashOauthState(start.state);
     writeOauthCookie(reply, OAUTH_STATE_COOKIE_NAME, stateHash, {
@@ -208,6 +214,9 @@ export async function registerAuthRoutes(
     '/auth/google/callback',
     PUBLIC_ROUTE_CONFIG,
     async (req, reply) => {
+      if (!authService.googleSignInAvailable()) {
+        return refuseGoogle(reply);
+      }
       clearOauthCookies(reply);
       if (typeof req.query.error === 'string') {
         return reply
@@ -255,6 +264,13 @@ export async function registerAuthRoutes(
   );
 }
 
+function refuseGoogle(reply: FastifyReply): FastifyReply {
+  return reply
+    .code(503)
+    .type('text/html; charset=utf-8')
+    .send(googleUnavailablePage());
+}
+
 function humanReason(reason: 'unknown_token' | 'expired' | 'already_used'): string {
   switch (reason) {
     case 'expired':
@@ -266,15 +282,7 @@ function humanReason(reason: 'unknown_token' | 'expired' | 'already_used'): stri
   }
 }
 
-function humanOauthReason(
-  reason:
-    | 'unknown_state'
-    | 'expired_state'
-    | 'state_consumed'
-    | 'verifier_mismatch'
-    | 'unverified_email'
-    | 'provider_exchange_failed',
-): string {
+function humanOauthReason(reason: CompleteGoogleFailure): string {
   switch (reason) {
     case 'unknown_state':
       return 'We could not verify this Google sign-in. Please try again.';
@@ -286,9 +294,35 @@ function humanOauthReason(
       return 'This Google sign-in was tampered with. Please try again.';
     case 'unverified_email':
       return 'Your Google account email is not verified. Verify it with Google, then try again.';
+    case 'unusable_email':
+      return 'Google sent an address Brieflyy cannot use. Sign in with a magic link instead.';
     case 'provider_exchange_failed':
       return 'Google could not complete the sign-in. Please try again.';
   }
+}
+
+/**
+ * A Google route on an instance with no Google.
+ *
+ * A page rather than a bare 503, because the caller is a person who followed a
+ * link off a button: the sign-in page says so when there is a provider, but an
+ * address that reaches this one anyway — a bookmark, an old email, a copy of the
+ * link — lands here instead, and this is the one place that can say what is
+ * missing and offer the way in that does work. 503 rather than 404 because the
+ * route exists and the deployment is what is incomplete.
+ */
+function googleUnavailablePage(): string {
+  return layout({
+    title: 'Google sign-in unavailable',
+    width: 'narrow',
+    // Reached on the way in, so there is no signed-in User to put a header on.
+    account: null,
+    body: `    <h1>Google sign-in is not available</h1>
+    <div class="error-summary" role="alert">
+      <p>This Brieflyy instance has no Google sign-in configured.</p>
+    </div>
+    <p class="actions"><a class="button" href="/signup">Sign in with a magic link</a></p>`,
+  });
 }
 
 function oauthFailurePage(message: string): string {

@@ -44,6 +44,7 @@ import { rollupBlock, TRENDS_PATH } from '../trends/page.js';
 import {
   AUTHENTICATED_ROUTE_CONFIG,
   PUBLIC_ROUTE_CONFIG,
+  isJsonSurface,
   requireAuthPage,
 } from '../http/access.js';
 
@@ -95,6 +96,14 @@ export interface PageRoutesOptions {
    * has the rest of them.
    */
   readonly archiveSearchService: ArchiveSearchService;
+  /**
+   * Whether this deployment has an OAuth provider, so the sign-in page can offer
+   * Google where one exists and not where none does. The AuthService holds the
+   * client that answers it; the page asks the question rather than reading the
+   * configuration itself, so the button and the routes that answer it cannot
+   * disagree.
+   */
+  readonly googleSignInAvailable: boolean;
 }
 
 export async function registerPageRoutes(
@@ -119,7 +128,7 @@ export async function registerPageRoutes(
    * handing a page a JSON error.
    */
   fastify.setNotFoundHandler(async (req, reply) => {
-    if (req.url.startsWith('/api/')) {
+    if (isJsonSurface(req.url)) {
       return reply.code(404).send({ error: 'not_found' });
     }
     // A 404 is not a guarded route, so the session is resolved by the same hook
@@ -130,7 +139,7 @@ export async function registerPageRoutes(
   });
 
   fastify.get('/signup', PUBLIC_ROUTE_CONFIG, async (_req, reply) => {
-    return reply.type('text/html').send(signupPage());
+    return reply.type('text/html').send(signupPage({ googleSignInAvailable: opts.googleSignInAvailable }));
   });
 
   fastify.get('/onboarding/pick-topics', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
@@ -706,7 +715,15 @@ export async function registerPageRoutes(
   );
 }
 
-function signupPage(): string {
+function signupPage(input: { readonly googleSignInAvailable: boolean }): string {
+  // Google is a second way in, so it is offered only where one exists. Rendered
+  // unconditionally it was a button to a route that answers 503 on a deployment
+  // with no provider configured, and the divider above it promised a choice the
+  // instance does not have.
+  const googleButton = input.googleSignInAvailable
+    ? `    <div class="divider"><span>or</span></div>
+    <a class="button secondary" href="/auth/google/start">Sign in with Google</a>`
+    : '';
   return layout({
     title: 'Sign in',
     width: 'narrow',
@@ -721,8 +738,7 @@ function signupPage(): string {
       <button type="submit">Send magic link</button>
       <div id="status" class="status" role="status" aria-live="polite"></div>
     </form>
-    <div class="divider"><span>or</span></div>
-    <a class="button secondary" href="/auth/google/start">Sign in with Google</a>`,
+${googleButton}`,
     afterMain: `  <script>
     (function () {
       var form = document.getElementById('signup');

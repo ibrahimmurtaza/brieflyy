@@ -17,6 +17,7 @@ import { DrizzleOAuthStateRepo } from '../repos/oauth-state-repo.js';
 import { DrizzleSessionRepo } from '../repos/session-repo.js';
 import { DrizzleUserRepo } from '../repos/user-repo.js';
 import { createTestDb } from '../testing/test-db.js';
+import { countRows } from '../testing/db.js';
 import { extractMagicLinkToken } from '../testing/email.js';
 import {
   deterministicRandom,
@@ -31,12 +32,18 @@ import {
 interface StubOAuthOptions {
   readonly nextExchange?: ExchangeGoogleCodeOutcome;
   readonly fixedProfile?: Partial<GoogleOAuthProfile>;
+  /**
+   * A different Google identity per exchange, for the second subject somebody
+   * arrives with on the address their first one used.
+   */
+  readonly profilesByExchange?: readonly Partial<GoogleOAuthProfile>[];
 }
 
 function makeStubOAuthClient(opts: StubOAuthOptions = {}): OAuthClient & {
   readonly lastExchange: { input: ExchangeGoogleCodeInput } | null;
 } {
   let last: { input: ExchangeGoogleCodeInput } | null = null;
+  let exchangeCount = 0;
   const client: OAuthClient & {
     readonly lastExchange: { input: ExchangeGoogleCodeInput } | null;
   } = {
@@ -48,13 +55,15 @@ function makeStubOAuthClient(opts: StubOAuthOptions = {}): OAuthClient & {
     async exchangeCode(input) {
       last = { input };
       if (opts.nextExchange) return opts.nextExchange;
+      const profile =
+        opts.profilesByExchange?.[exchangeCount++] ?? opts.fixedProfile ?? {};
       return {
         status: 'ok',
         profile: {
           provider: 'google',
-          subject: opts.fixedProfile?.subject ?? 'google-uid',
-          email: opts.fixedProfile?.email ?? 'iris@example.com',
-          emailVerified: opts.fixedProfile?.emailVerified ?? true,
+          subject: profile.subject ?? 'google-uid',
+          email: profile.email ?? 'iris@example.com',
+          emailVerified: profile.emailVerified ?? true,
         },
       };
     },
@@ -72,7 +81,7 @@ function makeService(opts?: {
   sessionTtlMs?: number;
   oauthStateTtlMs?: number;
 }) {
-  const { db } = createTestDb();
+  const { db, driver } = createTestDb();
   const transport = new ConsoleEmailTransport({ logger: () => {} });
   const userRepo = new DrizzleUserRepo(db);
   const accountRepo = new DrizzleAccountRepo(db);
@@ -101,6 +110,7 @@ function makeService(opts?: {
     service,
     transport,
     db,
+    driver,
     accountRepo,
     userRepo,
     sessionRepo,
@@ -126,13 +136,13 @@ async function startAndCapture(ctx: Awaited<ReturnType<typeof makeService>>) {
 async function signUpByMagicLink(
   ctx: Awaited<ReturnType<typeof makeService>>,
   email: string,
-): Promise<string> {
+): Promise<{ readonly userId: string; readonly accountId: string }> {
   await ctx.service.requestMagicLink({ email });
   const sent = ctx.transport.snapshot();
   const token = extractMagicLinkToken(sent[sent.length - 1]!.text);
   const verified = await ctx.service.verifyMagicLink({ token });
   if (verified.status !== 'ok') throw new Error('expected ok');
-  return verified.user.id;
+  return { userId: verified.user.id, accountId: verified.account.id };
 }
 
 describe('AuthService.startGoogleOAuth', () => {
@@ -183,7 +193,7 @@ describe('AuthService.completeWithGoogle', () => {
 
   it('links the Google account to an existing email-based User instead of creating a duplicate', async () => {
     const ctx = makeService();
-    const userId = await signUpByMagicLink(ctx, 'iris@example.com');
+    const { userId, accountId } = await signUpByMagicLink(ctx, 'iris@example.com');
 
     const { start, stateHash } = await startAndCapture(ctx);
     const outcome = await ctx.service.completeWithGoogle({
@@ -197,6 +207,7 @@ describe('AuthService.completeWithGoogle', () => {
     expect(outcome.status).toBe('ok');
     if (outcome.status !== 'ok') throw new Error('expected ok');
 
+    expect(outcome.account.id).toBe(accountId);
     expect(outcome.account.userId).toBe(outcome.user.id);
     expect(outcome.user.id).toBe(userId);
 
@@ -209,6 +220,113 @@ describe('AuthService.completeWithGoogle', () => {
     );
     expect(link).not.toBeNull();
     expect(link!.accountId).toBe(outcome.account.id);
+  });
+
+  it('links a Google address that differs only in case from the address an Account already has', async () => {
+    const ctx = makeService({
+      oauthClient: makeStubOAuthClient({ fixedProfile: { email: 'Iris@Example.com' } }),
+    });
+    const { userId, accountId } = await signUpByMagicLink(ctx, 'iris@example.com');
+
+    const { start, stateHash } = await startAndCapture(ctx);
+    const outcome = await ctx.service.completeWithGoogle({
+      code: 'auth-code',
+      state: start.state,
+      stateHash,
+      codeVerifier: start.codeVerifier,
+      redirectUri: 'https://app.brieflyy.test/auth/google/callback',
+    });
+
+    if (outcome.status !== 'ok') throw new Error(`expected ok, got ${outcome.status}`);
+    expect(outcome.account.id).toBe(accountId);
+    expect(outcome.user.id).toBe(userId);
+    // The address the magic link stored is left alone: normalising what Google
+    // returned is how the two are found, not a second version of the Account.
+    expect(outcome.account.email).toBe('iris@example.com');
+    expect(countRows(ctx.driver, 'accounts')).toBe(1);
+    expect(countRows(ctx.driver, 'users')).toBe(1);
+  });
+
+  it('stores the address Google returns in the one form Brieflyy reads', async () => {
+    const ctx = makeService({
+      oauthClient: makeStubOAuthClient({ fixedProfile: { email: ' Iris@Example.COM ' } }),
+    });
+    const { start, stateHash } = await startAndCapture(ctx);
+
+    const outcome = await ctx.service.completeWithGoogle({
+      code: 'auth-code',
+      state: start.state,
+      stateHash,
+      codeVerifier: start.codeVerifier,
+      redirectUri: 'https://app.brieflyy.test/auth/google/callback',
+    });
+
+    if (outcome.status !== 'ok') throw new Error(`expected ok, got ${outcome.status}`);
+    expect(outcome.account.email).toBe('iris@example.com');
+    expect(await ctx.accountRepo.getByEmail('iris@example.com')).not.toBeNull();
+  });
+
+  it('creates one User and one Account for a Google address that matches nothing', async () => {
+    const ctx = makeService({
+      oauthClient: makeStubOAuthClient({
+        profilesByExchange: [
+          { subject: 'google-uid-1', email: 'Newcomer@Example.com' },
+          { subject: 'google-uid-2', email: 'newcomer@example.com' },
+        ],
+      }),
+    });
+    const { start, stateHash } = await startAndCapture(ctx);
+
+    const first = await ctx.service.completeWithGoogle({
+      code: 'auth-code',
+      state: start.state,
+      stateHash,
+      codeVerifier: start.codeVerifier,
+      redirectUri: 'https://app.brieflyy.test/auth/google/callback',
+    });
+    if (first.status !== 'ok') throw new Error(`expected ok, got ${first.status}`);
+
+    // A second Google identity for the same human: a different subject, the same
+    // address written differently. It must find the Account rather than make one.
+    const secondStart = await ctx.service.startGoogleOAuth();
+    const second = await ctx.service.completeWithGoogle({
+      code: 'auth-code',
+      state: secondStart.state,
+      stateHash: hashOauthState(secondStart.state),
+      codeVerifier: secondStart.codeVerifier,
+      redirectUri: 'https://app.brieflyy.test/auth/google/callback',
+    });
+    if (second.status !== 'ok') throw new Error(`expected ok, got ${second.status}`);
+
+    expect(second.account.id).toBe(first.account.id);
+    expect(second.user.id).toBe(first.user.id);
+    expect(first.account.email).toBe('newcomer@example.com');
+    expect(countRows(ctx.driver, 'users')).toBe(1);
+    expect(countRows(ctx.driver, 'accounts')).toBe(1);
+    expect(countRows(ctx.driver, 'oauth_accounts')).toBe(2);
+  });
+
+  it('refuses a Google sign-in when the address Google returns is one Brieflyy will not store', async () => {
+    const ctx = makeService({
+      oauthClient: makeStubOAuthClient({
+        fixedProfile: { email: `${'a'.repeat(250)}@example.com` },
+      }),
+    });
+    const { start, stateHash } = await startAndCapture(ctx);
+
+    const outcome = await ctx.service.completeWithGoogle({
+      code: 'auth-code',
+      state: start.state,
+      stateHash,
+      codeVerifier: start.codeVerifier,
+      redirectUri: 'https://app.brieflyy.test/auth/google/callback',
+    });
+
+    expect(outcome.status).toBe('invalid');
+    if (outcome.status !== 'invalid') throw new Error('expected invalid');
+    expect(outcome.reason).toBe('unusable_email');
+    expect(countRows(ctx.driver, 'users')).toBe(0);
+    expect(countRows(ctx.driver, 'accounts')).toBe(0);
   });
 
   it('joins a Google sign-in to the address an outstanding magic link was sent to', async () => {

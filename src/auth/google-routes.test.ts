@@ -51,9 +51,13 @@ interface TestAppHandle {
   setTokenEndpointResponse(response: { status: number; body?: string }): void;
 }
 
-async function makeTestApp(
-  oauthOpts: { profile?: Partial<{ subject: string; email: string; emailVerified: boolean }> } = {},
-): Promise<TestAppHandle> {
+interface MakeTestAppOptions {
+  readonly profile?: Partial<{ subject: string; email: string; emailVerified: boolean }>;
+  /** False for an instance whose deployment never configured a provider. */
+  readonly providerConfigured?: boolean;
+}
+
+async function makeTestApp(opts: MakeTestAppOptions = {}): Promise<TestAppHandle> {
   resetDeterministic();
   const { db, driver } = createTestDb();
   const transport = new ConsoleEmailTransport({ logger: () => {} });
@@ -66,9 +70,9 @@ async function makeTestApp(
     const tokenClaims = {
       iss: 'https://accounts.google.com',
       aud: 'cid',
-      sub: oauthOpts.profile?.subject ?? 'google-uid-1',
-      email: oauthOpts.profile?.email ?? 'iris@example.com',
-      email_verified: oauthOpts.profile?.emailVerified ?? true,
+      sub: opts.profile?.subject ?? 'google-uid-1',
+      email: opts.profile?.email ?? 'iris@example.com',
+      email_verified: opts.profile?.emailVerified ?? true,
       exp: Math.floor(NOW_MS / 1000) + 3600,
     };
     const idToken = makeSignedIdToken(tokenClaims);
@@ -89,12 +93,15 @@ async function makeTestApp(
     return new Response('{}', { status: 404 });
   }) as unknown as typeof fetch;
 
-  const oauthClient = new GoogleOAuthClient({
-    clientId: 'cid',
-    clientSecret: 'csecret',
-    fetchImpl,
-    clock: { now: () => new Date(NOW_MS) },
-  });
+  const oauthClient =
+    opts.providerConfigured === false
+      ? undefined
+      : new GoogleOAuthClient({
+          clientId: 'cid',
+          clientSecret: 'csecret',
+          fetchImpl,
+          clock: { now: () => new Date(NOW_MS) },
+        });
 
   const app = await createApp({
     db,
@@ -324,7 +331,7 @@ describe('HTTP /auth/google/callback', () => {
   });
 });
 
-describe('HTTP: Google login button on signup page', () => {
+describe('HTTP: the Google login button on signup page', () => {
   let handle: TestAppHandle;
   beforeEach(async () => {
     handle = await makeTestApp();
@@ -339,5 +346,55 @@ describe('HTTP: Google login button on signup page', () => {
     expect(response.statusCode).toBe(200);
     expect(response.body).toContain('Sign in with Google');
     expect(response.body).toContain('href="/auth/google/start"');
+  });
+});
+
+/**
+ * The deployment that never configured a provider.
+ *
+ * Every case here is answered by the application as it is built by `createApp`,
+ * with no OAuth client among its dependencies, which is what an instance without
+ * `OAUTH_PROVIDER` set actually is. The button used to be rendered anyway and the
+ * start route used to throw, so clicking it produced an internal error rather
+ * than a refusal.
+ */
+describe('HTTP: an instance with no OAuth provider configured', () => {
+  let handle: TestAppHandle;
+  beforeEach(async () => {
+    handle = await makeTestApp({ providerConfigured: false });
+  });
+  afterEach(async () => {
+    await handle.app.close();
+    handle.driver.close();
+  });
+
+  it('offers no Google button on the sign-in page', async () => {
+    const response = await handle.app.inject({ method: 'GET', url: '/signup' });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).not.toContain('Sign in with Google');
+    expect(response.body).not.toContain('/auth/google/start');
+    // The way in that still works: the magic-link form is untouched.
+    expect(response.body).toContain('Send magic link');
+  });
+
+  it('answers the start route with a page rather than an internal error', async () => {
+    const response = await handle.app.inject({ method: 'GET', url: '/auth/google/start' });
+    expect(response.statusCode).toBe(503);
+    expect(response.headers['content-type']).toContain('text/html');
+    expect(response.body).toContain('Google sign-in is not available');
+    expect(response.body).toContain('href="/signup"');
+  });
+
+  it('answers the callback route with the same refusal', async () => {
+    const response = await handle.app.inject({
+      method: 'GET',
+      url: '/auth/google/callback?code=auth-code&state=whatever',
+      headers: {
+        cookie: `brieflyy_oauth_state=${'a'.repeat(64)}; brieflyy_oauth_verifier=${'b'.repeat(64)}`,
+      },
+    });
+    expect(response.statusCode).toBe(503);
+    expect(response.headers['content-type']).toContain('text/html');
+    expect(response.body).toContain('Google sign-in is not available');
   });
 });

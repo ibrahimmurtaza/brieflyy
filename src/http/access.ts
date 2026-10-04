@@ -58,7 +58,21 @@ export interface RequireAuthOptions {
   readonly json?: boolean;
 }
 
-/** A request the guard has established carries a session. */
+/**
+ * Whether an address belongs to a JSON surface.
+ *
+ * One rule with two readers: the not-found handler and the error handler both
+ * answer a page for everything else and a body for this, because handing a machine
+ * a document is the same class of mistake as handing a page a JSON error. Written
+ * once here so the two cannot answer differently about the same address.
+ */
+export function isJsonSurface(url: string): boolean {
+  return url.startsWith('/api/');
+}
+
+/**
+ * A request the guard has established carries a session.
+ */
 export type AuthenticatedRequest = FastifyRequest & { auth: CurrentAuth };
 
 /**

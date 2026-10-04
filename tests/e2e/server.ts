@@ -36,6 +36,7 @@ import { applySchema } from '../../src/db/migrate.js';
 import { createDatabase } from '../../src/db/client.js';
 import { createApp } from '../../src/app.js';
 import { ConsoleEmailTransport } from '../../src/email/console-transport.js';
+import { GoogleOAuthClient } from '../../src/oauth/google-client.js';
 import { SESSION_COOKIE_NAME } from '../../src/config.js';
 import { systemClock } from '../../src/domain/clock.js';
 import { EMPTY_SIGNATURE } from '../../src/domain/story-signature.js';
@@ -169,6 +170,18 @@ const app = await createApp({
   cookieSecure: false,
   clock: systemClock,
   devToolsEnabled: true,
+  // Placeholder credentials, and the real client, because whether an instance
+  // offers Google is a property of the deployment (ADR-0019) — and a deployed
+  // instance is what these specs are meant to be looking at. The sign-in page
+  // renders the Google button only where a provider is configured, and the smoke
+  // spec asserts that button is visible because it is one of the controls that
+  // went white-on-white under a dark browser. Nothing here reaches Google: the
+  // client fetches its keys during a code exchange, and no spec follows the
+  // button off the page.
+  oauthClient: new GoogleOAuthClient({
+    clientId: 'e2e-client-id',
+    clientSecret: 'e2e-client-secret',
+  }),
   // The summary client the vitest suite uses, and a double for the same reason: the
   // specs share this process and nothing in here may reach a provider. It writes,
   // so a spec can follow a brief a User actually asked for; and it declines the one
