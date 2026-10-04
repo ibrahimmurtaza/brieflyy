@@ -323,11 +323,18 @@ export function aggregateRollup(
         if (current.lift === null || entity.lift === null) continue;
         if (current.lift >= entity.lift) continue;
       }
+      // The whole entry is written rather than merged, so the series travels with
+      // the ratio it is evidence for: whichever Topic won the comparison above
+      // supplies the lift, the baseline and the days together, and a lower-lift
+      // Topic arriving later is dropped whole. Summing the days across Topics
+      // instead would draw a shape under a multiple that was measured in one of
+      // them, which is the disagreement this entry exists to avoid.
       entities.set(entity.entityId, {
         entityId: entity.entityId,
         canonicalName: entity.canonicalName,
         lift: entity.lift,
         baselineMentions: entity.baselineMentions,
+        daily: entity.daily,
         topicId: topic.id,
         topicSlug: topic.slug,
         topicTitle: topic.title,

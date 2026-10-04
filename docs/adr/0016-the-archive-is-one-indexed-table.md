@@ -84,13 +84,20 @@ User's tier window:
   tiers. Restating it per tier would be a second place for one rule to live.
 - **`ArchiveSearchService` is the only place a tier is read.** It turns
   `entitlementsFor(tier).archiveRetentionDays` and a `Clock` into a date and hands it
-  to the repository. That is the whole of what it adds, and it is the layer that
-  makes the paywall testable: `tierOfPersistedUser` writes a User, reads it back and
-  resolves it, so a test exercising the window has to put a User on the tier it is
-  testing rather than assert that a branch works. The Clock is passed in because the
-  window is a fact about a request — a search that measured it against the machine's
-  own clock would put a User's Archive boundary at a different hour depending on which
-  server answered them.
+  to the repository, and it answers the other two questions a results page asks of
+  the same reading: how far this User may page (`ARCHIVE_MAX_OFFSET`, with the offset
+  snapped to a page boundary so a hand-typed one cannot ask the server to walk an
+  unbounded number of rows), and what they may narrow by (`filtersFor`, read through
+  the repository's own window so the options cannot describe a wider Archive than the
+  search will return). `retentionDaysFor` is public because the page has to say the
+  window on the page, and a route reading `entitlementsFor` itself would make the tier
+  a thing two layers decide things about. That is the whole of what it adds, and it
+  is the layer that makes the paywall testable: `tierOfPersistedUser` writes a User,
+  reads it back and resolves it, so a test exercising the window has to put a User on
+  the tier it is testing rather than assert that a branch works. The Clock is passed
+  in because the window is a fact about a request — a search that measured it against
+  the machine's own clock would put a User's Archive boundary at a different hour
+  depending on which server answered them.
 - **A Retired Story is indexed; a Story that is still being covered is not.**
   CONTEXT.md defines Retired as "none of its Clusters is Active", and a Story with a
   live Cluster is on the LivingBrief already. Indexing both would put a category in

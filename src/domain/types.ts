@@ -641,6 +641,16 @@ export interface RollupEntity {
    * than printing a capped multiple as though it were a measured ratio.
    */
   readonly baselineMentions: number | null;
+  /**
+   * The winning Topic's own daily series, cut to whatever this User's tier allows.
+   *
+   * One Topic's series rather than the sum of every Topic that carried the Entity,
+   * because the `lift` and `baselineMentions` beside it are that one Topic's
+   * measurement. Summing the days under a ratio measured somewhere else would draw
+   * the evidence for a number it does not support. The Entity is named once but
+   * attributed once too, and the row says which Topic it was attributed to.
+   */
+  readonly daily: readonly { date: string; mentions: number }[];
   readonly topicId: TopicId;
   readonly topicSlug: string;
   readonly topicTitle: string;

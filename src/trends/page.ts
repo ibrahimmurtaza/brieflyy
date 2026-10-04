@@ -161,7 +161,7 @@ function entityList(trend: TopicTrend): string {
       return `        <li class="entity">
           <span class="entity__name">${escapeHtml(entity.canonicalName)}</span>
           ${sparklineSvg({ points: entity.daily })}
-          <span class="entity__mentions">${mentions} mention${mentions === 1 ? '' : 's'} in the ${span}</span>
+          <span class="entity__mentions">${mentions} mention${mentions === 1 ? '' : 's'} in ${span}</span>
           ${liftLabel(entity)}
         </li>`;
     })
@@ -179,8 +179,8 @@ ${rows}
  * `0×` would be a claim about the Entity rather than about the paywall.
  *
  * Takes only the two fields it reads rather than the whole Entity, so a rollup
- * entry — which has a Topic but no series of its own — can be labelled the same way
- * as a per-Topic one and the two cannot come to spell the same number differently.
+ * entry and a per-Topic one can be labelled the same way and the two cannot come to
+ * spell the same number differently.
  */
 function liftLabel(entity: {
   readonly lift: number | null;
@@ -254,6 +254,10 @@ export interface RollupBlockInput {
  * heading level: the same figures twice is the point, since "what is getting louder
  * in general" and "what is getting louder in this Topic" are asked at two different
  * scales and neither answer is a substitute for the other.
+ *
+ * Every entry carries the daily series its lift was measured against, so a multiple
+ * on this surface is as checkable as one on the per-Topic view. A ratio with nothing
+ * drawn under it is a claim a User cannot check, and that holds at this scale too.
  */
 export function rollupBlock(input: RollupBlockInput): string {
   const { rollup, headingLevel } = input;
@@ -265,18 +269,32 @@ export function rollupBlock(input: RollupBlockInput): string {
     }),
     { articles: 0, stories: 0 },
   );
+  const span = spanLabel(rollup.volumeOverTime.length);
   const items =
     rollup.entities.length === 0
       ? `        <p class="hint">Nothing is emerging across your topics right now.</p>`
       : rollup.entities
-          .map(
-            (entity) => `          <li class="entity">
+          .map((entity) => {
+            // The same count the sparkline is drawn from, and named with the span
+            // the rollup's own chart covers rather than the entry's: the series is
+            // already cut to what this tier may see, so the two agree.
+            const mentions = entity.daily.reduce((sum, point) => sum + point.mentions, 0);
+            // The series belongs to the one Topic the entry is attributed to, which
+            // is the Topic the lift beside it was measured in. Naming that Topic on
+            // the row is what stops the days reading as a figure for every Topic.
+            // Nothing is drawn for an entry with no days to draw, which is the same
+            // rule the per-Topic list follows rather than a second one.
+            const spark =
+              entity.daily.length === 0 ? '' : sparklineSvg({ points: entity.daily });
+            return `          <li class="entity">
             <span class="entity__name">${escapeHtml(entity.canonicalName)}</span>
+            ${spark}
+            <span class="entity__mentions">${mentions} mention${mentions === 1 ? '' : 's'} in ${span}</span>
             <span class="entity__mentions">${escapeHtml(entity.topicTitle)}</span>
             ${liftLabel(entity)}
             <a href="/topics/${encodeURIComponent(entity.topicSlug)}/trends">See trends</a>
-          </li>`,
-          )
+          </li>`;
+          })
           .join('\n');
   const chart =
     rollup.volumeOverTime.length === 0

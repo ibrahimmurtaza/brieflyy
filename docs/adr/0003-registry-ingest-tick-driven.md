@@ -1,6 +1,6 @@
 # Registry ingest polls every source once per topic-set
 
-The single-source `IngestService` from ADR #5 is wrapped by a `RegistryIngestService` that, on each cycle, walks the union of every Topic's `topic_sources` rows (deduped), and invokes `IngestService.ingestSource` for each. The cycle is driven by an `IngestScheduler` that runs on a fixed cadence (default 30 minutes), applies exponential backoff per failing source, and exposes a status object for observability.
+The single-source `IngestService` is wrapped by a `RegistryIngestService` that, on each cycle, walks the union of every Topic's `topic_sources` rows (deduped), and invokes `IngestService.ingestSource` for each. The cycle is driven by an `IngestScheduler` that runs on a fixed cadence (default 30 minutes), applies exponential backoff per failing source, and exposes a status object for observability.
 
 ## Why a separate layer
 
@@ -12,7 +12,7 @@ In v1, the scheduler is wired into the application process via `IngestScheduler`
 
 ## Failure model
 
-`IngestService` already returns `success: false` plus `error` for fetch errors, unknown sources, and missing `feedUrl`. The scheduler treats every non-success as a failure, increments `consecutiveFailures` per source, and schedules `nextAttemptAt = finishedAt + baseMs × 2^(consecutiveFailures-1)`, capped at `backoffMaxMs`. A successful fetch resets the counter. `recordPoll` and `recordSuccess` are still called by `IngestService` regardless of backoff, so observability timestamps remain accurate.
+`IngestService` already returns `success: false` plus `error` for fetch errors, unknown sources, and missing `feedUrl`. The scheduler treats every non-success as a failure, increments `consecutiveFailures` per source, and schedules `nextAttemptAt = finishedAt + baseMs × 2^(consecutiveFailures-1)`, capped at `backoffMaxMs`. A successful fetch resets the counter. A Source still serving out its backoff is skipped before `IngestService` is reached, so `recordPoll` is not called at all and `Source.lastPolledAt` stands still for the length of the backoff. A `lastPolledAt` older than one cadence interval is therefore a Source in backoff, not a scheduler that has stopped — which is the reading `/admin/ingest` has to give it.
 
 ## Observability
 

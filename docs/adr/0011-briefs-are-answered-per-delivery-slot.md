@@ -53,9 +53,9 @@ The pass history is bounded rather than left to grow: the status view reads the 
 
 ## Loop and shutdown
 
-Both background loops — this job and the ingest scheduler — ride on one `IntervalLoop`, which owns waiting, waking on stop, and waiting for the tick in flight. Sharing it is deliberate: the guarantee that closing the application does not abandon a half-sent brief or a half-written Article is the same guarantee twice over, and two copies of a shutdown is two copies to get wrong.
+All three background loops — this job, the ingest scheduler and the trends job — ride on one `IntervalLoop`, which owns waiting, waking on stop, and waiting for the tick in flight. Sharing it is deliberate: the guarantee that closing the application does not abandon a half-sent brief or a half-written Article is one guarantee rather than three, and three copies of a shutdown is three copies to get wrong.
 
-Both loops run in the application process and start and stop with it (`INGEST_ENABLED` / `BRIEFS_ENABLED`). This supersedes the "not in-process" half of [ADR-0003](0003-registry-ingest-tick-driven.md), which said a cron job or an external worker would invoke `POST /api/ingest/tick`; the endpoint remains, and the loop now runs alongside it.
+The loops run in the application process and start and stop with it. The ingest and brief loops follow their own flags (`INGEST_ENABLED` / `BRIEFS_ENABLED`); the trends loop is unconditional, because a User who has just added a Topic should not have to wait an hour to see it measured. This supersedes the "not in-process" half of [ADR-0003](0003-registry-ingest-tick-driven.md), which said a cron job or an external worker would invoke `POST /api/ingest/tick`; the endpoint remains, and the loop now runs alongside it.
 
 ## Observability
 

@@ -221,6 +221,10 @@ describe('the rollup block', () => {
     canonicalName: 'Acme Corp',
     lift: 3.4,
     baselineMentions: 4,
+    daily: [
+      { date: '2024-06-14', mentions: 1 },
+      { date: '2024-06-15', mentions: 3 },
+    ],
     topicId: 't1',
     topicSlug: 'world-news',
     topicTitle: 'World news',
@@ -278,6 +282,24 @@ describe('the rollup block', () => {
   it('names a paid entry by how much louder it has got', () => {
     const html = rollupBlock({ rollup: rollup(), headingLevel: 2 });
     expect(html).toContain('3.4');
+  });
+
+  it('draws the daily series beside the multiple it is evidence for', () => {
+    // The same rule the per-Topic list follows: a ratio with nothing drawn under it
+    // is a claim a User cannot check, and the rollup is a place a multiple is shown.
+    const html = rollupBlock({ rollup: rollup(), headingLevel: 2 });
+    expect(html).toContain('class="sparkline"');
+    // The count is summed off the series that was drawn, so the two cannot differ.
+    expect(html).toContain('4 mentions in the last 2 days');
+  });
+
+  it('draws nothing rather than an empty shape for an entry with no days', () => {
+    const html = rollupBlock({
+      rollup: rollup({ entities: [{ ...paidEntity, daily: [] }] }),
+      headingLevel: 2,
+    });
+    expect(html).not.toContain('class="sparkline"');
+    expect(html).toContain('Acme Corp');
   });
 });
 

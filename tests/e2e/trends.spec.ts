@@ -84,6 +84,18 @@ test.describe('the trends view', () => {
     await expect(rollup.locator('svg.trend-chart')).toBeVisible();
     await expect(rollup.locator('a[href$="/trends"]')).not.toHaveCount(0);
   });
+
+  test('a rollup entity carries its own series, not just the multiple', async ({ signedInPage: page }) => {
+    // The per-Topic list draws a series beside every ratio; the rollup is the same
+    // claim at a wider scale, and a multiple with nothing under it is a claim the
+    // User cannot check. This is the assertion the gap was missing.
+    await page.goto('/topics');
+    const rollup = page.locator('main section').filter({ hasText: 'Across your topics' });
+    const rows = rollup.locator('.entities li.entity');
+    await expect(rows).not.toHaveCount(0);
+    await expect(rows.first().locator('.sparkline')).toBeVisible();
+    await expect(rows.first()).toContainText('mentions in the last');
+  });
 });
 
 test.describe('the trends view is reachable', () => {
