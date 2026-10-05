@@ -39,6 +39,10 @@ _Avoid_: signup flow, first-run
 **DeliveryTime**: A per-User clock time at which that User's scheduled BriefSnapshots are generated and emailed. All of a User's Topics share one DeliveryTime.
 _Avoid_: send time, schedule time
 
+**Request token**: The value every page carries in its forms and the application echoes in a cookie, checked together before a write is allowed to change anything. It is random and names nothing — not a User, not a session, not an address — so it tells a reader of the page nothing the page does not already show. The cookie is httpOnly, so script on the page cannot read the half that is kept from it; the value in the markup is in the document, and anything in the document is readable by whatever reads the document. A submission whose cookie and form token are missing or disagree did not come from a page Brieflyy rendered, and is refused in words rather than as a bare status.
+**Not built**: the check on the writes that carry the token but do not yet read it. The Feedback write is the only route that refuses on the pair; the remaining state-changing routes already render the field, so what is missing there is the same one line rather than a different mechanism. See ADR-0021.
+_Avoid_: CSRF token, nonce, anti-forgery token
+
 ### Core
 
 **TopicTemplate**: A curated, shared definition in the Directory. Selecting a TopicTemplate clones it into a per-user Topic.

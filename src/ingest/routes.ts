@@ -46,7 +46,11 @@ export async function registerIngestRoutes(
   fastify.get('/admin/ingest', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
     if (!requireAuth(req, reply)) return reply;
     const status = await scheduler.statusHydrated();
-    const html = renderDashboard(status, await resolveShellAccount(req.auth, onboardingService));
+    const html = renderDashboard(
+      status,
+      await resolveShellAccount(req.auth, onboardingService),
+      req.requestToken ?? null,
+    );
     return reply.type('text/html; charset=utf-8').send(html);
   });
 
@@ -74,10 +78,12 @@ export async function registerIngestRoutes(
 function renderDashboard(
   status: Awaited<ReturnType<IngestScheduler['statusHydrated']>>,
   account: ShellAccount,
+  requestToken: string | null,
 ): string {
   return renderStatusDashboard({
     title: 'Ingest scheduler',
     account,
+    requestToken,
     facts: [
       { label: 'Running', value: factValue(status.running) },
       {

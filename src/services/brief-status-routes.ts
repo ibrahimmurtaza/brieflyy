@@ -61,6 +61,7 @@ export async function registerBriefStatusRoutes(
       lastRun: status.lastRun,
       recentRuns: status.recentRuns,
       account: await resolveShellAccount(req.auth, onboardingService),
+      requestToken: req.requestToken ?? null,
     });
     return reply.type('text/html; charset=utf-8').send(html);
   });
@@ -83,6 +84,7 @@ interface BriefDashboardInput {
   readonly lastRun: BriefJobRun | null;
   readonly recentRuns: readonly BriefJobRun[];
   readonly account: ShellAccount;
+  readonly requestToken?: string | null;
 }
 
 /**
@@ -109,6 +111,7 @@ function renderBriefDashboard(input: BriefDashboardInput): string {
   return renderStatusDashboard({
     title: 'Daily brief job',
     account: input.account,
+    requestToken: input.requestToken ?? null,
     facts: [
       { label: 'Running', value: factValue(input.running) },
       { label: 'Provider', value: factValue(input.provider) },

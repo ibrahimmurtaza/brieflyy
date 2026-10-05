@@ -3,6 +3,8 @@ import type { RateLimitRule } from './http/rate-limit.js';
 export const MAGIC_LINK_TTL_MS_DEFAULT = 15 * 60 * 1000;
 export const SESSION_TTL_MS_DEFAULT = 30 * 24 * 60 * 60 * 1000;
 export const SESSION_COOKIE_NAME = 'brieflyy_session';
+export const REQUEST_TOKEN_COOKIE_NAME = 'brieflyy_request_token';
+export const REQUEST_TOKEN_FIELD = 'requestToken';
 export const MAGIC_LINK_BYTES = 32;
 export const OAUTH_STATE_TTL_MS_DEFAULT = 10 * 60 * 1000;
 export const OAUTH_STATE_COOKIE_NAME = 'brieflyy_oauth_state';

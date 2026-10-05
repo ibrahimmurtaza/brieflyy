@@ -29,6 +29,7 @@ export interface TrendsPageInput {
    * for itself what it is allowed to show.
    */
   readonly historyDays: number | null;
+  readonly requestToken?: string | null;
 }
 
 /**
@@ -51,6 +52,7 @@ export function trendsPage(input: TrendsPageInput): string {
     width: 'reading',
     account,
     activeHref: TRENDS_PATH,
+    requestToken: input.requestToken ?? null,
     body: `    <h1>${escapeHtml(topic.title)} trends</h1>
     <p class="lede">What is getting louder in this topic, and what caused it.</p>
     <p class="plan">${historyNote(input.historyDays, days)}</p>
@@ -316,6 +318,7 @@ export interface TrendsOverviewInput {
   readonly topics: readonly Topic[];
   readonly rollup: TrendsRollup;
   readonly historyDays: number | null;
+  readonly requestToken?: string | null;
 }
 
 /**
@@ -346,6 +349,7 @@ export function trendsOverviewPage(input: TrendsOverviewInput): string {
     width: 'reading',
     account,
     activeHref: TRENDS_PATH,
+    requestToken: input.requestToken ?? null,
     body: `    <h1>Trends</h1>
     <p class="lede">What is getting louder across every topic you follow.</p>
     <p class="plan">${historyNote(input.historyDays, rollup.volumeOverTime.length)}</p>

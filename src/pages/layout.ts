@@ -1,6 +1,7 @@
 import { escapeHtml } from '../domain/html.js';
 import type { DeliverySlot } from '../domain/delivery-slot.js';
 import type { Tier } from '../domain/types.js';
+import { requestTokenInput } from '../http/request-token.js';
 import { EMAIL_BRIEFS_PATH } from '../services/unsubscribe-links.js';
 import { formatHumanTime } from './human-time.js';
 import { STYLESHEET } from './styles.js';
@@ -76,6 +77,19 @@ export interface LayoutInput {
   readonly activeHref?: string | null;
   /** Markup emitted after `</main>`. Used only by the two pages with a script. */
   readonly afterMain?: string;
+  /**
+   * The token every POST form on this page echoes, and which the cookie the
+   * application set has to agree with. Null where the page has no signed-in
+   * User, and so renders no form that submits anything.
+   *
+   * Optional rather than required because a page that cannot sign a User in —
+   * the sign-in page, an expired link — has no form to refuse, and asking for
+   * a token it has no use for would be a page carrying a secret for nothing.
+   * A signed-in page that forgot this would render its forms without the token
+   * and the guard would refuse them, which is a loud failure rather than a
+   * silent one.
+   */
+  readonly requestToken?: string | null;
 }
 
 /**
@@ -147,6 +161,7 @@ export function layout(input: LayoutInput): string {
     nav: account === null ? null : PRIMARY_NAV,
     activeHref: input.activeHref ?? null,
     width,
+    requestToken: input.requestToken ?? null,
   });
   const footer = renderFooter();
 
@@ -266,6 +281,7 @@ function renderHeader(input: {
   readonly nav: readonly NavLink[] | null;
   readonly activeHref: string | null;
   readonly width: PageWidth;
+  readonly requestToken: string | null;
 }): string {
   // The wordmark goes to `/`, which redirects to `/signup` for an anonymous
   // visitor, so the one link that is always safe is the one always rendered.
@@ -295,7 +311,7 @@ ${renderArchiveSearch()}
         <span class="account__tier">${escapeHtml(TIER_LABELS[account.tier])}</span>
       </div>
       ${renderBriefFact(account.brief)}
-      <form class="logout" method="POST" action="/auth/logout"><button class="quiet" type="submit">Sign out</button></form>
+      <form class="logout" method="POST" action="/auth/logout">${input.requestToken ? requestTokenInput(input.requestToken) : ''}<button class="quiet" type="submit">Sign out</button></form>
     </div>
   </div>
 </header>`;

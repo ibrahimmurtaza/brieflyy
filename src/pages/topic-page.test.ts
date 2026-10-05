@@ -23,6 +23,8 @@ const NOW = new Date('2026-09-02T12:00:00Z');
 interface Harness {
   readonly app: FastifyInstance;
   readonly cookie: string;
+  /** The request token the CSRF defence checks against; embedded in every form. */
+  readonly requestToken: string;
   readonly clusterRepo: DrizzleClusterRepo;
   readonly topicRepo: DrizzleTopicRepo;
   readonly sourceRepo: DrizzleSourceRepo;
@@ -76,9 +78,21 @@ async function signInWithTopic(options: { readonly withSources?: boolean } = {})
     }
   }
 
+  // The request token every POST form on the LivingBrief echoes back. Read out
+  // of a real page rather than invented here, so these tests submit through the
+  // same pair a browser would.
+  const firstPage = await app.inject({
+    method: 'GET',
+    url: '/topics/topic-1',
+    headers: { cookie },
+  });
+  const pageToken = /name="requestToken" value="([^"]+)"/.exec(firstPage.body)?.[1];
+  if (!pageToken) throw new Error('no request token in the LivingBrief');
+
   return {
     app,
     cookie,
+    requestToken: pageToken,
     clusterRepo: new DrizzleClusterRepo(db),
     topicRepo,
     sourceRepo,
@@ -157,6 +171,14 @@ function page(h: Harness, url: string) {
     url,
     headers: { cookie: h.cookie },
   });
+}
+
+/**
+ * The cookie pair a state-changing route insists on: the session, and the
+ * request token whose form field has to agree with it.
+ */
+function cookiesFor(h: Harness): string {
+  return `${h.cookie}; brieflyy_request_token=${h.requestToken}`;
 }
 
 /**
@@ -273,8 +295,14 @@ describe('HTTP: /topics/:slug as a LivingBrief', () => {
       await h.app.inject({
         method: 'POST',
         url: '/topics/topic-1/feedback',
-        headers: { cookie: h.cookie },
-        payload: { clusterId: 'cluster-1', type: 'hide_source', sourceId, scope: 'this_topic' },
+        headers: { cookie: cookiesFor(h) },
+        payload: {
+          clusterId: 'cluster-1',
+          type: 'hide_source',
+          sourceId,
+          scope: 'this_topic',
+          requestToken: h.requestToken,
+        },
       });
     }
 
@@ -485,8 +513,8 @@ describe('HTTP: /topics/:slug/feedback', () => {
     return h.app.inject({
       method: 'POST',
       url: '/topics/topic-1/feedback',
-      headers: { cookie: h.cookie },
-      payload,
+      headers: { cookie: cookiesFor(h) },
+      payload: { ...payload, requestToken: h.requestToken },
     });
   }
 

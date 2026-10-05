@@ -1,5 +1,6 @@
 import { escapeHtml } from '../domain/html.js';
 import type { TopicCategory } from '../domain/types.js';
+import { requestTokenInput } from '../http/request-token.js';
 import { layout, planLine, type ShellAccount } from '../pages/layout.js';
 import type {
   DirectoryEntry,
@@ -25,6 +26,7 @@ export interface DiscoverPageInput {
   readonly discover: DiscoverService;
   /** A refusal from a submission, said in words rather than as a status code. */
   readonly message?: string | undefined;
+  readonly requestToken?: string | null;
 }
 
 /**
@@ -79,7 +81,7 @@ export function discoverPage(input: DiscoverPageInput): string {
     emptyStateHtml,
     renderRecommendations(discover.getRecommendations()),
     renderTrending(discover.getTrending(), discover.windowDays),
-    renderDirectory(discover.getDirectory()),
+    renderDirectory(discover.getDirectory(), input.requestToken ?? null),
   ]
     .filter((part) => part.length > 0)
     .join('\n');
@@ -89,6 +91,7 @@ export function discoverPage(input: DiscoverPageInput): string {
     width: 'reading',
     account,
     activeHref: '/discover',
+    requestToken: input.requestToken ?? null,
     body,
   });
 }
@@ -177,7 +180,7 @@ function plural(count: number, one: string, many: string = `${one}s`): string {
  * asserts that every category is represented, which is what stops an empty
  * category from looking like a broken picker.
  */
-function renderDirectory(entries: readonly DirectoryEntry[]): string {
+function renderDirectory(entries: readonly DirectoryEntry[], requestToken: string | null): string {
   if (entries.length === 0) {
     return `    <section>
       <h2>Directory</h2>
@@ -195,7 +198,7 @@ function renderDirectory(entries: readonly DirectoryEntry[]): string {
   const sections = CATEGORY_ORDER.filter((c) => grouped.has(c))
     .map((category) => {
       const cards = (grouped.get(category) ?? [])
-        .map(directoryCard)
+        .map((entry) => directoryCard(entry, requestToken))
         .join('\n        ');
       return `      <section>
         <h3>${escapeHtml(category)}</h3>
@@ -220,11 +223,12 @@ ${sections}
  * already accounts for the tier cap, so the page does not ask a second question
  * and risk a second opinion.
  */
-function directoryCard(entry: DirectoryEntry): string {
+function directoryCard(entry: DirectoryEntry, requestToken: string | null): string {
   const t = entry.template;
   const control = entry.canClone
     ? `          <form method="POST" action="${ADD_PATH}">
             <input type="hidden" name="templateId" value="${escapeHtml(t.id)}">
+            ${requestToken ? requestTokenInput(requestToken) : ''}
             <button class="secondary" type="submit">Add</button>
           </form>`
     : '';
