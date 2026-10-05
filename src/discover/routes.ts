@@ -95,7 +95,11 @@ export async function registerDiscoverRoutes(
     if (!requireAuthPage(req, reply)) return reply;
     const account = await shellFor(req);
     const discover = await forUser(req.auth.user);
-    return reply.type('text/html').send(discoverPage({ account, discover }));
+    return reply
+      .type('text/html')
+      .send(
+        discoverPage({ account, discover, requestToken: req.requestToken ?? null }),
+      );
   });
 
   fastify.post<{ Body: Record<string, unknown> | undefined }>(
@@ -139,6 +143,7 @@ export async function registerDiscoverRoutes(
             account,
             discover,
             ...(message === null ? {} : { message }),
+            requestToken: req.requestToken ?? null,
           }),
         );
     },

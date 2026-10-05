@@ -223,6 +223,19 @@ made for `iris@example.com` instead of nearly creating a second one for the same
 human. An address the application will not store refuses the sign-in rather than
 becoming an Account row no lookup could find. See ADR-0020.
 
+A write route can refuse a submission whose form does not echo the request token
+the application set. `src/http/request-token.ts` puts a random token in an httpOnly
+cookie on the first page a browser is handed, and the same value in every POST
+form on it; a state-changing route that checks the pair answers a submission
+missing one, or naming one the cookie does not, with a page saying the submission
+did not come from a Brieflyy page rather than with a bare 403. The token names no
+User and no session, so it tells a reader of the page nothing the page does not
+already show them; the httpOnly cookie is the half script on the page cannot get
+at, which is why the check needs both. The Feedback write is the only route that
+checks it today — every other state-changing route already carries the token in
+its forms, so applying the same one line to each of them changes no markup. See
+ADR-0021.
+
 An unexpected failure answers a page or a JSON body, never a bare 500. The
 handler in `src/http/errors.ts` is installed on the instance every route is
 registered against and follows the same rule as the not-found handler: `/api/` is
@@ -476,7 +489,7 @@ signed-in User at `/admin/ingest` and `/admin/briefs`.
 pnpm test
 ```
 
-The suite is 87 test files across `src/`, one per module, holding 1,341 cases —
+The suite is 88 test files across `src/`, one per module, holding 1,352 cases —
 Vitest prints the live figure at the end of every run. `docs-agreement.test.ts`
 checks the file count and cannot check the case count without running the suite it
 lives in, so that one number is worth reading off a run rather than trusting.

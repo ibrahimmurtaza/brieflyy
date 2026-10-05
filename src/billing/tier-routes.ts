@@ -38,7 +38,11 @@ export async function registerTierRoutes(
       const requested = (req.body ?? {}).tier;
       if (!isTier(requested)) {
         return reply.code(400).type('text/html').send(
-          badTierPage(String(requested ?? ''), await resolveShellAccount(req.auth, onboardingService)),
+          badTierPage(
+            String(requested ?? ''),
+            await resolveShellAccount(req.auth, onboardingService),
+            req.requestToken ?? null,
+          ),
         );
       }
       await userRepo.setTier(req.auth.user.id, requested);
@@ -57,11 +61,12 @@ export async function registerTierRoutes(
  * User who mistyped a development switch landed on a page with no way back into
  * the product, on a screen that looked nothing like the one they came from.
  */
-function badTierPage(requested: string, account: ShellAccount): string {
+function badTierPage(requested: string, account: ShellAccount, requestToken: string | null): string {
   return layout({
     title: 'Unknown tier',
     width: 'narrow',
     account,
+    requestToken,
     body: `    <h1>Unknown tier</h1>
     <p class="error-summary" role="alert"><strong>&ldquo;${escapeHtml(
       requested,

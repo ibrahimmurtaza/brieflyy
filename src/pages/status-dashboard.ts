@@ -28,6 +28,7 @@ export interface StatusDashboardInput {
    * where an operator gets stranded.
    */
   readonly account: ShellAccount;
+  readonly requestToken?: string | null;
   readonly facts: readonly StatusFact[];
   /** Omit when there is nothing tabular to show. */
   readonly table?: { readonly heading: string } & StatusTable;
@@ -77,6 +78,7 @@ ${input.table.rows
     title: input.title,
     width: input.width ?? 'reading',
     account: input.account,
+    requestToken: input.requestToken ?? null,
     body: `    <h1>${escapeHtml(input.title)}</h1>
     <dl>
 ${facts}

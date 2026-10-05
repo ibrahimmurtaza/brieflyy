@@ -256,6 +256,7 @@ export function archiveSearchPage(input: {
   readonly offset: number;
   /** How far back this tier reaches, or null when it reaches all of it. */
   readonly retentionDays: number | null;
+  readonly requestToken?: string | null;
   /**
    * The User's own zone, so a date here is one they would have written.
    *
@@ -305,6 +306,7 @@ ${paging({ filter, results, offset })}`;
     width: 'form',
     account: input.account,
     activeHref: ARCHIVE_SEARCH_PATH,
+    requestToken: input.requestToken ?? null,
     body: `    <h1>Archive search</h1>
     <p class="lede">Search everything Brieflyy has delivered to you, by word or topic.</p>
     <p class="plan">${escapeHtml(TIER_LABELS[input.viewer.tier])}</p>

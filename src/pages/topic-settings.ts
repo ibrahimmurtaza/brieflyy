@@ -1,4 +1,5 @@
 import { escapeHtml } from '../domain/html.js';
+import { requestTokenInput } from '../http/request-token.js';
 import { TOPIC_TITLE_MAX_LENGTH } from '../domain/slug.js';
 import {
   CADENCES,
@@ -75,6 +76,7 @@ export interface TopicSettingsInput {
    * saved.
    */
   readonly submittedTitle?: string | null;
+  readonly requestToken?: string | null;
 }
 
 /**
@@ -124,6 +126,7 @@ export function topicSettingsPage(input: TopicSettingsInput): string {
     width: 'form',
     account: input.account,
     activeHref: null,
+    requestToken: input.requestToken ?? null,
     body: `    <h1>${escapeHtml(input.topic.title)} settings</h1>
     <p class="lede">When this topic briefs, what it reads from, and whether it exists.</p>
     <p class="actions"><a href="/topics/${slug}">Back to this topic's brief</a></p>
@@ -132,7 +135,7 @@ ${errorHtml}
 ${renameSection(input, slug, title)}
 ${cadenceSection(input, slug)}
 ${sourcesSection(input, slug, followed, available)}
-${deleteSection(slug)}`,
+${deleteSection(slug, input.requestToken ?? null)}`,
   });
 }
 
@@ -147,6 +150,7 @@ function renameSection(input: TopicSettingsInput, slug: string, title: string): 
   return `    <section>
       <h2>Name</h2>
       <form method="POST" action="/topics/${slug}/rename">
+        ${input.requestToken ? requestTokenInput(input.requestToken) : ''}
         <label for="title">Topic name
           <input id="title" name="title" type="text" maxlength="${TOPIC_TITLE_MAX_LENGTH}" value="${escapeHtml(
             title,
@@ -187,6 +191,7 @@ function cadenceSection(input: TopicSettingsInput, slug: string): string {
   return `    <section>
       <h2>How often</h2>
       <form method="POST" action="/topics/${slug}/cadence">
+        ${input.requestToken ? requestTokenInput(input.requestToken) : ''}
         <fieldset class="grid">
           <legend>How often this topic briefs</legend>
 ${options}
@@ -226,6 +231,7 @@ function sourcesSection(
         <span>${escapeHtml(source.name)}</span>
         <form class="remove" method="POST" action="/topics/${slug}/sources/remove">
           <input type="hidden" name="sourceId" value="${escapeHtml(source.id)}">
+          ${input.requestToken ? requestTokenInput(input.requestToken) : ''}
           <button class="secondary" type="submit">Remove</button>
         </form>
       </li>`,
@@ -255,6 +261,7 @@ ${available
       <p class="hint">The sources this topic reads from. Changing this takes effect on the next ingest.</p>
 ${list}
       <form method="POST" action="/topics/${slug}/sources/add">
+        ${input.requestToken ? requestTokenInput(input.requestToken) : ''}
 ${add}
       </form>
     </section>`;
@@ -268,11 +275,12 @@ ${add}
  * happen before the button rather than after: a User who expects to swap a Topic
  * needs to know the brief history stays and that the name will be free again.
  */
-function deleteSection(slug: string): string {
+function deleteSection(slug: string, requestToken?: string | null): string {
   return `    <section>
       <h2>Remove this topic</h2>
       <p class="hint">This frees one of your topic slots and stops this topic's briefs. Its past briefs are kept, and the name is free to use again.</p>
       <form method="POST" action="/topics/${slug}/delete">
+        ${requestToken ? requestTokenInput(requestToken) : ''}
         <button class="secondary" type="submit">Remove this topic</button>
       </form>
     </section>`;

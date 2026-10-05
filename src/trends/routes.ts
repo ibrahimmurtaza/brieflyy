@@ -62,6 +62,7 @@ export async function registerTrendsRoutes(
         topics,
         rollup,
         historyDays: entitlementsFor(tier).trendHistoryDays,
+        requestToken: req.requestToken ?? null,
       }),
     );
   });
@@ -79,7 +80,7 @@ export async function registerTrendsRoutes(
         return reply
           .code(404)
           .type('text/html')
-          .send(notFoundPage(await shellFor(req)));
+          .send(notFoundPage(await shellFor(req), req.requestToken ?? null));
       }
       const tier = tierOf(req.auth.user);
       const trend = await trendsService.trendFor({ topicId: topic.id, tier });
@@ -91,6 +92,7 @@ export async function registerTrendsRoutes(
           trend,
           clustersById: await clusterSummaries(opts.clusterRepo, topic, trend),
           historyDays: entitlementsFor(tier).trendHistoryDays,
+          requestToken: req.requestToken ?? null,
         }),
       );
     },

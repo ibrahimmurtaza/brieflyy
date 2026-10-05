@@ -13,6 +13,7 @@ import type { Db } from './db/client.js';
 import { applyDirectorySeed } from './directory/seed.js';
 import { attachRouteManifest } from './http/access.js';
 import { setApplicationErrorHandler } from './http/errors.js';
+import { installRequestToken } from './http/request-token.js';
 import { FixedWindowRateLimiter } from './http/rate-limit.js';
 import { DrizzleAccountRepo } from './repos/account-repo.js';
 import { DrizzleArticleRepo } from './repos/article-repo.js';
@@ -175,6 +176,14 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
 
   await app.register(fastifyCookie, {});
   await app.register(fastifySensible);
+
+  // Every page the shell renders carries the matching form token, so the cookie
+  // is set before any handler that might render one runs. Registered before the
+  // auth hook so `req.requestToken` is always in hand, including for error pages.
+  installRequestToken(app, {
+    random: opts.random ?? nodeRandom,
+    secure: opts.cookieSecure ?? false,
+  });
 
   app.addContentTypeParser(
     'application/x-www-form-urlencoded',

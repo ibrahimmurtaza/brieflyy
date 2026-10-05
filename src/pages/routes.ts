@@ -1,4 +1,4 @@
-﻿import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 
 import { type Topic, type TopicTemplate, type Cluster, type Tier, type TrendsRollup } from '../domain/types.js';
 import {
@@ -47,6 +47,10 @@ import {
   isJsonSurface,
   requireAuthPage,
 } from '../http/access.js';
+import {
+  requestTokenInput,
+  requestTokenMismatch,
+} from '../http/request-token.js';
 
 export interface PageRoutesOptions {
   readonly appBaseUrl: string;
@@ -57,7 +61,7 @@ export interface PageRoutesOptions {
   /**
    * How a User's signals are recorded and read back. Held rather than reached for
    * through the repository so the page and the write share one answer to "what has
-   * this User already said" â€” the write path that bypassed the service was how a
+   * this User already said" — the write path that bypassed the service was how a
    * signal ended up stored as something the page could not show.
    *
    * Required, unlike the two below: a LivingBrief without it renders buttons that
@@ -135,7 +139,7 @@ export async function registerPageRoutes(
     // every other request goes through and `req.auth` may or may not be there.
     const auth = req.auth;
     const account = auth ? await resolveShellAccount(auth, onboardingService) : null;
-    return reply.code(404).type('text/html; charset=utf-8').send(unknownUrlPage(account));
+    return reply.code(404).type('text/html; charset=utf-8').send(unknownUrlPage(account, req.requestToken ?? null));
   });
 
   fastify.get('/signup', PUBLIC_ROUTE_CONFIG, async (_req, reply) => {
@@ -165,6 +169,7 @@ export async function registerPageRoutes(
           atCap,
           cap,
           mode: 'onboarding',
+          requestToken: req.requestToken ?? null,
         }),
       );
   });
@@ -185,6 +190,7 @@ export async function registerPageRoutes(
           atCap,
           cap,
           mode: 'manage',
+          requestToken: req.requestToken ?? null,
         }),
       );
   });
@@ -211,6 +217,7 @@ export async function registerPageRoutes(
         mode: 'onboarding',
         message: null,
         saved: false,
+        requestToken: req.requestToken ?? null,
       }),
     );
   });
@@ -227,6 +234,7 @@ export async function registerPageRoutes(
         account: await shellFor(req),
         deliveryTime: settings,
         firstBriefAt: first,
+        requestToken: req.requestToken ?? null,
       }),
     );
   });
@@ -254,6 +262,7 @@ export async function registerPageRoutes(
           mode: 'settings',
           message: req.query.saved === '1' ? 'saved' : null,
           saved: req.query.saved === '1',
+          requestToken: req.requestToken ?? null,
         }),
       );
     },
@@ -286,6 +295,7 @@ export async function registerPageRoutes(
           // which says nothing about where they are rather than guessing.
           timezone: settings?.timezone ?? 'UTC',
           justChanged: req.query.changed ?? null,
+          requestToken: req.requestToken ?? null,
         }),
       );
     },
@@ -309,7 +319,7 @@ export async function registerPageRoutes(
         return reply
           .code(404)
           .type('text/html')
-          .send(notFoundPage(await shellFor(req)));
+          .send(notFoundPage(await shellFor(req), req.requestToken ?? null));
       }
       const outcome = await opts.unsubscribeService.resubscribeTopic(
         req.auth.user.id,
@@ -323,7 +333,7 @@ export async function registerPageRoutes(
         : reply
             .code(404)
             .type('text/html')
-            .send(notFoundPage(await shellFor(req)));
+            .send(notFoundPage(await shellFor(req), req.requestToken ?? null));
     },
   );
 
@@ -353,6 +363,7 @@ export async function registerPageRoutes(
           account: await shellFor(req),
           topicCount: topics.length,
           tier: resolveTier(req.auth.user),
+          requestToken: req.requestToken ?? null,
         }),
       );
   });
@@ -392,6 +403,7 @@ export async function registerPageRoutes(
           // time, which says nothing about where they are rather than guessing —
           // the same reading, and the same fallback, as every other dated page.
           timezone: settings?.timezone ?? 'UTC',
+          requestToken: req.requestToken ?? null,
         }),
       );
     },
@@ -421,6 +433,7 @@ export async function registerPageRoutes(
           tier,
           atCap: topics.length >= cap,
           ...(rollup === null ? {} : { rollup }),
+          requestToken: req.requestToken ?? null,
         }),
       );
   });
@@ -433,12 +446,23 @@ export async function registerPageRoutes(
     AUTHENTICATED_ROUTE_CONFIG,
     async (req, reply) => {
       if (!requireAuthPage(req, reply)) return reply;
+      // The cookie and the form field have to name the same token. A submission
+      // that does not came from somewhere other than a page this application
+      // rendered, and it is refused before the body is read for anything: what it
+      // says about a Cluster is not worth answering when the submission itself is
+      // not one the User made.
+      if (requestTokenMismatch(req)) {
+        return reply
+          .code(403)
+          .type('text/html')
+          .send(requestRefusedPage({ account: await shellFor(req) }));
+      }
       const topic = await opts.topicRepo.findBySlug(req.auth.user.id, req.params.slug);
       if (!topic) {
         return reply
           .code(404)
           .type('text/html')
-          .send(notFoundPage(await shellFor(req)));
+          .send(notFoundPage(await shellFor(req), req.requestToken ?? null));
       }
       const body = (req.body ?? {}) as Record<string, unknown>;
       const clusterId = readField(body, 'clusterId');
@@ -448,13 +472,14 @@ export async function registerPageRoutes(
             account: await shellFor(req),
             message: 'That submission named no story.',
             topicSlug: req.params.slug,
+            requestToken: req.requestToken ?? null,
           }),
         );
       }
       // Handed to the service as plain strings and validated there, rather than
       // narrowed here. A `type` or `scope` that is not one the glossary names is
       // a submission to refuse, and refusing it is the service's one answer to
-      // "is this a signal" â€” checking it twice, with the two copies able to
+      // "is this a signal" — checking it twice, with the two copies able to
       // disagree, would be the thing to avoid. `scope` is passed through even when
       // it is not one of the two, so an unusable scope is refused rather than
       // quietly stored as `this_topic`.
@@ -478,6 +503,7 @@ export async function registerPageRoutes(
               account: await shellFor(req),
               message: humanFeedbackReason(outcome.status),
               topicSlug: req.params.slug,
+              requestToken: req.requestToken ?? null,
             }),
           );
       }
@@ -501,7 +527,7 @@ export async function registerPageRoutes(
         return reply
           .code(404)
           .type('text/html')
-          .send(notFoundPage(await shellFor(req)));
+          .send(notFoundPage(await shellFor(req), req.requestToken ?? null));
       }
       // Parsed rather than trusted: a value the User typed that is not a number
       // becomes NaN and falls back to the default, and one outside the range
@@ -530,12 +556,12 @@ export async function registerPageRoutes(
         return reply
           .code(404)
           .type('text/html')
-          .send(notFoundPage(await shellFor(req)));
+          .send(notFoundPage(await shellFor(req), req.requestToken ?? null));
       }
       // The daily job already skips a User or a Topic that has unsubscribed, and
       // this is the one path that could get around it: a User who has asked not
       // to be emailed and then presses the button asking to be emailed has not
-      // unsubscribed, they have asked for one. So it is honoured â€” but the page
+      // unsubscribed, they have asked for one. So it is honoured — but the page
       // says what happened instead of silently sending.
       if (
         isEmailStopped({
@@ -577,11 +603,11 @@ export async function registerPageRoutes(
         return reply
           .code(404)
           .type('text/html')
-          .send(notFoundPage(await shellFor(req), 'That brief'));
+          .send(notFoundPage(await shellFor(req), req.requestToken ?? null, 'That brief'));
       }
       // The stored document, served as stored. A BriefSnapshot is what was
       // emailed, so rendering it again from today's Clusters would show a
-      // different brief from the one the User received â€” and the one the call to
+      // different brief from the one the User received — and the one the call to
       // action in the email points at.
       return reply.type('text/html').send(snapshot.html);
     },
@@ -600,7 +626,7 @@ export async function registerPageRoutes(
         return reply
           .code(404)
           .type('text/html')
-          .send(notFoundPage(await shellFor(req)));
+          .send(notFoundPage(await shellFor(req), req.requestToken ?? null));
       }
       const clusters = await opts.clusterRepo.listByTopicId(topic.id);
       // What this User has already said, read once. Every answer the page gives
@@ -620,7 +646,7 @@ export async function registerPageRoutes(
 
       // Two ways a Cluster gets hidden, kept apart because only one of them is
       // undone by dropping the query string. A `?hide=` belongs to this request;
-      // a Feedback hide is stored per User and outlives it â€” though what Feedback
+      // a Feedback hide is stored per User and outlives it — though what Feedback
       // hides is a *Source*, applied to the Articles below rather than to the
       // whole Cluster, which is the difference between disliking one outlet and
       // losing every outlet's account of the same story.
@@ -650,8 +676,8 @@ export async function registerPageRoutes(
         ).filter((a) => !hiddenSourceIds.has(a.sourceId));
         clusterArticles.set(c.id, visible);
         relevance.set(c.id, clusterRelevance(visible, feedback.weightByArticleId));
-        // A Cluster left with no Articles at all â€” every one of them from a Source
-        // this User has hidden â€” has nothing of this Topic left to show, so it
+        // A Cluster left with no Articles at all — every one of them from a Source
+        // this User has hidden — has nothing of this Topic left to show, so it
         // goes. Naming the Source is what makes this a Source-level exclusion: a
         // Cluster carried by two outlets keeps the other one's reporting.
         if (visible.length === 0) clustersWithoutArticles.add(c.id);
@@ -709,6 +735,7 @@ export async function registerPageRoutes(
             userUnsubscribedAt: req.auth.user.unsubscribedAt,
             topicUnsubscribedAt: topic.unsubscribedAt,
           }),
+          requestToken: req.requestToken ?? null,
         }),
       );
     },
@@ -795,6 +822,7 @@ function pickTopicsPage(input: {
   atCap: boolean;
   cap: number;
   mode: 'onboarding' | 'manage';
+  readonly requestToken?: string | null;
 }): string {
   const onboarding = input.mode === 'onboarding';
   const cap = input.cap;
@@ -817,7 +845,7 @@ function pickTopicsPage(input: {
   // The same rule, not the whole of it, and it is not the server's whole rule
   // either. The free-form field below has no counterpart here, because the
   // Directory does not list it to offer twice. And `selectTopics`, which handles
-  // the POST from the onboarding screen, does no already-held check at all â€”
+  // the POST from the onboarding screen, does no already-held check at all —
   // `/pick-topics` reaches a User who has not onboarded and lets them add Topics
   // first, so that screen is stricter than its own handler. That asymmetry is
   // pre-existing and it only ever hides a card, so it is left rather than
@@ -879,6 +907,7 @@ function pickTopicsPage(input: {
                 ? ''
                 : `<form class="remove" method="POST" action="/pick-topics/remove">
                       <input type="hidden" name="slug" value="${escapeHtml(t.slug)}">
+                      ${input.requestToken ? requestTokenInput(input.requestToken) : ''}
                       <button class="secondary" type="submit">Remove</button>
                     </form>`
             }
@@ -893,12 +922,12 @@ function pickTopicsPage(input: {
     : '';
 
   const lede = onboarding
-    ? `Choose exactly ${INITIAL_TOPIC_COUNT} â€” from the Directory below, your own free-form idea, or a mix.`
+    ? `Choose exactly ${INITIAL_TOPIC_COUNT} — from the Directory below, your own free-form idea, or a mix.`
     : remaining === 0
       ? `You are using all ${cap} free topics. Remove one to pick a replacement, or upgrade.`
       : remaining === null
-        ? 'Add as many topics as you like â€” from the Directory below, your own free-form idea, or a mix.'
-        : `Pick up to ${remaining} more topic${remaining === 1 ? '' : 's'} â€” from the Directory below, your own free-form idea, or a mix.`;
+        ? 'Add as many topics as you like — from the Directory below, your own free-form idea, or a mix.'
+        : `Pick up to ${remaining} more topic${remaining === 1 ? '' : 's'} — from the Directory below, your own free-form idea, or a mix.`;
 
   const paywallHtml = locked
     ? `    <div class="callout callout--paywall">You have reached the free-topic limit (${cap}). <a href="/upgrade">Upgrade</a> to add more, or remove a topic to swap it.</div>`
@@ -914,10 +943,12 @@ function pickTopicsPage(input: {
     // page is "Pick your topics", and following the nav link there redirects
     // back to it, so marking it current would be a small lie.
     activeHref: onboarding ? null : '/pick-topics',
+    requestToken: input.requestToken ?? null,
     body: `    <h1>${onboarding ? 'Pick your topics' : 'Your topics'}</h1>
     <p class="lede">${escapeHtml(lede)}</p>
 ${paywallHtml}${existingHtml}
     <form id="pick" method="POST" action="${actionHref}">
+${input.requestToken ? `      ${requestTokenInput(input.requestToken)}` : ''}
 ${sectionsHtml}
       <div class="freeform">
         <label for="freeformTitle"><strong>Or add your own</strong> (optional${
@@ -1013,6 +1044,7 @@ export function deliveryTimePage(input: {
   mode: 'onboarding' | 'settings';
   message: string | null;
   saved: boolean;
+  readonly requestToken?: string | null;
 }): string {
   const isOnboarding = input.mode === 'onboarding';
   const action = isOnboarding ? '/onboarding/delivery-time' : '/settings/delivery';
@@ -1044,6 +1076,7 @@ export function deliveryTimePage(input: {
   const formHtml = `    <form id="delivery-form" method="POST" action="${escapeHtml(
     action,
   )}">
+      ${input.requestToken ? requestTokenInput(input.requestToken) : ''}
       <div class="row">
         <label for="hour">Hour
           <input id="hour" name="hour" type="number" min="0" max="23" value="${input.existing.hour}" required>
@@ -1077,6 +1110,7 @@ ${formHtml}
     width: 'form',
     account: input.account,
     activeHref: '/settings/delivery',
+    requestToken: input.requestToken ?? null,
     body: `    <h1>${isOnboarding ? 'Pick your delivery time' : 'Delivery time'}</h1>
     <p class="lede">${
       isOnboarding
@@ -1113,6 +1147,7 @@ export function emailBriefsPage(input: {
   timezone: string;
   /** What the last form on this page changed, or null. */
   justChanged: string | null;
+  readonly requestToken?: string | null;
 }): string {
   /** Plain text; the caller escapes it, so it never gets escaped twice. */
   const since = (at: Date): string =>
@@ -1131,6 +1166,7 @@ export function emailBriefsPage(input: {
       <p>No topic is being emailed until you turn them back on. Your topics and any brief already sent are all still here.</p>
       <p>Any topic you had stopped on its own stays stopped. Turn those back on below, one at a time.</p>
       <form method="POST" action="${escapeHtml(`${EMAIL_BRIEFS_PATH}/resubscribe`)}">
+        ${input.requestToken ? requestTokenInput(input.requestToken) : ''}
         <button type="submit">Turn all emails back on</button>
       </form>
     </div>`;
@@ -1159,6 +1195,7 @@ export function emailBriefsPage(input: {
           : `      <form class="window-form" method="POST" action="${escapeHtml(
               `${EMAIL_BRIEFS_PATH}/${encodeURIComponent(topic.slug)}/resubscribe`,
             )}">
+        ${input.requestToken ? requestTokenInput(input.requestToken) : ''}
         <button class="secondary" type="submit">Turn this topic back on</button>
       </form>`;
       return `    <li>
@@ -1183,6 +1220,7 @@ ${rows}
     width: 'form',
     account: input.account,
     activeHref: EMAIL_BRIEFS_PATH,
+    requestToken: input.requestToken ?? null,
     body: `    <h1>Email briefs</h1>
     <p class="lede">What Brieflyy sends you, and how to stop it.</p>
 ${changedHtml}
@@ -1287,8 +1325,9 @@ function timeZoneOptions(selected: string): string {
 
 function welcomePage(input: {
   account: ShellAccount;
-  deliveryTime: { hour: number; minute: number; timezone: string };
+  deliveryTime: DeliveryTimeValue;
   firstBriefAt: Date | null;
+  readonly requestToken?: string | null;
 }): string {
   const tz = escapeHtml(input.deliveryTime.timezone);
   const time = `${pad2(input.deliveryTime.hour)}:${pad2(input.deliveryTime.minute)}`;
@@ -1299,6 +1338,7 @@ function welcomePage(input: {
     title: "You're set up",
     width: 'form',
     account: input.account,
+    requestToken: input.requestToken ?? null,
     body: `    <h1>You're set up</h1>
     <p class="lede">Welcome, ${escapeHtml(input.account.email)}.</p>
     <div class="callout">
@@ -1314,6 +1354,7 @@ function upgradePage(input: {
   account: ShellAccount;
   topicCount: number;
   tier: Tier;
+  readonly requestToken?: string | null;
 }): string {
   const used = input.topicCount === 1 ? '1 topic' : `${input.topicCount} topics`;
   // A paid user reaching this page already has what it is selling, so say that
@@ -1332,6 +1373,7 @@ function upgradePage(input: {
     title: 'Upgrade to paid',
     width: 'form',
     account: input.account,
+    requestToken: input.requestToken ?? null,
     body: `    <h1>${headline}</h1>
     ${priceHtml}
     <p>Paid Brieflyy includes unlimited topics, indefinite archive retention, and the full trends view.</p>
@@ -1350,6 +1392,7 @@ function homePage(input: {
   atCap: boolean;
   /** Every Topic's volume added together, when a trends service is mounted. */
   rollup?: TrendsRollup;
+  readonly requestToken?: string | null;
 }): string {
   const cap = topicCapFor(input.tier);
   // The tier's own name from the shell's table, so the topic list and the header
@@ -1399,6 +1442,7 @@ ${rollupBlock({
     width: 'default',
     account: input.account,
     activeHref: '/topics',
+    requestToken: input.requestToken ?? null,
     body: `    <h1>Your topics</h1>
     <p class="lede">Pick a topic to open its living brief.</p>
     <p class="plan">${plan}</p>
@@ -1464,6 +1508,7 @@ function topicPage(input: {
   readonly briefJustSent?: boolean;
   /** Set when the User or this Topic has opted out of the mail. */
   readonly emailsStopped?: boolean;
+  readonly requestToken?: string | null;
 }): string {
   const safeTitle = escapeHtml(input.topic.title);
   const action = `/topics/${escapeHtml(input.topicSlug)}/feedback`;
@@ -1514,6 +1559,7 @@ ${bulletPoints}
         .join('\n');
       const feedbackButtons = `<form class="feedback" method="POST" action="${action}">
         <input type="hidden" name="clusterId" value="${escapeHtml(c.id)}">
+${input.requestToken ? `        ${requestTokenInput(input.requestToken)}` : ''}
 ${signalButtons}
       </form>`;
       const hideForm = hideSourceForm({
@@ -1524,6 +1570,7 @@ ${signalButtons}
           name: input.sourcesById.get(sid)?.name ?? sid,
           hiddenScope: input.hiddenSources.get(sid)?.scope ?? null,
         })),
+        requestToken: input.requestToken ?? null,
       });
       const sources = c.sourceIds
         .filter((sid) => input.visibleSourceIds.has(sid))
@@ -1574,6 +1621,7 @@ ${signalButtons}
     width: 'reading',
     account: input.account,
     activeHref: '/topics',
+    requestToken: input.requestToken ?? null,
     body: `    <h1>${safeTitle}</h1>
     <p class="lede">${category}${count}</p>
 ${briefActions}
@@ -1591,14 +1639,14 @@ ${windowForm}`,
  *
  * Two things were wrong with the single "Hide this source" button it replaces.
  * It named no Source, so there was nothing on the event to say which outlet was
- * meant and the only thing to act on was the Cluster â€” hiding one outlet's
+ * meant and the only thing to act on was the Cluster — hiding one outlet's
  * reporting took every other outlet's reporting of the same story with it. And it
  * had no scope on it, so `global` could never be reached: the field was never
  * rendered, so every hide the route stored was `this_topic`.
  *
  * The two selects say both out loud. The scope's selected option is the scope in
  * force for that Source, so a choice made on one page load is the one the next
- * page load shows â€” the choice persists because it is read back off the stored
+ * page load shows — the choice persists because it is read back off the stored
  * signal rather than kept in the page.
  */
 function hideSourceForm(input: {
@@ -1609,6 +1657,7 @@ function hideSourceForm(input: {
     readonly name: string;
     readonly hiddenScope: FeedbackScope | null;
   }[];
+  readonly requestToken?: string | null;
 }): string {
   if (input.sources.length === 0) return '';
   // A Source already hidden is still offered, marked as hidden and with its stored
@@ -1640,6 +1689,7 @@ function hideSourceForm(input: {
   return `    <form class="feedback hide-source" method="POST" action="${input.action}">
       <input type="hidden" name="clusterId" value="${escapeHtml(input.clusterId)}">
       <input type="hidden" name="type" value="hide_source">
+      ${input.requestToken ? requestTokenInput(input.requestToken) : ''}
       <label class="visually-hidden" for="source-${escapeHtml(input.clusterId)}">Source to hide</label>
       <select id="source-${escapeHtml(input.clusterId)}" name="sourceId">
 ${sourceOptions}
@@ -1657,7 +1707,7 @@ ${scopeOptions}
  * How a Scope reads on the page.
  *
  * One table rather than a list at each place a scope is named, so the label a User
- * sees and the value the service checks cannot drift apart â€” the same reason
+ * sees and the value the service checks cannot drift apart — the same reason
  * `FEEDBACK_SCOPES` in the domain is a value and not only a type.
  */
 const FEEDBACK_SCOPE_LABELS: Readonly<Record<FeedbackScope, string>> = {
@@ -1683,7 +1733,7 @@ function newestFirst(
  *
  * A User who wants a brief today should not have to wait for the clock. The form
  * posts to a route that plans the Topic, renders it and emails it, and the page
- * comes back saying so â€” an email that arrives with nothing said about it is
+ * comes back saying so — an email that arrives with nothing said about it is
  * indistinguishable from the scheduler being broken.
  */
 function sendBriefSection(input: {
@@ -1693,6 +1743,7 @@ function sendBriefSection(input: {
   briefJustSent?: boolean;
   /** Set when the User or this Topic has opted out of the mail. */
   emailsStopped?: boolean;
+  readonly requestToken?: string | null;
 }): string {
   // A link back to a brief is a link out of the LivingBrief and into the exact
   // document that was sent, which is the only reason this list is here at all:
@@ -1723,6 +1774,7 @@ ${sent.join('\n')}
       <p><a href="${escapeHtml(EMAIL_BRIEFS_PATH)}">Turn them back on</a></p>
     </div>`
     : `    <form method="POST" action="/topics/${escapeHtml(input.topicSlug)}/send-brief">
+      ${input.requestToken ? requestTokenInput(input.requestToken) : ''}
       <button type="submit">Email me this brief now</button>
     </form>`;
   return `${notice}${ask}
@@ -1735,7 +1787,7 @@ ${list}`;
  * Four different situations, and conflating any two of them misleads the User
  * about their own Topic. An empty Topic has nothing yet. A Topic whose Clusters
  * have all gone Archived has something, just nothing current. A Topic whose
- * Clusters a Source filter or a Dismiss has removed still has Clusters â€” saying
+ * Clusters a Source filter or a Dismiss has removed still has Clusters — saying
  * "no stories yet" there would tell them their ingest is broken when it is
  * working exactly as asked. And a Topic whose Clusters are left with nothing to
  * show because every Source behind them has been hidden is a fourth thing
@@ -1822,11 +1874,13 @@ function sourceFilterBarHtml(input: {
 function clusterWindowForm(input: {
   readonly topic: Topic;
   readonly topicSlug: string;
+  readonly requestToken?: string | null;
 }): string {
   const action = `/topics/${escapeHtml(input.topicSlug)}/cluster-window`;
   const min = MIN_CLUSTER_WINDOW_DAYS;
   const max = MAX_CLUSTER_WINDOW_DAYS;
   return `    <form class="window-form" method="POST" action="${action}">
+      ${input.requestToken ? requestTokenInput(input.requestToken) : ''}
       <label for="windowDays">Cluster window</label>
       <input type="number" id="windowDays" name="windowDays" min="${min}" max="${max}" value="${input.topic.clusterWindowDays}">
       <span>days (${min}-${max})</span>
@@ -1852,14 +1906,45 @@ function feedbackErrorPage(input: {
   readonly account: ShellAccount;
   readonly message: string;
   readonly topicSlug: string;
+  readonly requestToken?: string | null;
 }): string {
   return layout({
     title: 'Feedback not saved',
     width: 'form',
     account: input.account,
+    requestToken: input.requestToken ?? null,
     body: `    <h1>Feedback not saved</h1>
     <p>${escapeHtml(input.message)}</p>
     <p class="actions"><a class="button" href="/topics/${escapeHtml(input.topicSlug)}">Back to your brief</a></p>`,
+  });
+}
+
+/**
+ * A submission the request token refused.
+ *
+ * A page rather than a bare 403, because the caller is a browser mid-submission
+ * and the two ways it can have got here are worth telling apart in words: a User
+ * whose tab was open long enough for the page to be stale, and a page on another
+ * site trying to spend the User's session. Both are answered the same way and
+ * neither is answered with a detail, because telling an attacker which half they
+ * got right is a way of making the next attempt cheaper.
+ *
+ * Kept beside the Feedback refusals rather than in `http/request-token.ts`
+ * because it is a page: the guard decides, this renders.
+ */
+function requestRefusedPage(input: {
+  readonly account: ShellAccount | null;
+}): string {
+  return layout({
+    title: 'Request not from Brieflyy',
+    width: 'narrow',
+    account: input.account,
+    requestToken: null,
+    body: `    <h1>That submission was refused</h1>
+    <div class="error-summary" role="alert">
+      <p>That submission did not come from a Brieflyy page, so no signal was saved. Reload the page and try again.</p>
+    </div>
+    <p class="actions"><a class="button" href="/topics">Back to your topics</a></p>`,
   });
 }
 
@@ -1880,18 +1965,27 @@ function humanFeedbackReason(status: string): string {
 }
 
 /**
- * A thing the User named that is not there â€” a Topic of theirs, a brief of theirs.
+ * A thing the User named that is not there — a Topic of theirs, a brief of theirs.
  *
  * Distinct from `unknownUrlPage` because this one can say what was being looked
  * for. The slug used to be reflected back into the page; it is escaped, so it was
  * never a vulnerability, but it is a URL path echoed for no product reason, and
  * the copy below says the same thing without it.
+ *
+ * The token comes before the thing being named so that passing one does not
+ * repeat the default, and because every page the shell renders for a signed-in
+ * User has one to pass — a 404 with no sign-out control on it strands the User.
  */
-export function notFoundPage(account: ShellAccount, what = 'That topic'): string {
+export function notFoundPage(
+  account: ShellAccount,
+  requestToken: string | null = null,
+  what = 'That topic',
+): string {
   return layout({
     title: 'Not found',
     width: 'form',
     account,
+    requestToken,
     body: `    <h1>Not found</h1>
     <p>${escapeHtml(what)} does not exist, or it is not one of yours.</p>
     <p class="actions"><a class="button" href="/topics">Back to your topics</a></p>`,
@@ -1907,11 +2001,12 @@ export function notFoundPage(account: ShellAccount, what = 'That topic'): string
  * would offer them links to pages they cannot reach, which is a page that looks
  * like a way out and is not one.
  */
-function unknownUrlPage(account: ShellAccount | null): string {
+function unknownUrlPage(account: ShellAccount | null, requestToken: string | null = null): string {
   return layout({
     title: 'Page not found',
     width: 'form',
     account,
+    requestToken,
     body: `    <h1>Page not found</h1>
     <p>There is nothing at this address.</p>
     <p class="actions"><a class="button" href="${

@@ -110,6 +110,7 @@ export async function registerUnsubscribeRoutes(
               scope,
               topic,
               account: await accountFor(req, outcome, onboardingService),
+              requestToken: req.requestToken ?? null,
             }),
           );
       },
@@ -192,6 +193,7 @@ function confirmationPage(input: {
   readonly scope: UnsubscribeScope;
   readonly topic: Topic | null;
   readonly account: ShellAccount | null;
+  readonly requestToken?: string | null;
 }): string {
   const { outcome } = input;
   if (outcome.status !== 'ok') {
@@ -199,6 +201,7 @@ function confirmationPage(input: {
       title: 'Unsubscribe link',
       width: 'narrow',
       account: input.account,
+      requestToken: input.requestToken ?? null,
       body: `    <h1>Unsubscribe link</h1>
     <div class="error-summary" role="alert">
       <p>${escapeHtml(humanRefusal(outcome.reason))}</p>
@@ -224,6 +227,7 @@ function confirmationPage(input: {
     title: 'Unsubscribed',
     width: 'narrow',
     account: input.account,
+    requestToken: input.requestToken ?? null,
     body: `    <h1>${escapeHtml(headline)}</h1>
     <div class="callout callout--success" role="status"><p>${escapeHtml(what)}</p></div>
     <p>Changed your mind? You can turn them back on at any time.</p>

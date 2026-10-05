@@ -47,7 +47,7 @@ export function setApplicationErrorHandler(
     return reply
       .code(status)
       .type('text/html; charset=utf-8')
-      .send(failedRequestPage(account, status));
+      .send(failedRequestPage(account, status, req.requestToken ?? null));
   });
 }
 
@@ -135,7 +135,7 @@ async function accountForFailedRequest(
  * `<title>`, and neither copy is a diagnosis, so there is nothing in the page for a
  * reader to quote back as a reason.
  */
-function failedRequestPage(account: ShellAccount | null, status: number): string {
+function failedRequestPage(account: ShellAccount | null, status: number, requestToken: string | null): string {
   const ours = status >= 500;
   return layout({
     title: ours ? 'Something went wrong' : 'Request not accepted',
@@ -145,6 +145,7 @@ function failedRequestPage(account: ShellAccount | null, status: number): string
     // carries the navigation when there is one and does not when there is not, for
     // the reason ADR-0009 records rather than by omission.
     account,
+    requestToken,
     body: `    <h1>${ours ? 'Something went wrong' : 'That request could not be completed'}</h1>
     <div class="error-summary" role="alert">
       <p>${

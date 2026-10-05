@@ -48,7 +48,7 @@ export async function registerTopicSettingsRoutes(
       if (!requireAuthPage(req, reply)) return reply;
       const topic = await opts.topicRepo.findBySlug(req.auth.user.id, req.params.slug);
       if (!topic) {
-        return reply.code(404).type('text/html').send(notFoundPage(await shellFor(req)));
+        return reply.code(404).type('text/html').send(notFoundPage(await shellFor(req), req.requestToken ?? null));
       }
       return reply.type('text/html').send(
         topicSettingsPage({
@@ -59,6 +59,7 @@ export async function registerTopicSettingsRoutes(
           changed: req.query.changed ?? null,
           message: null,
           submittedTitle: null,
+          requestToken: req.requestToken ?? null,
         }),
       );
     },
@@ -164,7 +165,7 @@ export async function registerTopicSettingsRoutes(
         req.params.slug,
       );
       if (outcome.status === 'not_found') {
-        return reply.code(404).type('text/html').send(notFoundPage(await shellFor(req)));
+        return reply.code(404).type('text/html').send(notFoundPage(await shellFor(req), req.requestToken ?? null));
       }
       return reply.code(302).header('location', '/topics').send();
     },
@@ -205,7 +206,7 @@ export async function registerTopicSettingsRoutes(
     const { req } = input;
     const outcome = await input.ask({ userId: req.auth.user.id, slug: input.slug });
     if (outcome.status === 'not_found') {
-      return reply.code(404).type('text/html').send(notFoundPage(await shellFor(req)));
+      return reply.code(404).type('text/html').send(notFoundPage(await shellFor(req), req.requestToken ?? null));
     }
     if (outcome.status === 'invalid') {
       return reply
@@ -234,7 +235,7 @@ export async function registerTopicSettingsRoutes(
     submittedTitle: string | null,
   ): Promise<string> {
     const topic = await opts.topicRepo.findBySlug(req.auth.user.id, slug);
-    if (!topic) return notFoundPage(await shellFor(req), 'That topic');
+    if (!topic) return notFoundPage(await shellFor(req), req.requestToken ?? null);
     return topicSettingsPage({
       account: await shellFor(req),
       topic,
@@ -243,6 +244,7 @@ export async function registerTopicSettingsRoutes(
       changed: null,
       message,
       submittedTitle,
+      requestToken: req.requestToken ?? null,
     });
   }
 }

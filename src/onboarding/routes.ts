@@ -72,7 +72,13 @@ export async function registerOnboardingRoutes(
       return reply
         .code(400)
         .type('text/html')
-        .send(pickTopicsErrorPage({ account: await shellFor(req), message: 'Please pick exactly 3 topics.' }));
+        .send(
+          pickTopicsErrorPage({
+            account: await shellFor(req),
+            message: 'Please pick exactly 3 topics.',
+            requestToken: req.requestToken ?? null,
+          }),
+        );
     }
     const outcome: SelectTopicsOutcome = await onboardingService.selectTopics({
       userId: req.auth.user.id,
@@ -85,7 +91,10 @@ export async function registerOnboardingRoutes(
       return reply.code(302).header('location', '/onboarding/delivery-time').send();
     }
     if (outcome.reason === 'paywall_tier_limit') {
-      return reply.code(402).type('text/html').send(paywallPage(await shellFor(req)));
+      return reply
+        .code(402)
+        .type('text/html')
+        .send(paywallPage(await shellFor(req), req.requestToken ?? null));
     }
     return reply
       .code(400)
@@ -94,6 +103,7 @@ export async function registerOnboardingRoutes(
         pickTopicsErrorPage({
           account: await shellFor(req),
           message: humanTopicSelectionReason(outcome.reason, 'onboarding'),
+          requestToken: req.requestToken ?? null,
         }),
       );
   });
@@ -108,7 +118,14 @@ export async function registerOnboardingRoutes(
       return reply
         .code(400)
         .type('text/html')
-        .send(pickTopicsErrorPage({ account: await shellFor(req), message: 'Pick at least one topic.', backHref: '/pick-topics' }));
+        .send(
+          pickTopicsErrorPage({
+            account: await shellFor(req),
+            message: 'Pick at least one topic.',
+            backHref: '/pick-topics',
+            requestToken: req.requestToken ?? null,
+          }),
+        );
     }
     const outcome = await onboardingService.addTopics({
       userId: req.auth.user.id,
@@ -121,7 +138,10 @@ export async function registerOnboardingRoutes(
       return reply.code(302).header('location', '/topics').send();
     }
     if (outcome.reason === 'paywall_tier_limit') {
-      return reply.code(402).type('text/html').send(paywallPage(await shellFor(req)));
+      return reply
+        .code(402)
+        .type('text/html')
+        .send(paywallPage(await shellFor(req), req.requestToken ?? null));
     }
     return reply
       .code(400)
@@ -131,6 +151,7 @@ export async function registerOnboardingRoutes(
           account: await shellFor(req),
           message: humanTopicSelectionReason(outcome.reason, 'manage'),
           backHref: '/pick-topics',
+          requestToken: req.requestToken ?? null,
         }),
       );
   });
@@ -159,6 +180,7 @@ export async function registerOnboardingRoutes(
           notFoundHtml(
             await shellFor(req),
             'That topic is not yours, or no longer exists.',
+            req.requestToken ?? null,
           ),
         );
     },
@@ -181,6 +203,7 @@ export async function registerOnboardingRoutes(
             message: 'Please pick a valid time and timezone.',
             submitted,
             mode: 'onboarding',
+            requestToken: req.requestToken ?? null,
           }),
         );
     }
@@ -207,6 +230,7 @@ export async function registerOnboardingRoutes(
           message: humanDeliveryTimeReason(outcome.reason),
           submitted,
           mode: 'onboarding',
+          requestToken: req.requestToken ?? null,
         }),
       );
   });
@@ -228,6 +252,7 @@ export async function registerOnboardingRoutes(
             message: 'Please pick a valid time and timezone.',
             submitted,
             mode: 'settings',
+            requestToken: req.requestToken ?? null,
           }),
         );
     }
@@ -246,10 +271,11 @@ export async function registerOnboardingRoutes(
       .send(
         deliveryTimeErrorPage({
           account: await shellFor(req),
-          message: humanDeliveryTimeReason(outcome.reason),
-          submitted,
-          mode: 'settings',
-        }),
+            message: humanDeliveryTimeReason(outcome.reason),
+            submitted,
+            mode: 'settings',
+            requestToken: req.requestToken ?? null,
+          }),
       );
   });
 }
@@ -315,6 +341,7 @@ function deliveryTimeErrorPage(input: {
   message: string;
   submitted: { hour: string; minute: string; timezone: string };
   mode: 'onboarding' | 'settings';
+  readonly requestToken?: string | null;
 }): string {
   return deliveryTimePage({
     account: input.account,
@@ -323,6 +350,7 @@ function deliveryTimeErrorPage(input: {
     firstBriefAt: null,
     message: input.message,
     saved: false,
+    requestToken: input.requestToken ?? null,
     existing: {
       hour: toInt(input.submitted.hour, 8),
       minute: toInt(input.submitted.minute, 0),
@@ -374,7 +402,7 @@ export function humanTopicSelectionReason(
   }
 }
 
-function paywallPage(account: ShellAccount): string {
+function paywallPage(account: ShellAccount, requestToken: string | null = null): string {
   // Reached from a refused submission, so the User is known. Passing the account
   // puts the same navigation every other signed-in page has around it, instead
   // of stranding them on a page with two buttons.
@@ -382,6 +410,7 @@ function paywallPage(account: ShellAccount): string {
     title: 'Upgrade to add more topics',
     width: 'narrow',
     account,
+    requestToken,
     body: `    <h1>You have reached the free-topic limit</h1>
     <p>Free Brieflyy supports up to 3 topics. Upgrade to add unlimited topics, indefinite archive retention, and the full trends view.</p>
     <p><strong>$15 / month</strong></p>
@@ -392,11 +421,12 @@ function paywallPage(account: ShellAccount): string {
   });
 }
 
-function notFoundHtml(account: ShellAccount, message: string): string {
+function notFoundHtml(account: ShellAccount, message: string, requestToken: string | null = null): string {
   return layout({
     title: 'Topic not found',
     width: 'narrow',
     account,
+    requestToken,
     body: `    <h1>Topic not found</h1>
     <div class="error-summary" role="alert">
       <p>${escapeHtml(message)}</p>
@@ -409,12 +439,14 @@ function pickTopicsErrorPage(input: {
   account: ShellAccount;
   message: string;
   backHref?: string;
+  readonly requestToken?: string | null;
 }): string {
   const backHref = input.backHref ?? '/onboarding/pick-topics';
   return layout({
     title: 'Topic selection',
     width: 'narrow',
     account: input.account,
+    requestToken: input.requestToken ?? null,
     body: `    <h1>Topic selection</h1>
     <div class="error-summary" role="alert">
       <p>${escapeHtml(input.message)}</p>
