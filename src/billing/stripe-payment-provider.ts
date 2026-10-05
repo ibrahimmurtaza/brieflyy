@@ -13,7 +13,6 @@ import type {
   PaymentProvider,
   SignedRequest,
 } from '../domain/payment.js';
-import { readOptionalString, type EnvSource } from '../env.js';
 
 /** The header a signed event arrives in, and the one this provider reads it from. */
 export const STRIPE_SIGNATURE_HEADER = 'stripe-signature';
@@ -53,6 +52,7 @@ export interface StripePaymentProviderOptions {
  */
 export class StripePaymentProvider implements PaymentProvider {
   readonly providerName = 'stripe';
+  readonly signatureHeader = STRIPE_SIGNATURE_HEADER;
 
   private readonly secretKey: string;
   private readonly webhookSecret: string;
@@ -129,17 +129,26 @@ export class StripePaymentProvider implements PaymentProvider {
 
     const session = readObject(payload, 'data', 'object');
     const reference = session === null ? null : readString(session, 'client_reference_id');
-    // A completed event naming no reference is a payment this application did not
-    // start, so there is nothing it could resolve it to. Acknowledged rather than
-    // refused: the signature held, and this particular event is simply not ours.
-    if (session === null || reference === null) return { status: 'unrecognised' };
+    const subscriptionRef = session === null ? null : readString(session, 'subscription');
+    if (session === null || reference === null || subscriptionRef === null) {
+      // Three ways an event can be about a payment this application cannot act on:
+      // no reference it issued, no reference at all, or no subscription — and a
+      // subscription Checkout with nothing to charge is a mode Brieflyy does not
+      // sell. All acknowledged rather than refused, because the signature held and
+      // this particular event is simply not ours. Storing the missing half as an
+      // empty string would be worse: it would read back as an id somebody gave us.
+      return { status: 'unrecognised' };
+    }
 
     const event: PaymentEvent = {
       id,
       kind: 'checkout_completed',
       reference,
-      subscriptionRef: readString(session, 'subscription') ?? '',
-      customerRef: readString(session, 'customer') ?? '',
+      subscriptionRef,
+      // Nullable because the provider really can complete a session with no
+      // customer on it, and "the payer's id is not known yet" is a fact worth
+      // storing rather than an empty string to stand in for one.
+      customerRef: readString(session, 'customer'),
     };
     return { status: 'verified', event };
   }
@@ -156,11 +165,18 @@ export class StripePaymentProvider implements PaymentProvider {
    * makes a forged signature cheaper to find.
    */
   private signatureHolds(signed: SignedRequest): boolean {
-    const timestamp = readTimestamp(signed.signature);
-    const digests = readDigests(signed.signature);
-    if (timestamp === null || digests.length === 0) return false;
+    const parts = signatureParts(signed.signature);
+    const timestamps = parts.get('t') ?? [];
+    // Exactly one timestamp. A second `t=` is a header somebody assembled rather
+    // than one anybody signed, and picking either of them would be choosing which
+    // half of a forgery to believe.
+    if (timestamps.length !== 1) return false;
+    const timestamp = timestamps[0]!;
+    if (!/^\d+$/.test(timestamp)) return false;
+    const digests = parts.get('v1') ?? [];
+    if (digests.length === 0) return false;
 
-    const age = Math.abs(Math.floor(this.clock.now().getTime() / 1000) - timestamp);
+    const age = Math.abs(Math.floor(this.clock.now().getTime() / 1000) - Number(timestamp));
     if (age > this.toleranceSeconds) return false;
 
     const expected = createHmac('sha256', this.webhookSecret)
@@ -174,6 +190,24 @@ export class StripePaymentProvider implements PaymentProvider {
 }
 
 /**
+ * A signature header as its `name=value` parts.
+ *
+ * Read once here because both things that matter in the header are read out of the
+ * same walk: the timestamp, which has to be recent, and the digests, at least one
+ * of which has to cover the body. Splitting `t=…,v1=…` in two places would be two
+ * places to get the separators wrong.
+ */
+function signatureParts(header: string): Map<string, string[]> {
+  const parts = new Map<string, string[]>();
+  for (const piece of header.split(',')) {
+    const [name, value] = piece.trim().split('=');
+    if (name === undefined || value === undefined) continue;
+    parts.set(name, [...(parts.get(name) ?? []), value]);
+  }
+  return parts;
+}
+
+/**
  * The payment provider as this deployment has configured it, or nothing at all.
  *
  * Absent rather than a provider that fails, for the reason the written-summary
@@ -182,25 +216,17 @@ export class StripePaymentProvider implements PaymentProvider {
  * upgrade page then offers no checkout and the routes behind it refuse, and the
  * three of them cannot disagree because they all ask this answer.
  *
- * Nothing is read from the environment here but through the shared readers, and
- * every value can be passed in instead — which is what makes a test's own
- * credentials the only ones it can ever reach. `pnpm secrets:check` fails the
- * build on a credential-shaped line staged for commit, and this module has no
- * literal one to stage.
+ * Every value can be passed in, and nothing is read from the environment here —
+ * `loadServerConfig` resolves it and `server.ts` hands it over. That is what makes
+ * a test's own credentials the only ones a test can reach: there is no path from
+ * this function to a deployment's `.env`. `pnpm secrets:check` fails the build on
+ * a credential-shaped line staged for commit, and this module has no literal one
+ * to stage.
  */
 export function createStripePaymentProvider(
   opts: StripePaymentProviderConfig,
 ): PaymentProvider | null {
-  const env = opts.env ?? {};
-  const secretKey = readOptionalString(
-    { STRIPE_SECRET_KEY: opts.secretKey },
-    'STRIPE_SECRET_KEY',
-  );
-  const webhookSecret = readOptionalString(
-    { STRIPE_WEBHOOK_SECRET: opts.webhookSecret },
-    'STRIPE_WEBHOOK_SECRET',
-  );
-  const priceId = readOptionalString({ STRIPE_PAID_PRICE_ID: opts.priceId }, 'STRIPE_PAID_PRICE_ID');
+  const { secretKey, webhookSecret, priceId } = opts;
   // One of the three missing is a deployment that has not finished configuring,
   // and `loadServerConfig` already refuses that at boot. Answering here rather
   // than throwing keeps a caller that assembled the values itself from being able
@@ -227,29 +253,6 @@ export interface StripePaymentProviderConfig {
   readonly priceId?: string | undefined;
   readonly apiBaseUrl?: string | undefined;
   readonly toleranceSeconds?: number | undefined;
-  /** Where the deployment's configuration is read from. Defaults to nothing set. */
-  readonly env?: EnvSource | undefined;
-}
-
-/** The `t=` value of a signature header, or null when there is not exactly one. */
-function readTimestamp(header: string): number | null {
-  const values = header
-    .split(',')
-    .map((part) => part.trim().split('='))
-    .filter(([name]) => name === 't')
-    .map(([, value]) => value);
-  if (values.length !== 1 || values[0] === undefined || !/^\d+$/.test(values[0])) return null;
-  return Number.parseInt(values[0], 10);
-}
-
-/** Every `v1=` digest of a signature header. More than one is normal during a key rotation. */
-function readDigests(header: string): readonly string[] {
-  return header
-    .split(',')
-    .map((part) => part.trim().split('='))
-    .filter(([name]) => name === 'v1')
-    .map(([, value]) => value)
-    .filter((value): value is string => typeof value === 'string');
 }
 
 function fromHex(value: string): Buffer | null {

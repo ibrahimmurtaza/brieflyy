@@ -188,9 +188,11 @@ describe('reading a signed payment event', () => {
     expect(reading).toEqual({ status: 'unrecognised' });
   });
 
-  it('treats a completed checkout naming no reference as one this application started', () => {
+  it('will not act on a completed checkout that names no reference', () => {
     // The signature held, so this really is the provider — it is a payment for a
     // Checkout Brieflyy did not start, and there is nothing it could resolve it to.
+    // `unrecognised` rather than `unsigned`, because the second would tell the
+    // provider its signature was wrong when it was not.
     const body = checkoutCompletedBody({ eventId: 'evt_1', reference: '' });
 
     const reading = aProvider().readEvent({
@@ -199,6 +201,39 @@ describe('reading a signed payment event', () => {
     });
 
     expect(reading).toEqual({ status: 'unrecognised' });
+  });
+
+  it('will not act on a completed checkout with no subscription behind it', () => {
+    // The stored column is the provider's own name for what it is charging for, and
+    // an empty string in it would read back as an id somebody gave us. A session
+    // with nothing to charge is not the subscription Checkout this sells, so there
+    // is nothing to record either way.
+    const session = JSON.parse(checkoutCompletedBody({ eventId: 'evt_1', reference: 'ref-1' }));
+    delete session.data.object.subscription;
+    const body = JSON.stringify(session);
+
+    const reading = aProvider().readEvent({
+      body,
+      signature: stripeSignatureHeader(STRIPE_WEBHOOK_SECRET, TIMESTAMP, body),
+    });
+
+    expect(reading).toEqual({ status: 'unrecognised' });
+  });
+
+  it('records a missing customer as unknown rather than as an empty id', () => {
+    const session = JSON.parse(checkoutCompletedBody({ eventId: 'evt_1', reference: 'ref-1' }));
+    delete session.data.object.customer;
+    const body = JSON.stringify(session);
+
+    const reading = aProvider().readEvent({
+      body,
+      signature: stripeSignatureHeader(STRIPE_WEBHOOK_SECRET, TIMESTAMP, body),
+    });
+
+    expect(reading).toMatchObject({
+      status: 'verified',
+      event: { subscriptionRef: 'sub_test_1', customerRef: null },
+    });
   });
 });
 
@@ -288,20 +323,9 @@ describe('the provider as a deployment has configured it', () => {
     expect(provider?.providerName).toBe('stripe');
   });
 
-  it('reads a key of whitespace as unset, like every other reader here', () => {
-    expect(
-      createStripePaymentProvider({
-        clock: clockAt(TIMESTAMP),
-        secretKey: '   ',
-        webhookSecret: STRIPE_WEBHOOK_SECRET,
-        priceId: STRIPE_PAID_PRICE_ID,
-      }),
-    ).toBeNull();
-  });
-
   it('reads nothing a test could not have passed in itself', () => {
-    // Every Stripe key in this repository lives in a file the test suites own:
-    // a test file, or `src/testing/`, which the application never imports. Anything
+    // Every Stripe key in this repository lives in a file the test suites own: a
+    // test file, or `src/testing/`, which the application never imports. Anything
     // else holding one would be a credential a test could read — and a test that
     // finds one here is the only thing standing between it and a committed key.
     const offenders: string[] = [];

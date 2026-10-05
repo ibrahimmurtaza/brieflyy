@@ -67,6 +67,16 @@ export class BillingService {
   }
 
   /**
+   * Which header a signed event's signature arrives in.
+   *
+   * Asked of the provider rather than imported from it, so the route reads a
+   * header the provider named instead of one this layer was told about.
+   */
+  signatureHeader(): string {
+    return this.deps.provider?.signatureHeader ?? '';
+  }
+
+  /**
    * Start a Checkout for a signed-in User, and hand back the hosted page to send
    * them to.
    *
@@ -106,28 +116,69 @@ export class BillingService {
   }
 
   /**
-   * Act on a signed event: make its User a PaidTier member and record what they
-   * are paying for.
+   * Read a signed request and act on it. The only way in.
    *
-   * Nothing is read out of the body here — the provider has already decided what
-   * it carries, and what this method is given is only ever a `verified` reading.
-   * The User comes from the reference Brieflyy minted and never from the event, so
-   * a validly signed event about somebody else's Checkout has nothing to say about
-   * who that is.
+   * Both halves in one method because they are one decision: the signature is
+   * what authorises the event, and a caller that could read one without the other
+   * would be a caller that could act on an event nobody signed. That is also why
+   * the method the event is handed to is not public — a route that could call it
+   * directly could move a User onto the paid tier without anything having verified
+   * anything.
+   */
+  async applySignedRequest(signed: SignedRequest): Promise<PaymentEventOutcome> {
+    const provider = this.deps.provider;
+    if (provider === undefined) return { status: 'not_configured' };
+    const reading = provider.readEvent(signed);
+    return reading.status === 'verified'
+      ? this.apply(reading.event)
+      : { status: reading.status };
+  }
+
+  /**
+   * Act on an event the provider's own check has already accepted.
+   *
+   * Nothing is read out of the body here — the provider has decided what it
+   * carries. The User comes from the reference Brieflyy minted and never from the
+   * event, so a validly signed event about somebody else's Checkout has nothing to
+   * say about who that is.
+   *
+   * The three writes are in this order for a reason, and it is the same reason
+   * `UnsubscribeService` writes the opt-out before the receipt: the effect comes
+   * first and the record that it happened comes last. A failure between them then
+   * leaves the payment unapplied and the event unrecorded, which the provider's
+   * next delivery can still apply — the reverse order would mark a payment spent
+   * for a User who never got the tier, and the retry would be answered as a
+   * replay. Every write here is idempotent given the same event, which is what
+   * makes being applied twice by a retry harmless.
    *
    * There is no separate answer for a User who has since been deleted, because
    * there cannot be one: `checkout_references.user_id` cascades, so a reference
    * whose User has gone is not a reference this application still holds. An
    * unresolvable event is unresolvable either way.
    */
-  async applyEvent(event: PaymentEvent): Promise<PaymentEventOutcome> {
+  private async apply(event: PaymentEvent): Promise<PaymentEventOutcome> {
     const checkout = await this.deps.repo.findCheckoutReference(event.reference);
     if (checkout === null) {
       return { status: 'unknown_checkout', reference: event.reference };
     }
     const userId = checkout.userId;
-
     const now = this.deps.clock.now();
+
+    // Read before writing, because the read is the only thing standing between a
+    // replay and a second delivery of the same grant.
+    if ((await this.deps.repo.findPaymentEvent(event.id)) !== null) {
+      return { status: 'replayed', eventId: event.id };
+    }
+
+    await this.deps.userRepo.setTier(userId, 'paid');
+    await this.deps.repo.saveSubscription({
+      id: this.deps.random.uuid(),
+      userId,
+      provider: this.deps.provider?.providerName ?? 'unknown',
+      subscriptionRef: event.subscriptionRef,
+      customerRef: event.customerRef,
+      startedAt: now,
+    });
     try {
       await this.deps.repo.insertPaymentEvent({
         id: event.id,
@@ -138,24 +189,13 @@ export class BillingService {
     } catch (err) {
       // The primary key on the event id is what makes one event one grant. This
       // catches the case the read cannot: two deliveries of the same event landing
-      // at once, both of which found no row. Nothing below has run yet, so there
-      // is nothing to undo — the grant is the writes that follow, and they are
-      // about to be skipped.
+      // at once, both of which found no row. Both have by now written the same
+      // tier and the same single Subscription, so nothing is left to undo.
       if ((await this.deps.repo.findPaymentEvent(event.id)) !== null) {
         return { status: 'replayed', eventId: event.id };
       }
       throw err;
     }
-
-    await this.deps.repo.saveSubscription({
-      id: this.deps.random.uuid(),
-      userId,
-      provider: this.deps.provider?.providerName ?? 'unknown',
-      subscriptionRef: event.subscriptionRef,
-      customerRef: event.customerRef,
-      startedAt: now,
-    });
-    await this.deps.userRepo.setTier(userId, 'paid');
     return { status: 'accepted', userId };
   }
 
@@ -165,22 +205,6 @@ export class BillingService {
    */
   subscriptionFor(userId: User['id']): Promise<Subscription | null> {
     return this.deps.repo.findSubscriptionForUser(userId);
-  }
-
-  /**
-   * Read a signed request and act on it, in one step.
-   *
-   * Both halves in one method because they are one decision: the signature is what
-   * authorises the event, and a caller that could read one without the other would
-   * be a caller that could act on an event nobody signed.
-   */
-  async applySignedRequest(signed: SignedRequest): Promise<PaymentEventOutcome> {
-    const provider = this.deps.provider;
-    if (provider === undefined) return { status: 'not_configured' };
-    const reading = provider.readEvent(signed);
-    return reading.status === 'verified'
-      ? this.applyEvent(reading.event)
-      : { status: reading.status };
   }
 
   /**

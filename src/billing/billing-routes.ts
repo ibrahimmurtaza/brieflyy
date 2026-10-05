@@ -1,8 +1,11 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { escapeHtml } from '../domain/html.js';
-import type { CheckoutRefusal, PaymentEventOutcome } from './billing-service.js';
-import type { BillingService } from './billing-service.js';
+import type {
+  BillingService,
+  CheckoutRefusal,
+  PaymentEventOutcome,
+} from './billing-service.js';
 import {
   AUTHENTICATED_WRITE_ROUTE_CONFIG,
   PUBLIC_ROUTE_CONFIG,
@@ -12,7 +15,6 @@ import { layout, type ShellAccount } from '../pages/layout.js';
 import { resolveShellAccount } from '../pages/shell.js';
 import type { OnboardingService } from '../onboarding/onboarding-service.js';
 import { BILLING_WEBHOOK_PATH, CHECKOUT_PATH } from './paths.js';
-import { STRIPE_SIGNATURE_HEADER } from './stripe-payment-provider.js';
 
 export interface BillingRoutesOptions {
   readonly billingService: BillingService;
@@ -89,7 +91,7 @@ async function registerWebhookRoute(
       async (req: FastifyRequest, reply: FastifyReply) => {
         const outcome = await billingService.applySignedRequest({
           body: rawBody(req),
-          signature: header(req, STRIPE_SIGNATURE_HEADER),
+          signature: header(req, billingService.signatureHeader()),
         });
         return answerWebhook(reply, outcome, req);
       },

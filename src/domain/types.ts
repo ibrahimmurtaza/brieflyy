@@ -138,7 +138,7 @@ export interface DiscoverTemplate extends TopicTemplate {
  * `clonedFromTemplateId` is the answer to "which Directory entry is this the same
  * as". The Topic's own `id` is not: it is a randomly generated identifier
  * belonging to a different kind of thing, and matching a Directory entry against
- * it compares two unrelated names — a collision that the seed's `id === slug`
+ * it compares two unrelated names â€” a collision that the seed's `id === slug`
  * makes common enough to look like a working rule.
  */
 export interface UserTopicSignal {
@@ -262,8 +262,8 @@ export interface Cluster {
  * The dedup window is a fact about when the reporting happened, so it is measured
  * against this rather than against when a poll brought the Articles in. It is
  * one value rather than two fields because a Story whose range could be set
- * inconsistently — newest before oldest, or one end left behind when a copy
- * arrived — is a Story whose window is quietly wrong.
+ * inconsistently â€” newest before oldest, or one end left behind when a copy
+ * arrived â€” is a Story whose window is quietly wrong.
  */
 export interface PublishedRange {
   readonly first: Date;
@@ -276,7 +276,7 @@ export interface Story {
    * Every Source this Story has Articles from.
    *
    * One event however many outlets reported it, so a list rather than the one
-   * Source it was first seen in — and read from the Articles themselves rather
+   * Source it was first seen in â€” and read from the Articles themselves rather
    * than from a column on the Story, which would name one of them and leave the
    * rest to be inferred.
    */
@@ -334,7 +334,7 @@ export type Weekday = (typeof WEEKDAYS)[number];
 /**
  * The day a weekly Cadence falls on when none was chosen.
  *
- * A weekly Cadence is meaningless without one — "every week" has no answer — so
+ * A weekly Cadence is meaningless without one â€” "every week" has no answer â€” so
  * the storage layer puts every weekly Topic on a day rather than leaving the
  * column null and hoping. Monday is the reading because it is the first working
  * day: a Topic nobody chose a day for should read at the start of their week
@@ -436,8 +436,8 @@ export interface BriefRun {
 /**
  * What producing one brief cost, and what it got for it.
  *
- * The written path degrades quietly on purpose — no credential, a failed call, a
- * spent budget, a citation that did not hold — so without this a brief that is
+ * The written path degrades quietly on purpose â€” no credential, a failed call, a
+ * spent budget, a citation that did not hold â€” so without this a brief that is
  * entirely quoted looks exactly like one that is entirely written, and nobody
  * finds out the feature has stopped working until a User says so. Each number is
  * a primitive nothing else can be derived from, and together they tell the whole
@@ -523,7 +523,7 @@ export type PaymentEventKind = 'checkout_completed';
  * The reference rather than the User id is what travels to the PaymentProvider,
  * because a value the application issued is the only kind of value it can
  * recognise as its own. Nothing about a signed event is taken on trust except its
- * signature, and the signature says the provider sent it — not that this
+ * signature, and the signature says the provider sent it â€” not that this
  * application asked for it, which is what the row records.
  *
  * Written when a Checkout is started and never edited, so a User may hold several
@@ -552,7 +552,8 @@ export interface Subscription {
   /** The provider's own name for it, which this application never parses. */
   readonly subscriptionRef: string;
   /** The provider's own name for the payer. */
-  readonly customerRef: string;
+  /** The provider's name for the payer, or null where it has not named one yet. */
+  readonly customerRef: string | null;
   readonly startedAt: Date;
 }
 
@@ -612,7 +613,7 @@ export interface TrendVolumePoint {
  */
 export interface TrendSpike {
   readonly date: string;
-  /** The day's Mention volume — Articles published — so a label can name the jump. */
+  /** The day's Mention volume â€” Articles published â€” so a label can name the jump. */
   readonly articles: number;
   readonly clusterIds: readonly ClusterId[];
 }
@@ -634,7 +635,7 @@ export interface EntityMentions {
  * Everything here is a count taken from stored Articles and Clusters. The lift, the
  * ranking and the tier's cutoff are all computed from this by
  * `domain/trends.ts`, so the measurement is the only part that has to touch the
- * database — which is what makes the hourly cadence possible.
+ * database â€” which is what makes the hourly cadence possible.
  */
 export interface TopicTrendMeasurement {
   /** One point per day from the start of the baseline to the end of the observation. */

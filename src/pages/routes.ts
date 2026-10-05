@@ -1386,6 +1386,7 @@ function upgradePage(input: {
   readonly requestToken?: string | null;
 }): string {
   const used = input.topicCount === 1 ? '1 topic' : `${input.topicCount} topics`;
+  const token = input.requestToken ?? null;
   // A paid user reaching this page already has what it is selling, so say that
   // rather than pitching them a plan they are on.
   const alreadyPaid = input.tier === 'paid';
@@ -1399,14 +1400,14 @@ function upgradePage(input: {
     title: 'Upgrade to paid',
     width: 'form',
     account: input.account,
-    requestToken: input.requestToken ?? null,
+    requestToken: token,
     body: `    <h1>${headline}</h1>
     ${priceHtml}
     <p>Paid Brieflyy includes unlimited topics, indefinite archive retention, and the full trends view.</p>
 ${checkoutBlock({
       state: alreadyPaid ? 'already_paid' : input.checkoutAvailable ? 'checkout' : 'unconfigured',
       used,
-      token: input.requestToken ?? null,
+      token,
     })}${returnedBlock(input.returned ?? null)}    <p class="actions"><a class="button" href="/topics">Back to your topics</a></p>`,
   });
 }

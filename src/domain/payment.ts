@@ -49,7 +49,8 @@ export interface PaymentEvent {
   /** The Checkout reference Brieflyy minted, which resolves the User. */
   readonly reference: string;
   readonly subscriptionRef: string;
-  readonly customerRef: string;
+  /** Nullable because a provider can complete a payment before it names the payer. */
+  readonly customerRef: string | null;
 }
 
 /**
@@ -57,7 +58,7 @@ export interface PaymentEvent {
  *
  * `verified` is the only one that can change anything. `unsigned` is a request
  * whose signature did not hold: refused, and nothing written. `unrecognised` is a
- * request that verified and named something this application does not act on —
+ * request that verified and named something this application does not act on â€”
  * acknowledged so the sender stops retrying it, and still nothing written, because
  * a provider sends many events and this one acts on one.
  *
@@ -81,6 +82,14 @@ export type PaymentEventReading =
 export interface PaymentProvider {
   /** The name stored against what this provider says, so two can never be confused. */
   readonly providerName: string;
+  /**
+   * The header a signed event's signature arrives in, for a route to read it from.
+   *
+   * Asked of the provider rather than imported by the caller, because the header is
+   * the provider's own protocol: a route that hardcoded Stripe's would have to be
+   * edited to add a second one, which is the seam not being a seam.
+   */
+  readonly signatureHeader: string;
   /** The hosted page the User pays on. */
   startCheckout(request: CheckoutRequest): Promise<Checkout>;
   /** What a signed request carried. Only a `verified` reading may change anything. */

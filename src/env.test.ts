@@ -324,6 +324,21 @@ describe('loadServerConfig', () => {
     expect(config.stripePaidPriceId).toBeUndefined();
   });
 
+  it('reads a payment credential of whitespace as unset, not as a credential', () => {
+    // A provider that authenticates as `Bearer   ` is worse than one that has no
+    // credential at all, because it looks configured. This is the reader's rule
+    // rather than the provider's, which is why it is checked here and not where
+    // the provider is built.
+    expect(() =>
+      loadServerConfig({
+        ...MINIMAL,
+        STRIPE_SECRET_KEY: '   ',
+        STRIPE_WEBHOOK_SECRET: 'whsec_x',
+        STRIPE_PAID_PRICE_ID: 'price_x',
+      }),
+    ).toThrow(/STRIPE_SECRET_KEY/);
+  });
+
   it('refuses to boot on half-configured payments, naming what is missing', () => {
     // The alternative is an instance that boots, serves a page offering a
     // checkout, and refuses it when the User presses the button — so this is
