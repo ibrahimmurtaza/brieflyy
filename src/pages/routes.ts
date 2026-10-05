@@ -43,14 +43,12 @@ import { pad2 } from '../domain/timezone.js';
 import { rollupBlock, TRENDS_PATH } from '../trends/page.js';
 import {
   AUTHENTICATED_ROUTE_CONFIG,
+  AUTHENTICATED_WRITE_ROUTE_CONFIG,
   PUBLIC_ROUTE_CONFIG,
   isJsonSurface,
   requireAuthPage,
 } from '../http/access.js';
-import {
-  requestTokenInput,
-  requestTokenMismatch,
-} from '../http/request-token.js';
+import { requestTokenInput } from '../http/request-token.js';
 
 export interface PageRoutesOptions {
   readonly appBaseUrl: string;
@@ -303,7 +301,7 @@ export async function registerPageRoutes(
 
   fastify.post<{ Params: { slug: string } }>(
     `${EMAIL_BRIEFS_PATH}/:slug/resubscribe`,
-    AUTHENTICATED_ROUTE_CONFIG,
+    AUTHENTICATED_WRITE_ROUTE_CONFIG,
     async (req, reply) => {
       if (!opts.unsubscribeService) return reply.code(503).send();
       if (!requireAuthPage(req, reply)) return reply;
@@ -339,7 +337,7 @@ export async function registerPageRoutes(
 
   fastify.post(
     `${EMAIL_BRIEFS_PATH}/resubscribe`,
-    AUTHENTICATED_ROUTE_CONFIG,
+    AUTHENTICATED_WRITE_ROUTE_CONFIG,
     async (req, reply) => {
       if (!opts.unsubscribeService) return reply.code(503).send();
       if (!requireAuthPage(req, reply)) return reply;
@@ -443,20 +441,9 @@ export async function registerPageRoutes(
     Body: Record<string, unknown>;
   }>(
     '/topics/:slug/feedback',
-    AUTHENTICATED_ROUTE_CONFIG,
+    AUTHENTICATED_WRITE_ROUTE_CONFIG,
     async (req, reply) => {
       if (!requireAuthPage(req, reply)) return reply;
-      // The cookie and the form field have to name the same token. A submission
-      // that does not came from somewhere other than a page this application
-      // rendered, and it is refused before the body is read for anything: what it
-      // says about a Cluster is not worth answering when the submission itself is
-      // not one the User made.
-      if (requestTokenMismatch(req)) {
-        return reply
-          .code(403)
-          .type('text/html')
-          .send(requestRefusedPage({ account: await shellFor(req) }));
-      }
       const topic = await opts.topicRepo.findBySlug(req.auth.user.id, req.params.slug);
       if (!topic) {
         return reply
@@ -516,7 +503,7 @@ export async function registerPageRoutes(
 
   fastify.post<{ Params: { slug: string }; Body: { windowDays?: string } }>(
     '/topics/:slug/cluster-window',
-    AUTHENTICATED_ROUTE_CONFIG,
+    AUTHENTICATED_WRITE_ROUTE_CONFIG,
     async (req, reply) => {
       if (!requireAuthPage(req, reply)) return reply;
       const topic = await opts.topicRepo.findBySlug(
@@ -544,7 +531,7 @@ export async function registerPageRoutes(
 
   fastify.post<{ Params: { slug: string } }>(
     '/topics/:slug/send-brief',
-    AUTHENTICATED_ROUTE_CONFIG,
+    AUTHENTICATED_WRITE_ROUTE_CONFIG,
     async (req, reply) => {
       if (!opts.briefPlanService) return reply.code(503).send();
       if (!requireAuthPage(req, reply)) return reply;
@@ -1916,35 +1903,6 @@ function feedbackErrorPage(input: {
     body: `    <h1>Feedback not saved</h1>
     <p>${escapeHtml(input.message)}</p>
     <p class="actions"><a class="button" href="/topics/${escapeHtml(input.topicSlug)}">Back to your brief</a></p>`,
-  });
-}
-
-/**
- * A submission the request token refused.
- *
- * A page rather than a bare 403, because the caller is a browser mid-submission
- * and the two ways it can have got here are worth telling apart in words: a User
- * whose tab was open long enough for the page to be stale, and a page on another
- * site trying to spend the User's session. Both are answered the same way and
- * neither is answered with a detail, because telling an attacker which half they
- * got right is a way of making the next attempt cheaper.
- *
- * Kept beside the Feedback refusals rather than in `http/request-token.ts`
- * because it is a page: the guard decides, this renders.
- */
-function requestRefusedPage(input: {
-  readonly account: ShellAccount | null;
-}): string {
-  return layout({
-    title: 'Request not from Brieflyy',
-    width: 'narrow',
-    account: input.account,
-    requestToken: null,
-    body: `    <h1>That submission was refused</h1>
-    <div class="error-summary" role="alert">
-      <p>That submission did not come from a Brieflyy page, so no signal was saved. Reload the page and try again.</p>
-    </div>
-    <p class="actions"><a class="button" href="/topics">Back to your topics</a></p>`,
   });
 }
 

@@ -5,6 +5,7 @@ import { createApp } from '../app.js';
 import { ConsoleEmailTransport } from '../email/console-transport.js';
 import { createTestDb } from '../testing/test-db.js';
 import { extractMagicLinkToken } from '../testing/email.js';
+import { signedInCookies, submitForm } from '../testing/forms.js';
 import {
   deterministicRandom,
   makeTestClock,
@@ -45,18 +46,16 @@ async function signedInAtTier(tier: Tier): Promise<Harness> {
     url: `/auth/magic-link/verify?token=${encodeURIComponent(token)}`,
   });
   const raw = verified.headers['set-cookie'];
-  const cookie = (Array.isArray(raw) ? raw[0]! : raw!).split(';')[0]!;
+  const sessionCookie = (Array.isArray(raw) ? raw[0]! : raw!).split(';')[0]!;
+  // The session and the request token: a browser is handed a page before it
+  // can submit a form, and every write checks the pair (ADR-0021).
+  const { cookies: cookie } = await signedInCookies(app, sessionCookie);
   const userId = (
     driver.prepare(`SELECT id FROM users LIMIT 1`).get() as { id: string }
   ).id;
 
   const promoteTo = async (next: Tier) => {
-    const resp = await app.inject({
-      method: 'POST',
-      url: '/dev/tier',
-      headers: { cookie },
-      payload: { tier: next },
-    });
+    const resp = await submitForm(app, cookie, '/dev/tier', { tier: next });
     if (resp.statusCode !== 302) {
       throw new Error(`POST /dev/tier answered ${resp.statusCode}: ${resp.body}`);
     }
@@ -107,35 +106,30 @@ describe('tier as a fact about a User', () => {
   });
 
   it('refuses a fourth topic for a free user', async () => {
-    const resp = await app.inject({
-      method: 'POST',
-      url: '/pick-topics',
-      headers: { cookie },
-      payload: { templateIds: await templateIds(app, 4) },
-    });
+    const resp = await submitForm(
+      app,
+      cookie,
+      '/pick-topics',
+      { templateIds: await templateIds(app, 4) },
+    );
     expect(resp.statusCode).toBe(402);
     expect(resp.body).toMatch(/up to 3 topics/);
   });
 
   it('lets a paid user hold more than three', async () => {
     await harness.promoteTo('paid');
-    const resp = await app.inject({
-      method: 'POST',
-      url: '/pick-topics',
-      headers: { cookie },
-      payload: { templateIds: await templateIds(app, 6) },
-    });
+    const resp = await submitForm(
+      app,
+      cookie,
+      '/pick-topics',
+      { templateIds: await templateIds(app, 6) },
+    );
     expect(resp.statusCode).toBe(302);
     expect(resp.headers.location).toBe('/topics');
   });
 
   it('shows a free user at the cap the limit and a way out of it', async () => {
-    await app.inject({
-      method: 'POST',
-      url: '/pick-topics',
-      headers: { cookie },
-      payload: { templateIds: await templateIds(app, 3) },
-    });
+    await submitForm(app, cookie, '/pick-topics', { templateIds: await templateIds(app, 3) });
     const resp = await get('/pick-topics');
     expect(resp.statusCode).toBe(200);
     expect(resp.body).toMatch(/free-topic limit/);
@@ -166,12 +160,7 @@ describe('the paywall links', () => {
   });
 
   it('sends every paywall link to a page that renders', async () => {
-    await app.inject({
-      method: 'POST',
-      url: '/pick-topics',
-      headers: { cookie },
-      payload: { templateIds: await templateIds(app, 3) },
-    });
+    await submitForm(app, cookie, '/pick-topics', { templateIds: await templateIds(app, 3) });
 
     const surfaces = ['/pick-topics', '/topics'];
     for (const url of surfaces) {
@@ -192,18 +181,8 @@ describe('the paywall links', () => {
 
   it('offers the upgrade page when a full onboarding submission is refused', async () => {
     const all = await templateIds(app, 4);
-    await app.inject({
-      method: 'POST',
-      url: '/onboarding/pick-topics',
-      headers: { cookie },
-      payload: { templateIds: all.slice(0, 3) },
-    });
-    const refused = await app.inject({
-      method: 'POST',
-      url: '/pick-topics',
-      headers: { cookie },
-      payload: { templateIds: [all[3]!] },
-    });
+    await submitForm(app, cookie, '/onboarding/pick-topics', { templateIds: all.slice(0, 3) });
+    const refused = await submitForm(app, cookie, '/pick-topics', { templateIds: [all[3]!] });
     expect(refused.statusCode).toBe(402);
     expect(hrefs(refused.body)).toContain('/upgrade');
   });
@@ -250,12 +229,12 @@ describe('moving a User onto the paid tier', () => {
 
   it('refuses a tier it does not recognise, leaving the user where they were', async () => {
     const harness = await signedInAtTier('free');
-    const resp = await harness.app.inject({
-      method: 'POST',
-      url: '/dev/tier',
-      headers: { cookie: harness.cookie },
-      payload: { tier: 'platinum' },
-    });
+    const resp = await submitForm(
+      harness.app,
+      harness.cookie,
+      '/dev/tier',
+      { tier: 'platinum' },
+    );
     expect(resp.statusCode).toBe(400);
     const after = await harness.app.inject({
       method: 'GET',

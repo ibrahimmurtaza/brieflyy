@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 
 import { createApp } from '../app.js';
+import { REQUEST_TOKEN_FIELD } from '../config.js';
 import { ConsoleEmailTransport } from '../email/console-transport.js';
 import { createTestDb } from '../testing/test-db.js';
 import { extractMagicLinkToken } from '../testing/email.js';
+import { requestTokenOf, signedInCookies, submitForm } from '../testing/forms.js';
 import { makeCluster, makeTopic } from '../testing/fixtures.js';
 import {
   deterministicRandom,
@@ -22,9 +24,8 @@ const NOW = new Date('2026-09-02T12:00:00Z');
 
 interface Harness {
   readonly app: FastifyInstance;
+  /** The session and the request token: what a signed-in browser holds. */
   readonly cookie: string;
-  /** The request token the CSRF defence checks against; embedded in every form. */
-  readonly requestToken: string;
   readonly clusterRepo: DrizzleClusterRepo;
   readonly topicRepo: DrizzleTopicRepo;
   readonly sourceRepo: DrizzleSourceRepo;
@@ -56,7 +57,10 @@ async function signInWithTopic(options: { readonly withSources?: boolean } = {})
     url: `/auth/magic-link/verify?token=${encodeURIComponent(token)}`,
   });
   const setCookie = verify.headers['set-cookie'];
-  const cookie = (Array.isArray(setCookie) ? setCookie[0]! : setCookie!).split(';')[0]!;
+  const sessionCookie = (Array.isArray(setCookie) ? setCookie[0]! : setCookie!).split(';')[0]!;
+  // The session and the request token: a browser is handed a page before it
+  // can submit a form, and every write checks the pair (ADR-0021).
+  const { cookies: cookie } = await signedInCookies(app, sessionCookie);
 
   const topicRepo = new DrizzleTopicRepo(db);
   const sourceRepo = new DrizzleSourceRepo(db);
@@ -79,20 +83,24 @@ async function signInWithTopic(options: { readonly withSources?: boolean } = {})
   }
 
   // The request token every POST form on the LivingBrief echoes back. Read out
-  // of a real page rather than invented here, so these tests submit through the
-  // same pair a browser would.
+  // of a real page rather than taken from the cookie, because the point of the
+  // guard is that the two have to agree: a page that stopped carrying it would
+  // refuse every submission made from it.
   const firstPage = await app.inject({
     method: 'GET',
     url: '/topics/topic-1',
     headers: { cookie },
   });
-  const pageToken = /name="requestToken" value="([^"]+)"/.exec(firstPage.body)?.[1];
-  if (!pageToken) throw new Error('no request token in the LivingBrief');
+  const pageToken = new RegExp(`name="${REQUEST_TOKEN_FIELD}" value="([^"]+)"`).exec(
+    firstPage.body,
+  )?.[1];
+  if (pageToken !== requestTokenOf(cookie)) {
+    throw new Error('the LivingBrief does not echo the token its cookie names');
+  }
 
   return {
     app,
     cookie,
-    requestToken: pageToken,
     clusterRepo: new DrizzleClusterRepo(db),
     topicRepo,
     sourceRepo,
@@ -171,14 +179,6 @@ function page(h: Harness, url: string) {
     url,
     headers: { cookie: h.cookie },
   });
-}
-
-/**
- * The cookie pair a state-changing route insists on: the session, and the
- * request token whose form field has to agree with it.
- */
-function cookiesFor(h: Harness): string {
-  return `${h.cookie}; brieflyy_request_token=${h.requestToken}`;
 }
 
 /**
@@ -292,17 +292,11 @@ describe('HTTP: /topics/:slug as a LivingBrief', () => {
     });
 
     for (const sourceId of ['reuters', 'the-guardian']) {
-      await h.app.inject({
-        method: 'POST',
-        url: '/topics/topic-1/feedback',
-        headers: { cookie: cookiesFor(h) },
-        payload: {
-          clusterId: 'cluster-1',
-          type: 'hide_source',
-          sourceId,
-          scope: 'this_topic',
-          requestToken: h.requestToken,
-        },
+      await submitForm(h.app, h.cookie, '/topics/topic-1/feedback', {
+        clusterId: 'cluster-1',
+        type: 'hide_source',
+        sourceId,
+        scope: 'this_topic',
       });
     }
 
@@ -510,12 +504,7 @@ describe('HTTP: /topics/:slug/feedback', () => {
   }
 
   function giveFeedback(payload: Record<string, string>) {
-    return h.app.inject({
-      method: 'POST',
-      url: '/topics/topic-1/feedback',
-      headers: { cookie: cookiesFor(h) },
-      payload: { ...payload, requestToken: h.requestToken },
-    });
+    return submitForm(h.app, h.cookie, '/topics/topic-1/feedback', payload);
   }
 
   /** The `aria-pressed` state of one signal button on the page. */
@@ -957,12 +946,12 @@ describe('HTTP: /topics/:slug/cluster-window', () => {
   });
 
   it('stores the window the User asked for', async () => {
-    const resp = await h.app.inject({
-      method: 'POST',
-      url: '/topics/topic-1/cluster-window',
-      headers: { cookie: h.cookie },
-      payload: { windowDays: '3' },
-    });
+    const resp = await submitForm(
+      h.app,
+      h.cookie,
+      '/topics/topic-1/cluster-window',
+      { windowDays: '3' },
+    );
 
     expect(resp.statusCode).toBe(302);
     expect(resp.headers.location).toBe('/topics/topic-1');
@@ -989,12 +978,12 @@ describe('HTTP: /topics/:slug/cluster-window', () => {
       sourceIds: ['reuters'],
     });
 
-    const resp = await h.app.inject({
-      method: 'POST',
-      url: '/topics/topic-1/cluster-window',
-      headers: { cookie: h.cookie },
-      payload: { windowDays: '2' },
-    });
+    const resp = await submitForm(
+      h.app,
+      h.cookie,
+      '/topics/topic-1/cluster-window',
+      { windowDays: '2' },
+    );
     expect(resp.statusCode).toBe(302);
 
     // The stored window is what the page reports, and the Clusters the pipeline
@@ -1004,12 +993,7 @@ describe('HTTP: /topics/:slug/cluster-window', () => {
   });
 
   it('clamps a window that would cluster nothing, rather than accepting it', async () => {
-    await h.app.inject({
-      method: 'POST',
-      url: '/topics/topic-1/cluster-window',
-      headers: { cookie: h.cookie },
-      payload: { windowDays: '0' },
-    });
+    await submitForm(h.app, h.cookie, '/topics/topic-1/cluster-window', { windowDays: '0' });
 
     const topic = await h.topicRepo.getById('topic-1' as TopicId);
     expect(topic?.clusterWindowDays).toBe(1);
@@ -1018,12 +1002,12 @@ describe('HTTP: /topics/:slug/cluster-window', () => {
   it('falls back to the default when the number is not a number', async () => {
     await h.topicRepo.setClusterWindowDays('topic-1' as TopicId, 4);
 
-    const resp = await h.app.inject({
-      method: 'POST',
-      url: '/topics/topic-1/cluster-window',
-      headers: { cookie: h.cookie },
-      payload: { windowDays: 'soon' },
-    });
+    const resp = await submitForm(
+      h.app,
+      h.cookie,
+      '/topics/topic-1/cluster-window',
+      { windowDays: 'soon' },
+    );
 
     expect(resp.statusCode).toBe(302);
     const topic = await h.topicRepo.getById('topic-1' as TopicId);

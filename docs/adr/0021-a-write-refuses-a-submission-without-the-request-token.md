@@ -1,5 +1,7 @@
 # A write route refuses a submission whose form does not echo the request token
 
+**Amended by [ADR-0022](0022-a-route-that-changes-state-declares-it.md)**: the check is no longer a line in the Feedback route. A route that changes state declares it, and one hook refuses what it did not make. The reasoning below still holds — the pair, the cookie rather than a stored token, the token that is not per-request, and the page rather than a bare 403 — but "the check is one line in a route rather than a hook" and "a write route that wants the defence asks for it" no longer describe this repository. Read those two paragraphs as the decision that was made once and then replaced, and ADR-0022 for why.
+
 Every state-changing route trusted the session cookie alone. The only thing between a page on another site and a User's Account was the `SameSite` setting on that cookie — a browser default rather than a decision this application makes, tests, or can change from a route. Nothing on a Brieflyy page said "this came from here", so nothing could be checked.
 
 There is now a request token (`src/http/request-token.ts`): a random value the application writes into an httpOnly cookie on the first page a browser is handed, and puts in every POST form on every page it renders afterwards. A route that checks the pair refuses a submission whose cookie and form field are missing, or disagree. The Feedback write is the first route to check it; the rest carry the field already, so each of them is one line rather than a different mechanism.

@@ -7,6 +7,7 @@ import { DrizzleArticleRepo } from '../repos/article-repo.js';
 import { DrizzleTopicRepo } from '../repos/topic-repo.js';
 import { createTestDb } from './test-db.js';
 import { extractMagicLinkToken } from './email.js';
+import { signedInCookies } from './forms.js';
 import { makeTopic } from './fixtures.js';
 import {
   deterministicRandom,
@@ -21,7 +22,13 @@ const DEFAULT_SOURCES = ['the-guardian', 'bbc-news'] as const;
 
 export interface AppHarness {
   readonly app: FastifyInstance;
-  /** The session cookie of the signed-in User, for `app.inject` headers. */
+  /**
+   * The `cookie` header the signed-in User's browser sends: its session and the
+   * request token the first page it was handed set. Both, because every
+   * state-changing route refuses a submission the token cookie does not agree
+   * with (ADR-0021), so a harness holding the session alone could not submit a
+   * form — the same rule the application is held to, from the other side.
+   */
   readonly cookie: string;
   readonly driver: ReturnType<typeof createTestDb>['driver'];
   readonly db: ReturnType<typeof createTestDb>['db'];
@@ -83,7 +90,8 @@ export async function buildAppHarness(input: AppHarnessInput): Promise<AppHarnes
     url: `/auth/magic-link/verify?token=${encodeURIComponent(token)}`,
   });
   const raw = verify.headers['set-cookie'];
-  const cookie = (Array.isArray(raw) ? raw[0]! : raw!).split(';')[0]!;
+  const sessionCookie = (Array.isArray(raw) ? raw[0]! : raw!).split(';')[0]!;
+  const { cookies } = await signedInCookies(app, sessionCookie);
 
   // The Directory seeds the Sources, so only the Topic has to be written here.
   const topicRepo = new DrizzleTopicRepo(db);
@@ -97,7 +105,7 @@ export async function buildAppHarness(input: AppHarnessInput): Promise<AppHarnes
 
   return {
     app,
-    cookie,
+    cookie: cookies,
     driver,
     db,
     clock,

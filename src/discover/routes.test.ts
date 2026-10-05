@@ -6,6 +6,7 @@ import { ConsoleEmailTransport } from '../email/console-transport.js';
 import type { SqliteDriver } from '../db/client.js';
 import { createTestDb } from '../testing/test-db.js';
 import { extractMagicLinkToken } from '../testing/email.js';
+import { signedInCookies, submitForm } from '../testing/forms.js';
 import {
   deterministicRandom,
   makeTestClock,
@@ -58,7 +59,10 @@ async function signedIn(): Promise<Harness> {
     url: `/auth/magic-link/verify?token=${encodeURIComponent(token)}`,
   });
   const raw = verify.headers['set-cookie'];
-  const cookie = (Array.isArray(raw) ? raw[0]! : raw!).split(';')[0]!;
+  const sessionCookie = (Array.isArray(raw) ? raw[0]! : raw!).split(';')[0]!;
+  // The session and the request token: a browser is handed a page before it
+  // can submit a form, and every write checks the pair (ADR-0021).
+  const { cookies: cookie } = await signedInCookies(app, sessionCookie);
   return { app, cookie, driver };
 }
 
@@ -187,15 +191,12 @@ describe('HTTP: /discover', () => {
     });
     expect(page.body).toMatch(/name="templateId" value="markets"/);
 
-    const added = await harness.app.inject({
-      method: 'POST',
-      url: '/discover/add',
-      headers: {
-        cookie: harness.cookie,
-        'content-type': 'application/x-www-form-urlencoded',
-      },
-      payload: 'templateId=markets',
-    });
+    const added = await submitForm(
+      harness.app,
+      harness.cookie,
+      '/discover/add',
+      'templateId=markets',
+    );
 
     // One entry, not three. The onboarding screen's exactly-three rule is about
     // its checkbox form, and applying it to a single card refused the one thing
@@ -212,15 +213,7 @@ describe('HTTP: /discover', () => {
   });
 
   it('leaves the entry it just cloned out of the Directory', async () => {
-    await harness.app.inject({
-      method: 'POST',
-      url: '/discover/add',
-      headers: {
-        cookie: harness.cookie,
-        'content-type': 'application/x-www-form-urlencoded',
-      },
-      payload: 'templateId=markets',
-    });
+    await submitForm(harness.app, harness.cookie, '/discover/add', 'templateId=markets');
 
     const res = await harness.app.inject({
       method: 'GET',
@@ -236,15 +229,12 @@ describe('HTTP: /discover', () => {
 
   it('says the Directory is empty once a User holds every entry', async () => {
     for (const templateId of ['markets', 'climate', 'ai-and-ml']) {
-      await harness.app.inject({
-        method: 'POST',
-        url: '/discover/add',
-        headers: {
-          cookie: harness.cookie,
-          'content-type': 'application/x-www-form-urlencoded',
-        },
-        payload: `templateId=${templateId}`,
-      });
+      await submitForm(
+        harness.app,
+        harness.cookie,
+        '/discover/add',
+        `templateId=${templateId}`,
+      );
     }
 
     const res = await harness.app.inject({
@@ -263,15 +253,12 @@ describe('HTTP: /discover at the free-tier cap', () => {
   beforeEach(async () => {
     harness = await signedIn();
     for (const templateId of ['markets', 'climate', 'ai-and-ml']) {
-      await harness.app.inject({
-        method: 'POST',
-        url: '/discover/add',
-        headers: {
-          cookie: harness.cookie,
-          'content-type': 'application/x-www-form-urlencoded',
-        },
-        payload: `templateId=${templateId}`,
-      });
+      await submitForm(
+        harness.app,
+        harness.cookie,
+        '/discover/add',
+        `templateId=${templateId}`,
+      );
     }
   });
   afterEach(async () => {
@@ -291,15 +278,12 @@ describe('HTTP: /discover at the free-tier cap', () => {
   });
 
   it('refuses a clone posted past the cap, and keeps the User on the page', async () => {
-    const res = await harness.app.inject({
-      method: 'POST',
-      url: '/discover/add',
-      headers: {
-        cookie: harness.cookie,
-        'content-type': 'application/x-www-form-urlencoded',
-      },
-      payload: 'templateId=startups',
-    });
+    const res = await submitForm(
+      harness.app,
+      harness.cookie,
+      '/discover/add',
+      'templateId=startups',
+    );
 
     // 402 rather than a redirect: this is a payment wall, not a mistake, and
     // redirecting would hide it behind a page that looks the same as success.
@@ -409,15 +393,7 @@ describe('HTTP: what the DiscoverTab is measuring', () => {
       entityIds: ['ent-openai'],
     });
 
-    await harness.app.inject({
-      method: 'POST',
-      url: '/discover/add',
-      headers: {
-        cookie: harness.cookie,
-        'content-type': 'application/x-www-form-urlencoded',
-      },
-      payload: 'templateId=markets',
-    });
+    await submitForm(harness.app, harness.cookie, '/discover/add', 'templateId=markets');
 
     const res = await harness.app.inject({
       method: 'GET',
@@ -526,15 +502,7 @@ describe('HTTP: a refused submission', () => {
   });
 
   it('answers a submission naming no entry in words, on the page it came from', async () => {
-    const res = await harness.app.inject({
-      method: 'POST',
-      url: '/discover/add',
-      headers: {
-        cookie: harness.cookie,
-        'content-type': 'application/x-www-form-urlencoded',
-      },
-      payload: '',
-    });
+    const res = await submitForm(harness.app, harness.cookie, '/discover/add', '');
 
     expect(res.statusCode).toBe(400);
     expect(res.body).toContain('<h1>Discover</h1>');
@@ -542,15 +510,12 @@ describe('HTTP: a refused submission', () => {
   });
 
   it('answers a submission naming an entry that is not in the Directory', async () => {
-    const res = await harness.app.inject({
-      method: 'POST',
-      url: '/discover/add',
-      headers: {
-        cookie: harness.cookie,
-        'content-type': 'application/x-www-form-urlencoded',
-      },
-      payload: 'templateId=not-a-real-template',
-    });
+    const res = await submitForm(
+      harness.app,
+      harness.cookie,
+      '/discover/add',
+      'templateId=not-a-real-template',
+    );
 
     expect(res.statusCode).toBe(400);
     expect(res.body).toMatch(/not in the Directory/);

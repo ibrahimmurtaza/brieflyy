@@ -53,6 +53,84 @@ export const AUTHENTICATED_ROUTE_CONFIG: RouteShorthandOptions = {
   config: { access: 'authenticated' },
 };
 
+/**
+ * How much of a state-changing route the cross-site guard is responsible for.
+ *
+ * One level, because the other answer is not a level but a named exemption: a
+ * route either changes something behind the guard, or it is written down in
+ * `WRITE_GUARD_EXEMPTIONS` with the reason it cannot be behind it. A route with
+ * no level and no entry is a route `src/http/write-guard.test.ts` fails the
+ * build over, so the two together are the whole of the decision.
+ */
+export type RouteStateChange = 'guarded';
+
+declare module 'fastify' {
+  interface FastifyContextConfig {
+    stateChange?: RouteStateChange;
+  }
+}
+
+/**
+ * The state-changing routes behind a session, which therefore also carry the
+ * cross-site guard: a page on another site can spend a session cookie, and the
+ * guard is what a submission has to agree with before it is allowed to.
+ */
+export const AUTHENTICATED_WRITE_ROUTE_CONFIG: RouteShorthandOptions = {
+  config: { access: 'authenticated', stateChange: 'guarded' },
+};
+
+/**
+ * The state-changing route a page on another site can reach without a session.
+ *
+ * Signing out is one: `POST /auth/logout` reads the session cookie and destroys
+ * it, so a stranger's page could otherwise end a User's session by submitting a
+ * form, which is a state change like any other and gets the same answer.
+ */
+export const PUBLIC_WRITE_ROUTE_CONFIG: RouteShorthandOptions = {
+  config: { access: 'public', stateChange: 'guarded' },
+};
+
+/**
+ * The state-changing routes the guard does not sit in front of, as `METHOD /path`,
+ * each with the reason it cannot be.
+ *
+ * A list rather than a judgement inside the guard, so adding a write is a
+ * decision somebody wrote down: `src/http/write-guard.test.ts` fails the build
+ * for a route that declares no level and is not named here, and for a name here
+ * that no longer resolves to a route.
+ *
+ * There are three, and what they have in common is that there is no Brieflyy page
+ * whose submission they could be:
+ *
+ * - A one-click unsubscribe is a mail client acting on `List-Unsubscribe`, with
+ *   no session and no Brieflyy document to carry a field. The token in the URL is
+ *   the whole authorisation, and ADR-0012 promises the link works from an inbox.
+ * - A magic-link request comes from the sign-in page's own script, and that script
+ *   cannot read the httpOnly half of the pair: there is no signed-in User, so no
+ *   page carries the field. It spends no session either — it writes a row an
+ *   emailed token will one day be spent on, for an address the caller supplied —
+ *   and the per-address and per-caller rate limits are what stand in front of it.
+ *
+ * Nothing else is exempt. An operator surface called by a script is still a write
+ * against a User's session, and `POST /api/ingest/tick` runs a whole ingest cycle
+ * when it is answered, so the caller fetches a page and echoes the token like any
+ * other submission would.
+ */
+export const WRITE_GUARD_EXEMPTIONS: ReadonlyMap<string, string> = new Map([
+  [
+    'POST /auth/magic-link/request',
+    'the sign-in page\'s own script: no signed-in User, so no page carries the field it would echo, and it spends no session',
+  ],
+  [
+    `POST ${UNSUBSCRIBE_TOPIC_PATH}`,
+    'a one-click mail client: the token in the URL is the authorisation and there is no page',
+  ],
+  [
+    `POST ${UNSUBSCRIBE_ALL_PATH}`,
+    'a one-click mail client: the token in the URL is the authorisation and there is no page',
+  ],
+]);
+
 export interface RequireAuthOptions {
   /** Answer with JSON rather than an HTML page, for the `/api` routes. */
   readonly json?: boolean;
@@ -125,6 +203,8 @@ export interface RegisteredRoute {
   readonly url: string;
   /** Null when the route forgot to declare an access level. */
   readonly access: RouteAccess | null;
+  /** Null when the route declares no state-change level. */
+  readonly stateChange: RouteStateChange | null;
   /** True for the HEAD route Fastify generates for every GET. */
   readonly autoHead: boolean;
 }
@@ -138,10 +218,12 @@ declare module 'fastify' {
 
 function describeRoute(options: RouteOptions): RegisteredRoute {
   const access = options.config?.access;
+  const stateChange = options.config?.stateChange;
   return {
     method: Array.isArray(options.method) ? options.method.join(',') : String(options.method),
     url: options.url,
     access: access === 'public' || access === 'authenticated' ? access : null,
+    stateChange: stateChange === 'guarded' ? stateChange : null,
     autoHead: false,
   };
 }
@@ -166,7 +248,7 @@ export function attachRouteManifest(app: FastifyInstance): void {
     manifest.push(
       shadowed === undefined
         ? route
-        : { ...route, access: shadowed.access, autoHead: true },
+        : { ...route, access: shadowed.access, stateChange: shadowed.stateChange, autoHead: true },
     );
   });
 }

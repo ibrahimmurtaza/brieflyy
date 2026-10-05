@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 
 import {
   AUTHENTICATED_ROUTE_CONFIG,
+  AUTHENTICATED_WRITE_ROUTE_CONFIG,
   requireAuthPage,
   type AuthenticatedRequest,
 } from '../http/access.js';
@@ -67,7 +68,7 @@ export async function registerTopicSettingsRoutes(
 
   fastify.post<{ Params: { slug: string }; Body: Record<string, unknown> }>(
     '/topics/:slug/cadence',
-    AUTHENTICATED_ROUTE_CONFIG,
+    AUTHENTICATED_WRITE_ROUTE_CONFIG,
     async (req, reply) => {
       if (!requireAuthPage(req, reply)) return reply;
       return settle(reply, {
@@ -88,7 +89,7 @@ export async function registerTopicSettingsRoutes(
 
   fastify.post<{ Params: { slug: string }; Body: Record<string, unknown> }>(
     '/topics/:slug/rename',
-    AUTHENTICATED_ROUTE_CONFIG,
+    AUTHENTICATED_WRITE_ROUTE_CONFIG,
     async (req, reply) => {
       if (!requireAuthPage(req, reply)) return reply;
       const title = readField(req.body, 'title') ?? '';
@@ -108,7 +109,7 @@ export async function registerTopicSettingsRoutes(
 
   fastify.post<{ Params: { slug: string }; Body: Record<string, unknown> }>(
     '/topics/:slug/sources/add',
-    AUTHENTICATED_ROUTE_CONFIG,
+    AUTHENTICATED_WRITE_ROUTE_CONFIG,
     async (req, reply) => {
       if (!requireAuthPage(req, reply)) return reply;
       return settle(reply, {
@@ -128,7 +129,7 @@ export async function registerTopicSettingsRoutes(
 
   fastify.post<{ Params: { slug: string }; Body: Record<string, unknown> }>(
     '/topics/:slug/sources/remove',
-    AUTHENTICATED_ROUTE_CONFIG,
+    AUTHENTICATED_WRITE_ROUTE_CONFIG,
     async (req, reply) => {
       if (!requireAuthPage(req, reply)) return reply;
       return settle(reply, {
@@ -157,7 +158,7 @@ export async function registerTopicSettingsRoutes(
    */
   fastify.post<{ Params: { slug: string } }>(
     '/topics/:slug/delete',
-    AUTHENTICATED_ROUTE_CONFIG,
+    AUTHENTICATED_WRITE_ROUTE_CONFIG,
     async (req, reply) => {
       if (!requireAuthPage(req, reply)) return reply;
       const outcome = await opts.onboardingService.removeTopic(

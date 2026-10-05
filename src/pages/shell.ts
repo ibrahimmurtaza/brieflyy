@@ -1,3 +1,5 @@
+import type { FastifyRequest } from 'fastify';
+
 import { resolveTier } from '../domain/tier.js';
 import type { CurrentAuth } from '../auth/auth-service.js';
 import type { OnboardingService } from '../onboarding/onboarding-service.js';
@@ -59,4 +61,33 @@ export async function resolveShellAccount(
     timezone: next.timezone,
   };
   return { ...account, brief };
+}
+
+/**
+ * The signed-in User for the shell of a page nobody asked for, or null when there
+ * is not one.
+ *
+ * The error handler and the cross-site guard are the two readers: a request that
+ * failed and a submission that was refused are both answered with a document the
+ * User did not come for, and both are reached inside the application more often
+ * than on the way in. Neither can rely on a session having been resolved — the
+ * lookup is a database read like any other, and for a failure it can be the thing
+ * that failed — so `req.auth` is read rather than assumed.
+ *
+ * Asking the shell again can fail the same way the request did, and a header is
+ * not worth turning one failed request into two: the failure goes to the log and
+ * the page is answered without one.
+ */
+export async function accountForUnaskedPage(
+  req: FastifyRequest,
+  onboardingService: OnboardingService,
+): Promise<ShellAccount | null> {
+  const auth = req.auth;
+  if (!auth) return null;
+  try {
+    return await resolveShellAccount(auth, onboardingService);
+  } catch (err) {
+    req.log.error({ err }, 'the shell could not be resolved for this page');
+    return null;
+  }
 }

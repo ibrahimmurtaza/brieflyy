@@ -5,6 +5,7 @@ import { createApp } from '../app.js';
 import { ConsoleEmailTransport } from '../email/console-transport.js';
 import { createTestDb } from '../testing/test-db.js';
 import { extractMagicLinkToken } from '../testing/email.js';
+import { signedInCookies, submitForm } from '../testing/forms.js';
 import {
   deterministicRandom,
   makeTestClock,
@@ -94,7 +95,10 @@ async function signIn(email = 'iris@example.com'): Promise<Harness> {
     url: `/auth/magic-link/verify?token=${encodeURIComponent(token)}`,
   });
   const raw = verify.headers['set-cookie'];
-  const cookie = (Array.isArray(raw) ? raw[0]! : raw!).split(';')[0]!;
+  const sessionCookie = (Array.isArray(raw) ? raw[0]! : raw!).split(';')[0]!;
+  // The session and the request token: a browser is handed a page before it
+  // can submit a form, and every write checks the pair (ADR-0021).
+  const { cookies: cookie } = await signedInCookies(app, sessionCookie);
   return { app, cookie, driver };
 }
 
@@ -107,18 +111,13 @@ async function signInAndOnboard(email = 'iris@example.com'): Promise<Harness> {
       templates: { id: string }[];
     }
   ).templates;
-  await app.inject({
-    method: 'POST',
-    url: '/onboarding/pick-topics',
-    headers: { cookie },
-    payload: { templateIds: templates.slice(0, 3).map((t) => t.id) },
-  });
-  await app.inject({
-    method: 'POST',
-    url: '/onboarding/delivery-time',
-    headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
-    payload: 'hour=8&minute=0&timezone=UTC',
-  });
+  await submitForm(
+    app,
+    cookie,
+    '/onboarding/pick-topics',
+    { templateIds: templates.slice(0, 3).map((t) => t.id) },
+  );
+  await submitForm(app, cookie, '/onboarding/delivery-time', 'hour=8&minute=0&timezone=UTC');
   return harness;
 }
 
@@ -289,12 +288,7 @@ describe('an address that does not exist', () => {
   it('answers a verb the route does not take the same way', async () => {
     // `POST /topics` is not a route, and a dead end is a dead end whichever verb
     // it arrives on.
-    const res = await app.inject({
-      method: 'POST',
-      url: '/topics',
-      headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
-      payload: '',
-    });
+    const res = await submitForm(app, cookie, '/topics', '');
     expect(res.statusCode).toBe(404);
     expect(res.body).toContain('<!doctype html>');
   });
@@ -324,11 +318,11 @@ describe('signing in and out through the shell', () => {
 
   it('signs out with the session the shell handed the browser', async () => {
     // The control is a form in the header, so what has to work is a POST of
-    // nothing, from any page.
+    // nothing but the token that form carries, from any page.
     const before = await app.inject({ method: 'GET', url: '/topics', headers: { cookie } });
     expect(header(before.body)).toContain('action="/auth/logout"');
 
-    const out = await app.inject({ method: 'POST', url: '/auth/logout', headers: { cookie } });
+    const out = await submitForm(app, cookie, '/auth/logout', '');
     expect(out.statusCode).toBe(302);
     expect(out.headers.location).toBe('/');
     expect(out.headers['set-cookie']).toBeDefined();

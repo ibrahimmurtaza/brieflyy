@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 
 import { escapeHtml } from '../domain/html.js';
 import { isTier } from '../domain/tier.js';
-import { AUTHENTICATED_ROUTE_CONFIG, requireAuthPage } from '../http/access.js';
+import { AUTHENTICATED_WRITE_ROUTE_CONFIG, requireAuthPage } from '../http/access.js';
 import { layout, type ShellAccount } from '../pages/layout.js';
 import { resolveShellAccount } from '../pages/shell.js';
 import type { OnboardingService } from '../onboarding/onboarding-service.js';
@@ -32,7 +32,7 @@ export async function registerTierRoutes(
 
   fastify.post<{ Body: { tier?: string } }>(
     '/dev/tier',
-    AUTHENTICATED_ROUTE_CONFIG,
+    AUTHENTICATED_WRITE_ROUTE_CONFIG,
     async (req, reply) => {
       if (!requireAuthPage(req, reply)) return reply;
       const requested = (req.body ?? {}).tier;

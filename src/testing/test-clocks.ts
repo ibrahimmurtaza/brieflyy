@@ -12,7 +12,12 @@ export function resetDeterministic(): void {
 export function deterministicBytes(length: number): Uint8Array {
   const bytes = new Uint8Array(length);
   for (let i = 0; i < length; i++) {
-    bytes[i] = (deterministicCounter++ & 0xff) ^ 0x5a;
+    // One counter, read at four different offsets rather than a counter that *is*
+    // the byte. It used to be `(counter++ & 0xff) ^ 0x5a`, which repeats every 256
+    // bytes: a test that signed three or four Users in drew the same magic-link
+    // token twice and the second insert was refused by the unique index, which is
+    // a collision in the fake rather than anything the application did.
+    bytes[i] = ((deterministicCounter++ >>> ((i % 4) * 8)) & 0xff) ^ 0x5a;
   }
   return bytes;
 }

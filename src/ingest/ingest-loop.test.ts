@@ -11,6 +11,7 @@ import { DrizzleTopicRepo } from '../repos/topic-repo.js';
 import { DrizzleUserRepo } from '../repos/user-repo.js';
 import { createDatabase, type Db } from '../db/client.js';
 import { createTestDb } from '../testing/test-db.js';
+import { signedInCookies, submitForm } from '../testing/forms.js';
 import { extractMagicLinkToken } from '../testing/email.js';
 import { makeTopic, makeUser } from '../testing/fixtures.js';
 import {
@@ -132,7 +133,10 @@ async function buildApp(): Promise<Harness> {
     url: `/auth/magic-link/verify?token=${encodeURIComponent(token)}`,
   });
   const raw = verified.headers['set-cookie'];
-  const cookie = (Array.isArray(raw) ? raw[0]! : raw!).split(';')[0]!;
+  const sessionCookie = (Array.isArray(raw) ? raw[0]! : raw!).split(';')[0]!;
+  // The session and the request token: a browser is handed a page before it can
+  // submit a form, and every write checks the pair (ADR-0021).
+  const { cookies } = await signedInCookies(app, sessionCookie);
 
   const userId = (
     driver.prepare(`SELECT id FROM users LIMIT 1`).get() as { id: string }
@@ -143,7 +147,7 @@ async function buildApp(): Promise<Harness> {
   );
   await topicRepo.insertTopicSource('topic-1' as TopicId, 'the-guardian', 0);
 
-  return { app, cookie, driver, topicSlug: 'topic-1', transport };
+  return { app, cookie: cookies, driver, topicSlug: 'topic-1', transport };
 }
 
 describe('the ingest loop running end to end', () => {
@@ -157,12 +161,7 @@ describe('the ingest loop running end to end', () => {
     await harness.app.close();
   });
 
-  const tick = () =>
-    harness.app.inject({
-      method: 'POST',
-      url: '/api/ingest/tick',
-      headers: { cookie: harness.cookie },
-    });
+  const tick = () => submitForm(harness.app, harness.cookie, '/api/ingest/tick');
 
   const count = (table: string): number =>
     (
@@ -435,7 +434,8 @@ describe('hostile feed content', () => {
       url: `/auth/magic-link/verify?token=${encodeURIComponent(token)}`,
     });
     const raw = verified.headers['set-cookie'];
-    const cookie = (Array.isArray(raw) ? raw[0]! : raw!).split(';')[0]!;
+    const sessionCookie = (Array.isArray(raw) ? raw[0]! : raw!).split(';')[0]!;
+    const { cookies } = await signedInCookies(app, sessionCookie);
     const userId = (
       driver.prepare(`SELECT id FROM users LIMIT 1`).get() as { id: string }
     ).id;
@@ -449,7 +449,7 @@ describe('hostile feed content', () => {
       }),
     );
     await topicRepo.insertTopicSource('topic-1' as TopicId, 'the-guardian', 0);
-    harness = { app, cookie, driver, topicSlug: 'topic-1', transport };
+    harness = { app, cookie: cookies, driver, topicSlug: 'topic-1', transport };
   });
 
   afterEach(async () => {
@@ -457,11 +457,7 @@ describe('hostile feed content', () => {
   });
 
   it('stores no URL that a click would execute', async () => {
-    await harness.app.inject({
-      method: 'POST',
-      url: '/api/ingest/tick',
-      headers: { cookie: harness.cookie },
-    });
+    await submitForm(harness.app, harness.cookie, '/api/ingest/tick');
     const rows = harness.driver
       .prepare(`SELECT external_id, url FROM articles`)
       .all() as { external_id: string; url: string }[];
@@ -476,11 +472,7 @@ describe('hostile feed content', () => {
   });
 
   it('keeps the hostile entries, so their text still reaches the pipeline', async () => {
-    await harness.app.inject({
-      method: 'POST',
-      url: '/api/ingest/tick',
-      headers: { cookie: harness.cookie },
-    });
+    await submitForm(harness.app, harness.cookie, '/api/ingest/tick');
     const rows = harness.driver
       .prepare(`SELECT title, body FROM articles ORDER BY external_id`)
       .all() as { title: string; body: string }[];
@@ -495,11 +487,7 @@ describe('hostile feed content', () => {
   });
 
   it('reaches the page with nothing executable on it', async () => {
-    await harness.app.inject({
-      method: 'POST',
-      url: '/api/ingest/tick',
-      headers: { cookie: harness.cookie },
-    });
+    await submitForm(harness.app, harness.cookie, '/api/ingest/tick');
     // Give the Clusters something to render from, since that is what the page
     // shows, and let a Cluster carry the hostile text through.
     const clusterRepo = new DrizzleClusterRepo(
@@ -544,11 +532,7 @@ describe('hostile feed content', () => {
   });
 
   it('reaches the email with nothing executable in it', async () => {
-    await harness.app.inject({
-      method: 'POST',
-      url: '/api/ingest/tick',
-      headers: { cookie: harness.cookie },
-    });
+    await submitForm(harness.app, harness.cookie, '/api/ingest/tick');
     const article = harness.driver
       .prepare(`SELECT title, body, url FROM articles ORDER BY external_id LIMIT 1`)
       .get() as { title: string; body: string; url: string };
@@ -579,11 +563,7 @@ describe('hostile feed content', () => {
     // receives is the one that has to survive hostile feed content, and the
     // plain-text half is checked too because it is the copy a client that
     // ignores HTML is left with.
-    await harness.app.inject({
-      method: 'POST',
-      url: '/topics/topic-1/send-brief',
-      headers: { cookie: harness.cookie },
-    });
+    await submitForm(harness.app, harness.cookie, '/topics/topic-1/send-brief');
     const delivered = harness.transport.snapshot().at(-1);
     expect(delivered?.subject).toBe('World news - Brieflyy');
     assertNothingExecutable(delivered?.html ?? '');

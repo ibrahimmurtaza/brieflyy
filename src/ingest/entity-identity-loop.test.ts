@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { buildAppHarness, type AppHarness } from '../testing/app-harness.js';
+import { submitForm } from '../testing/forms.js';
 import { WIRE_COPIES, type WireCopy } from '../testing/story-fixtures.js';
 import type { RawFeed, RawFeedEntry } from '../ingest/feed-fetcher.js';
 import type { SourceId } from '../domain/types.js';
@@ -63,12 +64,7 @@ describe('one story written two ways by two outlets', () => {
     await h.app.close();
   });
 
-  const tick = () =>
-    h.app.inject({
-      method: 'POST',
-      url: '/api/ingest/tick',
-      headers: { cookie: h.cookie },
-    });
+  const tick = () => submitForm(h.app, h.cookie, '/api/ingest/tick');
 
   const storedEntities = (): readonly { canonical_name: string; kind: string }[] =>
     h.driver

@@ -6,7 +6,7 @@ import {
   type TestInfo,
 } from '@playwright/test';
 
-import { SESSION_COOKIE_NAME } from '../../src/config.js';
+import { REQUEST_TOKEN_FIELD, SESSION_COOKIE_NAME } from '../../src/config.js';
 import {
   E2E_FEEDBACK_FIXTURES,
   E2E_SESSION_ID,
@@ -73,6 +73,26 @@ async function signedInAs(context: BrowserContext, sessionId: string): Promise<P
     { name: SESSION_COOKIE_NAME, value: sessionId, url: E2E_BASE_URL },
   ]);
   return context.newPage();
+}
+
+/**
+ * The request token the current page's forms echo, for a spec that posts itself.
+ *
+ * A form clicked in the browser carries the hidden field without anybody noticing;
+ * a spec that posts through `page.request` has to send it, because the guard
+ * refuses a submission the httpOnly cookie does not agree with (ADR-0021) — which
+ * is the same thing a page on another site would be refused for. Read from the
+ * page rather than invented so the spec is posting what the form posts.
+ */
+export async function requestTokenOn(page: Page): Promise<string> {
+  const value = await page
+    .locator(`input[name="${REQUEST_TOKEN_FIELD}"]`)
+    .first()
+    .inputValue();
+  if (!value) {
+    throw new Error(`no request token on ${page.url()}: a Brieflyy page carries one`);
+  }
+  return value;
 }
 
 export const test = base.extend<{

@@ -103,6 +103,17 @@ route lacks an `access` declaration, if a public route is missing from
 `PUBLIC_ROUTES` (`src/http/access.ts:24`), or if a non-public route answers an
 anonymous request with anything other than `401` or `302 → /signup`.
 
+Every POST in this table is also behind the cross-site guard: it declares
+`stateChange: 'guarded'`, and `src/http/write-guard.ts` refuses a submission whose
+form does not echo the request token the application set in an httpOnly cookie —
+in a page saying so, not a bare status. So a POST here is driven by a form on a
+Brieflyy page and not by a page on another site. The three exceptions are named in
+`WRITE_GUARD_EXEMPTIONS` (`src/http/access.ts`) with the reason each one cannot be:
+the two one-click unsubscribes (a mail client has no Brieflyy page to carry a
+field) and `POST /auth/magic-link/request` (its caller is the sign-in page's own
+script, and there is no signed-in User whose page could carry the field).
+`src/http/write-guard.test.ts` holds the application to both lists. See ADR-0022.
+
 | Method | Path | Access | Notes |
 |---|---|---|---|
 | GET | `/` | public | 302 → `/signup` |
@@ -138,7 +149,11 @@ The URL-encoded parser in `app.ts:108` builds these; renaming any of them breaks
 route and its test.
 
 `templateIds` · `freeformTitle` · `slug` · `hour` · `minute` · `timezone` ·
-`windowDays` · `clusterId` · `type` · `scope` · `email`
+`windowDays` · `clusterId` · `type` · `scope` · `email` · `requestToken`
+
+`requestToken` is the hidden field every form on a signed-in page carries and the
+cookie the application set has to agree with; a POST that omits it is refused
+before the route reads the body.
 
 ### 4.3 Assertions that constrain the markup itself
 

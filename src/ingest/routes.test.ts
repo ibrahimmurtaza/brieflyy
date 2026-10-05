@@ -8,6 +8,7 @@ import { DrizzleTopicRepo } from '../repos/topic-repo.js';
 import { createTestDb } from '../testing/test-db.js';
 import { makeTopic } from '../testing/fixtures.js';
 import { extractMagicLinkToken } from '../testing/email.js';
+import { signedInCookies, submitForm } from '../testing/forms.js';
 import {
   deterministicRandom,
   makeTestClock,
@@ -78,7 +79,10 @@ async function buildApp(): Promise<TestApp> {
     });
     const raw = verified.headers['set-cookie'];
     const header = Array.isArray(raw) ? raw[0]! : raw!;
-    return header.split(';')[0]!;
+    // The pair, because the tick is a write like any other: a caller that has not
+    // been handed a page cannot submit it (ADR-0022).
+    const { cookies } = await signedInCookies(app, header.split(';')[0]!);
+    return cookies;
   }
 
   function userId(): string | null {
@@ -164,11 +168,7 @@ describe('ingest admin routes', () => {
     const cookie = await ctx.signIn();
     await attachTopicWithSource(ctx);
 
-    const res = await ctx.app.inject({
-      method: 'POST',
-      url: '/api/ingest/tick',
-      headers: { cookie },
-    });
+    const res = await submitForm(ctx.app, cookie, '/api/ingest/tick');
     expect(res.statusCode).toBe(200);
     const body = res.json() as {
       cycleId: string;

@@ -7,6 +7,7 @@ import type { SqliteDriver } from '../db/client.js';
 import { createTestDb } from '../testing/test-db.js';
 import { countRows } from '../testing/db.js';
 import { extractMagicLinkToken } from '../testing/email.js';
+import { signedInCookies, submitForm } from '../testing/forms.js';
 import { makeCluster, makeTopic } from '../testing/fixtures.js';
 import { createLLMSummaryClient } from '../services/llm-summary-service.js';
 import type { LLMSummaryClient } from '../domain/llm.js';
@@ -76,7 +77,10 @@ async function signInWithTopic(
     url: `/auth/magic-link/verify?token=${encodeURIComponent(token)}`,
   });
   const setCookie = verify.headers['set-cookie'];
-  const cookie = (Array.isArray(setCookie) ? setCookie[0]! : setCookie!).split(';')[0]!;
+  const sessionCookie = (Array.isArray(setCookie) ? setCookie[0]! : setCookie!).split(';')[0]!;
+  // The session and the request token: a browser is handed a page before it can
+  // submit a form, and the send-a-brief button is a form (ADR-0021).
+  const { cookies } = await signedInCookies(app, sessionCookie);
 
   const topicRepo = new DrizzleTopicRepo(db);
   const userId = (driver.prepare(`SELECT id FROM users LIMIT 1`).get() as { id: string }).id;
@@ -127,7 +131,7 @@ async function signInWithTopic(
 
   return {
     app,
-    cookie,
+    cookie: cookies,
     transport,
     driver,
     clusterRepo: new DrizzleClusterRepo(db),
@@ -149,11 +153,7 @@ function snapshotIdOf(h: Harness): string {
 }
 
 async function sendBrief(h: Harness): Promise<void> {
-  await h.app.inject({
-    method: 'POST',
-    url: '/topics/topic-1/send-brief',
-    headers: { cookie: h.cookie },
-  });
+  await submitForm(h.app, h.cookie, '/topics/topic-1/send-brief');
 }
 
 describe('HTTP: POST /topics/:slug/send-brief', () => {
@@ -163,11 +163,7 @@ describe('HTTP: POST /topics/:slug/send-brief', () => {
   });
 
   it('emails the User a brief of that Topic', async () => {
-    const res = await h.app.inject({
-      method: 'POST',
-      url: '/topics/topic-1/send-brief',
-      headers: { cookie: h.cookie },
-    });
+    const res = await submitForm(h.app, h.cookie, '/topics/topic-1/send-brief');
 
     expect(res.statusCode).toBe(302);
     const sent = briefsSentTo(h);
@@ -230,11 +226,7 @@ describe('HTTP: POST /topics/:slug/send-brief', () => {
   });
 
   it('does not send a brief for a Topic that is not the Users', async () => {
-    const res = await h.app.inject({
-      method: 'POST',
-      url: '/topics/somebody-elses-topic/send-brief',
-      headers: { cookie: h.cookie },
-    });
+    const res = await submitForm(h.app, h.cookie, '/topics/somebody-elses-topic/send-brief');
 
     expect(res.statusCode).toBe(404);
     expect(briefsSentTo(h)).toEqual([]);

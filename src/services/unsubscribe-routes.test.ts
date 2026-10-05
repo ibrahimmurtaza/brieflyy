@@ -7,6 +7,7 @@ import type { EmailMessage } from '../email/transport.js';
 import type { SqliteDriver } from '../db/client.js';
 import { createTestDb } from '../testing/test-db.js';
 import { extractMagicLinkToken } from '../testing/email.js';
+import { signedInCookies, submitForm } from '../testing/forms.js';
 import { topicOptOutAt, userOptOutAt } from '../testing/opt-outs.js';
 import { makeCluster, makeTopic } from '../testing/fixtures.js';
 import {
@@ -75,7 +76,10 @@ beforeEach(async () => {
     )}`,
   });
   const setCookie = verify.headers['set-cookie'];
-  const cookie = (Array.isArray(setCookie) ? setCookie[0]! : setCookie!).split(';')[0]!;
+  const sessionCookie = (Array.isArray(setCookie) ? setCookie[0]! : setCookie!).split(';')[0]!;
+  // The session and the request token: a browser is handed a page before it
+  // can submit a form, and every write checks the pair (ADR-0021).
+  const { cookies: cookie } = await signedInCookies(app, sessionCookie);
 
   const topicRepo = new DrizzleTopicRepo(db);
   const clusterRepo = new DrizzleClusterRepo(db);
@@ -132,12 +136,7 @@ beforeEach(async () => {
 
 /** Ask for a brief of one Topic by hand, the way a User does from `/topics`. */
 async function sendBrief(slug = 'topic-1'): Promise<void> {
-  const res = await harness.app.inject({
-    method: 'POST',
-    url: `/topics/${slug}/send-brief`,
-    headers: { cookie: harness.cookie },
-    payload: '',
-  });
+  const res = await submitForm(harness.app, harness.cookie, `/topics/${slug}/send-brief`, '');
   expect(res.statusCode).toBe(302);
 }
 
@@ -355,12 +354,12 @@ describe('the settings screen', () => {
     expect(before.body).toContain('Briefs for this topic are off');
     expect(before.body).toContain('/settings/briefs/topic-1/resubscribe');
 
-    const res = await harness.app.inject({
-      method: 'POST',
-      url: '/settings/briefs/topic-1/resubscribe',
-      headers: { cookie: harness.cookie },
-      payload: '',
-    });
+    const res = await submitForm(
+      harness.app,
+      harness.cookie,
+      '/settings/briefs/topic-1/resubscribe',
+      '',
+    );
 
     expect(res.statusCode).toBe(302);
     expect(harness.topicOptOut('topic-1')).toBeNull();
@@ -382,24 +381,24 @@ describe('the settings screen', () => {
     });
     expect(before.body).toContain('You have stopped all Brieflyy emails');
 
-    const res = await harness.app.inject({
-      method: 'POST',
-      url: '/settings/briefs/resubscribe',
-      headers: { cookie: harness.cookie },
-      payload: '',
-    });
+    const res = await submitForm(
+      harness.app,
+      harness.cookie,
+      '/settings/briefs/resubscribe',
+      '',
+    );
 
     expect(res.statusCode).toBe(302);
     expect(harness.userOptOut()).toBeNull();
   });
 
   it('refuses to resubscribe a topic that belongs to somebody else', async () => {
-    const res = await harness.app.inject({
-      method: 'POST',
-      url: '/settings/briefs/somebody-elses-topic/resubscribe',
-      headers: { cookie: harness.cookie },
-      payload: '',
-    });
+    const res = await submitForm(
+      harness.app,
+      harness.cookie,
+      '/settings/briefs/somebody-elses-topic/resubscribe',
+      '',
+    );
 
     expect(res.statusCode).toBe(404);
   });
@@ -413,12 +412,12 @@ describe('the settings screen', () => {
 
 describe('asking for a brief by hand', () => {
   it('sends, while the User still wants the mail', async () => {
-    const res = await harness.app.inject({
-      method: 'POST',
-      url: '/topics/topic-1/send-brief',
-      headers: { cookie: harness.cookie },
-      payload: '',
-    });
+    const res = await submitForm(
+      harness.app,
+      harness.cookie,
+      '/topics/topic-1/send-brief',
+      '',
+    );
 
     expect(res.headers.location).toBe('/topics/topic-1?brief=sent');
     expect(harness.count('email_deliveries')).toBe(1);
@@ -437,12 +436,12 @@ describe('asking for a brief by hand', () => {
     // asked not to be emailed and then presses a button asking to be emailed has
     // not unsubscribed — but the page must not offer the button, and the route
     // must not send, or the promise the confirmation page made is a lie.
-    const res = await harness.app.inject({
-      method: 'POST',
-      url: '/topics/topic-1/send-brief',
-      headers: { cookie: harness.cookie },
-      payload: '',
-    });
+    const res = await submitForm(
+      harness.app,
+      harness.cookie,
+      '/topics/topic-1/send-brief',
+      '',
+    );
 
     expect(res.statusCode).toBe(302);
     expect(res.headers.location).toContain('/settings/briefs');
@@ -468,12 +467,12 @@ describe('asking for a brief by hand', () => {
     });
     const before = harness.count('email_deliveries');
 
-    const res = await harness.app.inject({
-      method: 'POST',
-      url: '/topics/topic-2/send-brief',
-      headers: { cookie: harness.cookie },
-      payload: '',
-    });
+    const res = await submitForm(
+      harness.app,
+      harness.cookie,
+      '/topics/topic-2/send-brief',
+      '',
+    );
 
     expect(res.statusCode).toBe(302);
     expect(harness.count('email_deliveries')).toBe(before);
@@ -486,20 +485,15 @@ describe('asking for a brief by hand', () => {
       url: `/unsubscribe/all?token=${encodeURIComponent(harness.sentTokens().global)}`,
       payload: '',
     });
-    await harness.app.inject({
-      method: 'POST',
-      url: '/settings/briefs/resubscribe',
-      headers: { cookie: harness.cookie },
-      payload: '',
-    });
+    await submitForm(harness.app, harness.cookie, '/settings/briefs/resubscribe', '');
     const before = harness.count('email_deliveries');
 
-    const res = await harness.app.inject({
-      method: 'POST',
-      url: '/topics/topic-2/send-brief',
-      headers: { cookie: harness.cookie },
-      payload: '',
-    });
+    const res = await submitForm(
+      harness.app,
+      harness.cookie,
+      '/topics/topic-2/send-brief',
+      '',
+    );
 
     expect(res.headers.location).toBe('/topics/topic-2?brief=sent');
     expect(harness.count('email_deliveries')).toBe(before + 1);

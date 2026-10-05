@@ -334,6 +334,7 @@ describe('the README counts', () => {
       'env-example',
       'route-guard',
       'schema-agreement',
+      'write-guard',
     ]) {
       expect(
         filesUnder(join(ROOT, 'src'), (name) => name === `${guard}.test.ts`),
