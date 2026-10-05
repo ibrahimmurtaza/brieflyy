@@ -8,11 +8,14 @@ import { E2E_TOPIC_SLUG } from './fixture-data.js';
  * fails in a browser, on the page a person would actually see.
  */
 test.describe('the markup invariants a layout change can break', () => {
-  test('/upgrade has nothing to submit, and says so', async ({ signedInPage: page }) => {
+  test('/upgrade offers no checkout it cannot finish', async ({ signedInPage: page }) => {
     await page.goto('/upgrade');
 
-    // Billing is not connected, so the page must not offer a control that looks
-    // like a checkout. The sign-out form in the shared header is not one.
+    // This fixture server configures no payment provider, so the page must not
+    // offer a control that cannot work — the sentence has to say why rather than
+    // the page quietly looking like a shop. The sign-out form in the shared
+    // header is not one. Where a provider *is* configured the page carries a
+    // checkout; `src/billing/billing-routes.test.ts` has that case.
     const main = page.locator('main');
     await expect(main.locator('form')).toHaveCount(0);
     await expect(page.getByText("Billing isn't connected yet")).toBeVisible();

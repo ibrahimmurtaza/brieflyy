@@ -306,6 +306,31 @@ CREATE TABLE IF NOT EXISTS brief_job_runs (
   discarded_bullets INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS brief_job_runs_started_at_idx ON brief_job_runs (started_at);
+
+CREATE TABLE IF NOT EXISTS checkout_references (
+  reference TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS checkout_references_user_idx ON checkout_references (user_id);
+
+CREATE TABLE IF NOT EXISTS payment_events (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  received_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS payment_events_user_idx ON payment_events (user_id);
+
+CREATE TABLE IF NOT EXISTS subscriptions (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  subscription_ref TEXT NOT NULL,
+  customer_ref TEXT,
+  started_at INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS subscriptions_user_unique ON subscriptions (user_id);
 `;
 
 /**
@@ -546,7 +571,7 @@ const TABLE_REBUILDS: readonly TableRebuild[] = [
     // Hide-source names the Source the User asked to stop seeing, so the column
     // carries a foreign key and SQLite cannot add one to a live table: the table
     // is rebuilt. Rows written before the column existed have no Source on them,
-    // which is the truth about them — they hid a whole Cluster rather than an
+    // which is the truth about them â€” they hid a whole Cluster rather than an
     // outlet, so there is nothing to derive. They are no longer read as a hide at
     // all; see `hiddenSourcesById` in `src/domain/feedback.ts`.
     table: 'feedback_events',
@@ -695,7 +720,7 @@ const COLUMN_MIGRATIONS: readonly ColumnMigration[] = [
   },
   {
     // The plain-text half of a BriefSnapshot. `EmailMessage.text` is required,
-    // so a snapshot holding only HTML could not be sent at all — which is part
+    // so a snapshot holding only HTML could not be sent at all â€” which is part
     // of why nothing had ever sent one. The default says the truth about the
     // rows written before the column existed: they have no text alternative.
     table: 'brief_snapshots',
@@ -773,7 +798,7 @@ const COLUMN_MIGRATIONS: readonly ColumnMigration[] = [
  * which is the constraint that stopped syndicated coverage of one event from
  * being one Story. Which Sources a Story belongs to is now read off the Articles
  * in it, so the column names one of several and can be re-scoped to a single
- * Source by accident — the exact bug it enforced. The foreign key goes with it.
+ * Source by accident â€” the exact bug it enforced. The foreign key goes with it.
  */
 const RETIRED_COLUMNS: readonly {
   readonly table: string;
@@ -834,7 +859,7 @@ function applyTableRebuilds(driver: SqliteDriver): void {
  * the publication range the dedup window is measured over.
  *
  * Without this, every Story written by an older build reads back with an empty
- * signature and a zero range, matches nothing, and is never a candidate again —
+ * signature and a zero range, matches nothing, and is never a candidate again â€”
  * so the next poll of every feed re-formed all of its Stories from scratch and
  * the Story table doubled. The Articles are right there in the same database, so
  * both values are derived from them: the signature from the oldest Article's text
@@ -936,14 +961,14 @@ function signatureOfArticle(title: string, body: string) {
  *
  * The key is what two spellings of one name are matched on, and it is derived
  * from the name rather than written by the outlet, so a row that has a name has
- * everything its key needs. An older build could hold two rows for one thing —
+ * everything its key needs. An older build could hold two rows for one thing â€”
  * "Acme Corp" and "Acme" were different names to it, and both are the same key
- * now — so the loser of such a pair is merged into the winner: its Articles are
+ * now â€” so the loser of such a pair is merged into the winner: its Articles are
  * repointed and the row goes. Leaving both would fail the unique index, and
  * leaving one un-keyed would mean the next mention of that name inserts a third.
  *
  * The key is derived with the same function the pipeline derives it with, so the
- * two cannot disagree — and a later change to the fold therefore changes what a
+ * two cannot disagree â€” and a later change to the fold therefore changes what a
  * later boot writes into an older database, which is the one way this can write
  * a value the build that wrote it would not have written. A row whose name folds
  * to nothing at all takes its own id as its key: that keeps it addressable and

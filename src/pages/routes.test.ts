@@ -256,7 +256,7 @@ describe('HTTP: /upgrade', () => {
     expect(resp.body).toMatch(/Upgrade to paid/);
   });
 
-  it('says billing is not connected instead of faking a checkout', async () => {
+  it('offers no checkout on an instance that cannot take a payment', async () => {
     const resp = await app.inject({
       method: 'GET',
       url: '/upgrade',
@@ -265,7 +265,10 @@ describe('HTTP: /upgrade', () => {
     expect(resp.body).toMatch(/Billing isn&#39;t connected yet|isn't connected yet/);
     // Nothing to submit: a form in the page's own content would be a button that
     // goes nowhere. The invariant is scoped to `<main>` because the shared header
-    // carries the sign-out form, and sign-out is not a checkout.
+    // carries the sign-out form, and sign-out is not a checkout. It holds because
+    // this application has no PaymentProvider configured, which is the condition
+    // the sentence above states — where one is configured, `src/billing/` has the
+    // form and the case where it is submitted.
     const main = resp.body.match(/<main[^>]*>[\s\S]*<\/main>/)?.[0] ?? resp.body;
     expect(main).not.toMatch(/<form/);
   });

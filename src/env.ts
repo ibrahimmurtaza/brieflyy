@@ -171,6 +171,20 @@ export interface ServerConfig {
   readonly openaiApiKey: string | undefined;
   /** Where the written summaries are asked for. */
   readonly openaiApiUrl: string;
+  /**
+   * The payment provider's API credential. Absent, with the two below, is the
+   * complete configuration for an instance that takes no payments — and an
+   * instance that takes none is not a broken Brieflyy, it is a free one.
+   */
+  readonly stripeSecretKey: string | undefined;
+  /**
+   * The secret a payment event is checked against. A second credential, not a
+   * second reading of the first: this one is never presented to anybody, it only
+   * answers whether a request came from the provider.
+   */
+  readonly stripeWebhookSecret: string | undefined;
+  /** The price a paid Checkout is for, which is the provider's own name for it. */
+  readonly stripePaidPriceId: string | undefined;
   readonly cookieSecure: boolean;
   /**
    * Whether to register the development-only routes, such as the switch that
@@ -239,6 +253,9 @@ export function loadServerConfig(env: EnvSource): ServerConfig {
     ),
     openaiApiKey: readOptionalString(env, 'OPENAI_API_KEY'),
     openaiApiUrl: readString(env, 'OPENAI_API_URL', OPENAI_API_URL_DEFAULT),
+    stripeSecretKey: readOptionalString(env, 'STRIPE_SECRET_KEY'),
+    stripeWebhookSecret: readOptionalString(env, 'STRIPE_WEBHOOK_SECRET'),
+    stripePaidPriceId: readOptionalString(env, 'STRIPE_PAID_PRICE_ID'),
     devToolsEnabled: readBool(env, 'DEV_TOOLS_ENABLED', !isProduction(env)),
     cookieSecure: readBool(env, 'COOKIE_SECURE', isProduction(env)),
     trustProxy: readBool(env, 'TRUST_PROXY', false),
@@ -261,6 +278,23 @@ export function loadServerConfig(env: EnvSource): ServerConfig {
     if (config.googleOAuthClientSecret === undefined) {
       throw new Error('Missing required env var: GOOGLE_OAUTH_CLIENT_SECRET');
     }
+  }
+  // All three or none, checked as one decision for the reason EMAIL_TRANSPORT is.
+  // A half-configured deployment would boot, serve a page offering a checkout, and
+  // then refuse it at the moment a User pressed the button — so the check is here,
+  // where a wrong setting is still only a startup failure.
+  const stripe = [
+    ['STRIPE_SECRET_KEY', config.stripeSecretKey],
+    ['STRIPE_WEBHOOK_SECRET', config.stripeWebhookSecret],
+    ['STRIPE_PAID_PRICE_ID', config.stripePaidPriceId],
+  ] as const;
+  const stripeMissing = stripe.filter(([, value]) => value === undefined).map(([name]) => name);
+  if (stripeMissing.length > 0 && stripeMissing.length < stripe.length) {
+    throw new Error(
+      `Payments need all three of ${stripe.map(([name]) => name).join(', ')}, and ${stripeMissing.join(
+        ' and ',
+      )} ${stripeMissing.length === 1 ? 'is' : 'are'} not set: set all three or none`,
+    );
   }
   return config;
 }

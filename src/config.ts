@@ -30,6 +30,20 @@ export const MAGIC_LINK_RATE_LIMITS: MagicLinkRateLimits = {
 
 export const OPENAI_API_URL_DEFAULT = 'https://api.openai.com/v1/chat/completions';
 
+/** Where the payment provider's API lives, and the only Stripe host this asks. */
+export const STRIPE_API_BASE_URL_DEFAULT = 'https://api.stripe.com';
+
+/**
+ * How far a signed payment event's own timestamp may be from the clock before it
+ * is refused.
+ *
+ * A signature says the provider sent this request; it does not say the request is
+ * recent, and a captured one would verify forever. Stripe recommends the same
+ * five minutes, and the answer is deliberately a refusal rather than a warning —
+ * a replayed request is exactly the thing this window exists to stop.
+ */
+export const STRIPE_SIGNATURE_TOLERANCE_SECONDS_DEFAULT = 300;
+
 /**
  * How many Clusters one brief carries, most active first.
  *

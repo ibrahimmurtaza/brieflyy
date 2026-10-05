@@ -40,7 +40,7 @@ _Avoid_: signup flow, first-run
 _Avoid_: send time, schedule time
 
 **Request token**: The value every page carries in its forms and the application echoes in a cookie, checked together before a write is allowed to change anything. It is random and names nothing — not a User, not a session, not an address — so it tells a reader of the page nothing the page does not already show. The cookie is httpOnly, so script on the page cannot read the half that is kept from it; the value in the markup is in the document, and anything in the document is readable by whatever reads the document. A submission whose cookie and form token are missing or disagree did not come from a page Brieflyy rendered, and is refused in words rather than as a bare status.
-**Not built**: the check on a link that writes a session. Every route that *submits* something declares `stateChange: 'guarded'` and `src/http/write-guard.ts` refuses a submission the request-token cookie does not agree with, with the three writes that have no Brieflyy page behind them — the two one-click unsubscribes and a magic-link request — named in `WRITE_GUARD_EXEMPTIONS` with the reason. A `GET` cannot carry a form field, so the two that write a session (`GET /auth/magic-link/verify`, `GET /auth/google/callback`) are not behind it: nothing stops a stranger from sending a reader to their own verify link and signing them into the attacker's account. `src/http/write-guard.test.ts` holds the application to the rest and names these two. See ADR-0021 and ADR-0022.
+**Not built**: the check on a link that writes a session. Every route that *submits* something declares `stateChange: 'guarded'` and `src/http/write-guard.ts` refuses a submission the request-token cookie does not agree with, with the four writes that have no Brieflyy page behind them — the two one-click unsubscribes, a magic-link request, and the payment provider's webhook — named in `WRITE_GUARD_EXEMPTIONS` with the reason. A `GET` cannot carry a form field, so the two that write a session (`GET /auth/magic-link/verify`, `GET /auth/google/callback`) are not behind it: nothing stops a stranger from sending a reader to their own verify link and signing them into the attacker's account. `src/http/write-guard.test.ts` holds the application to the rest and names these two. See ADR-0021 and ADR-0022.
 _Avoid_: CSRF token, nonce, anti-forgery token
 
 ### Core
@@ -179,6 +179,21 @@ _Avoid_: popularity, buzz, score
 **Not built**: realtime briefs. There is no realtime anything: a brief goes out when the User's DeliveryTime arrives and is answered for, and no tier changes that.
 _Avoid_: free plan, basic
 
-**PaidTier**: Unlimited Topics, indefinite Archive retention, BriefSnapshots retained forever, full trends history. The trends layer is the paid differentiator.
-**Not built**: billing, and so the price. $15/mo is what the upgrade page says; there is no provider behind it, and the only way onto this tier is the development-only `POST /dev/tier`, which is registered only when `DEV_TOOLS_ENABLED` is set — off by default, and a production instance is expected to leave it off.
+**PaidTier**: Unlimited Topics, indefinite Archive retention, BriefSnapshots retained forever, full trends history. The trends layer is the paid differentiator. Reached by paying, or by the development-only `POST /dev/tier` — the only way a User moves back down.
 _Avoid_: pro, premium
+
+**PaymentProvider**: Somebody a User pays through, currently only Stripe. It is the sole door money comes in by: a hosted **Checkout** to start one, and a **Payment event** saying one completed. Whether one is configured is a property of the deployment — an instance with none offers no checkout and the route behind it refuses, in the same shape as **Provider** above (ADR-0019). Distinct from Provider, which is about identity and never about money.
+_Avoid_: gateway, payment processor, billing provider
+
+**Checkout**: The hosted page a User actually pays on. Brieflyy sends a User there and takes them back to its own upgrade page; the card number is entered on the PaymentProvider's page and never reaches this application. One is started by `POST /billing/checkout`, which mints a **Checkout reference** and stores it first, so that a completed Checkout always names something Brieflyy issued.
+_Avoid_: payment form, order, basket
+
+**Checkout reference**: An opaque value Brieflyy minted when it started a Checkout, stored against the User and carried to the PaymentProvider, which is what tells this application which User a completed Checkout was for. Never a User id, and never anything read out of an event: a signed event about somebody else's Checkout resolves to a reference this application does not hold, and to nothing else.
+_Avoid_: session id, order id, metadata
+
+**Payment event**: A signed message from the PaymentProvider saying a Checkout completed. Its own id is the replay key — the provider's identifier, and the primary key of the table that records what was acted on — so one event is one grant and a replay is refused rather than applied again. Nothing in it is believed because it arrived; the signature is what authorises it, and the User comes from the Checkout reference. An event of a kind Brieflyy does not act on is acknowledged and dropped.
+_Avoid_: callback, webhook payload, notification
+
+**Subscription**: What a User is paying the PaymentProvider for, stored under `subscriptions` as the provider's own names for the payer and the subscription, so naming it later is a read rather than a round trip. One per User, enforced by a unique index. It is the record behind `users.tier`, which stays the fact every paywall reads.
+**Not built**: cancelling one. There is no state column, so a row is exactly the claim "this User is paying"; an ended subscription is still a subscribed row, which is wrong the moment one exists. Nothing here has to change to add it — a provider event naming a cancellation, a column, and the tier write that follows. See ADR-0023.
+_Avoid_: plan, membership, billing account

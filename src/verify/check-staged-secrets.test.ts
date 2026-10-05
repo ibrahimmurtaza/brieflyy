@@ -10,6 +10,8 @@ import { runCheck } from './check-staged-secrets.js';
 const OPENAI_KEY = `sk-proj-${'a'.repeat(40)}`;
 const GOOGLE_SECRET = `GOCSPX-${'b'.repeat(30)}`;
 const RESEND_KEY = `re_${'c'.repeat(24)}`;
+const STRIPE_LIVE_KEY = `sk_live_${'d'.repeat(24)}`;
+const STRIPE_WEBHOOK_SECRET = `whsec_${'e'.repeat(32)}`;
 
 let dir: string;
 
@@ -90,6 +92,28 @@ describe('staged credential check', () => {
     const result = runCheck(dir);
     expect(result.ok).toBe(false);
     expect(result.report).toMatch(/\.env: a local environment file must never be committed/);
+  });
+
+  it('fails on a Stripe live key and on a webhook signing secret', () => {
+    // The second one is the one that is easy to forget: it never leaves the
+    // server, so it is never pasted anywhere a reader would look, and a leaked
+    // one is what lets anybody move a User onto the paid tier.
+    initRepo();
+    stage('src/a.ts', `const k = '${STRIPE_LIVE_KEY}';\n`);
+    stage('src/b.ts', `const s = '${STRIPE_WEBHOOK_SECRET}';\n`);
+    const result = runCheck(dir);
+    expect(result.ok).toBe(false);
+    expect(result.report).toMatch(/Stripe secret key/);
+    expect(result.report).toMatch(/Stripe webhook signing secret/);
+  });
+
+  it('passes .env.example documenting the Stripe variables empty', () => {
+    initRepo();
+    stage(
+      '.env.example',
+      ['STRIPE_SECRET_KEY=', 'STRIPE_WEBHOOK_SECRET=', 'STRIPE_PAID_PRICE_ID=', ''].join('\n'),
+    );
+    expect(runCheck(dir).ok).toBe(true);
   });
 
   it('passes for .env.example with placeholders and empty values', () => {

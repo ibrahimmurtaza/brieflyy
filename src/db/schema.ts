@@ -334,7 +334,7 @@ export const entities = sqliteTable(
      * punctuation and legal form folded away. Two outlets write one name several
      * ways, and the spelling a User reads is not what decides whether they are
      * talking about the same thing. A row whose name folds to nothing at all
-     * carries its own id here — see `backfillEntityKeys` in `migrate.ts`.
+     * carries its own id here â€” see `backfillEntityKeys` in `migrate.ts`.
      */
     canonicalKey: text('canonical_key').notNull(),
     kind: text('kind', {
@@ -483,8 +483,8 @@ export type ClusterStoryRow = typeof clusterStories.$inferSelect;
 /**
  * One Topic's trends, materialised.
  *
- * The measurement behind this — every Article every Entity was named in across a
- * thirty-day baseline — is far too much work to do while somebody is waiting for a
+ * The measurement behind this â€” every Article every Entity was named in across a
+ * thirty-day baseline â€” is far too much work to do while somebody is waiting for a
  * page, so it is done on an hourly cadence and this row is what every request
  * reads. Without it the trends view would either be slow or be computed again per
  * request, and the two are the same mistake.
@@ -548,7 +548,7 @@ export const feedbackEvents = sqliteTable(
      *
      * It has to be on the row rather than inferred from the Cluster, because a
      * Cluster can carry reporting from several Sources and the User asked to stop
-     * seeing one outlet — not to stop seeing the story, and not to lose every
+     * seeing one outlet â€” not to stop seeing the story, and not to lose every
      * other outlet's account of it. A row without one names no Source at all,
      * which is why it is nullable and the write path refuses it.
      */
@@ -715,8 +715,8 @@ export const unsubscribes = sqliteTable(
  *
  * The unique index on (user, topic, scheduled_for) is the whole reason the daily
  * job can run as often as it likes: a DeliverySlot can only be answered once, so a
- * second pass over the same one — whether it is the next tick, a restart, or two
- * processes — cannot send the same period's brief twice.
+ * second pass over the same one â€” whether it is the next tick, a restart, or two
+ * processes â€” cannot send the same period's brief twice.
  */
 export const briefRuns = sqliteTable(
   'brief_runs',
@@ -818,6 +818,86 @@ export const archiveItems = sqliteTable(
     topicCreatedIdx: index('archive_items_topic_created_idx').on(t.topicId, t.createdAt),
   }),
 );
+
+/**
+ * One Checkout this application started, named by the reference it minted.
+ *
+ * The primary key is the reference rather than a generated id because the
+ * reference *is* the thing: it is what travels to the PaymentProvider and what a
+ * completed event comes back naming, so a row whose key were anything else would
+ * be a row that has to be found before it can be trusted. One User may hold many â€”
+ * a Checkout that is abandoned leaves its row behind, which is the honest record
+ * that it was started â€” and the cascade is what takes them when the User goes.
+ */
+export const checkoutReferences = sqliteTable(
+  'checkout_references',
+  {
+    reference: text('reference').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    userIdx: index('checkout_references_user_idx').on(t.userId),
+  }),
+);
+
+/**
+ * One event the payment provider sent, once it has been acted on.
+ *
+ * The provider's own event id is the primary key, and that is the whole
+ * single-use property: a replayed event cannot be recorded twice because the
+ * insert fails, rather than because something read a flag first and wrote an
+ * answer to a race. The same arrangement the unsubscribe token has, for the same
+ * reason.
+ */
+export const paymentEvents = sqliteTable(
+  'payment_events',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    kind: text('kind', { enum: ['checkout_completed'] }).notNull(),
+    receivedAt: integer('received_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    userIdx: index('payment_events_user_idx').on(t.userId),
+  }),
+);
+
+/**
+ * What a User is paying for, under `subscriptions`.
+ *
+ * One row per User, enforced rather than assumed: a second Checkout completes for
+ * a User who already has one, and two rows would leave the question of which
+ * provider subscription decides the tier with no answer. Written on every
+ * accepted event, so it is refreshed rather than only created, and kept up to date
+ * without asking the provider again.
+ */
+export const subscriptions = sqliteTable(
+  'subscriptions',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** Which provider this was learned from, so two can never be confused. */
+    provider: text('provider').notNull(),
+    subscriptionRef: text('subscription_ref').notNull(),
+    customerRef: text('customer_ref'),
+    startedAt: integer('started_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    userUnique: uniqueIndex('subscriptions_user_unique').on(t.userId),
+  }),
+);
+
+export type CheckoutReferenceRow = typeof checkoutReferences.$inferSelect;
+export type NewCheckoutReferenceRow = typeof checkoutReferences.$inferInsert;
+export type PaymentEventRow = typeof paymentEvents.$inferSelect;
+export type SubscriptionRow = typeof subscriptions.$inferSelect;
 
 export type ArchiveItemRow = typeof archiveItems.$inferSelect;
 export type NewArchiveItemRow = typeof archiveItems.$inferInsert;

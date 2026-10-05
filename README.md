@@ -168,16 +168,39 @@ feature that has stopped working, and written Clusters with discarded bullets is
 a feature working on answers nobody can check. Nothing about the counters reaches
 the document a User reads.
 
+### Taking payments
+
+Payments are optional in the same way and for the same reason as the written path:
+`STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` and `STRIPE_PAID_PRICE_ID` are all
+three set or none, and with none the upgrade page says billing is not connected
+and `POST /billing/checkout` answers 503 with a page naming what is missing. An
+instance that takes no payments is a free Brieflyy, not a broken one, so the two
+routes are registered either way — the same arrangement as the Google routes, and
+for the same reason: a public surface that changed shape with a deployment
+variable would be a surface `src/http/route-guard.test.ts` could not check.
+
+All three or none is checked at boot rather than at the first checkout, because a
+half-configured deployment would otherwise serve a page offering a checkout and
+refuse it when the User pressed the button. `STRIPE_WEBHOOK_SECRET` is not the API
+key and not another reading of it: it is the signing secret of the endpoint, is
+never presented to anybody, and only answers whether a request came from Stripe.
+Conflating them would ship the ability to forge a tier change to anyone who read
+the API key out of a log. Point a Stripe webhook at `APP_BASE_URL` plus
+`/billing/webhook` for `checkout.session.completed`. See ADR-0023.
+
 ## Secrets
 
 `.env` holds live credentials and is never committed. `pnpm secrets:check` reads
 the git index, not the working tree, and fails when a staged line looks like a
-provider key (`sk-…`, `GOCSPX-…`, `re_…`, `AIza…`, `AKIA…`, a private key block)
-or assigns a long literal to a name ending in `SECRET`, `TOKEN`, `PASSWORD`,
-`API_KEY` and the like. A line ending in `secret-scan:allow` is the one and only
-way to commit something that looks like a credential, for a fixture that has to.
-It is part of `pnpm verify`; to also run it on every commit, opt the repository
-into the shipped hook once:
+provider key (`sk-…`, `GOCSPX-…`, `re_…`, `AIza…`, `AKIA…`, `sk_live_…`,
+`whsec_…`, a private key block) or assigns a long literal to a name ending in
+`SECRET`, `TOKEN`, `PASSWORD`, `API_KEY` and the like. A line ending in
+`secret-scan:allow` is the one and only way to commit something that looks like a
+credential, for a fixture that has to. The Stripe webhook signing secret is in
+that list because it is the one most likely to be missed: it never leaves the
+server, so it is never pasted anywhere a reader would look, and a leaked one is
+what lets anybody move a User onto the paid tier. It is part of `pnpm verify`; to
+also run it on every commit, opt the repository into the shipped hook once:
 
 ```bash
 git config core.hooksPath .githooks
@@ -239,15 +262,18 @@ A route with no token cookie in it has nothing to spend, so the guard leaves it
 to the route: an authenticated write still sends it to `/signup`, and a sign-out
 button on a tab that has already been signed out still signs out. What a page on
 another site can cause always carries the session cookie, and that is the case
-the guard reads. Three writes are named in `WRITE_GUARD_EXEMPTIONS`
+the guard reads. Four writes are named in `WRITE_GUARD_EXEMPTIONS`
 (`src/http/access.ts`) with the reason they cannot be behind it: the two
 one-click unsubscribes, which a mail client sends with a token in the URL and no
-Brieflyy page to carry a field; and `POST /auth/magic-link/request`, whose caller
+Brieflyy page to carry a field; `POST /auth/magic-link/request`, whose caller
 is the sign-in page's own script — with no signed-in User there is no page
-carrying the field it would echo, and it spends no session either. Nothing else
-is exempt: an operator's script asking `POST /api/ingest/tick` for a cycle fetches
-a page and echoes the token like any other submission, rather than leaning on the
-session cookie's `SameSite`.
+carrying the field it would echo, and it spends no session either; and
+`POST /billing/webhook`, which is a payment provider calling a URL with no
+session and no Brieflyy document anywhere in the exchange, so the signature over
+the raw body is the authorisation (ADR-0023). Nothing else is exempt: an
+operator's script asking `POST /api/ingest/tick` for a cycle fetches a page and
+echoes the token like any other submission, rather than leaning on the session
+cookie's `SameSite`.
 
 `src/http/write-guard.test.ts` builds the real application, enumerates every route
 it registers, and fails the build for one that submits something and declares
@@ -282,6 +308,21 @@ the URL is the whole authorisation. Each Topic's opt-out is `topics.unsubscribed
 and the whole-User one is `users.unsubscribed_at`; `ScheduledBriefService` reads
 both on every pass, so a link that is spent really does stop the mail rather
 than only recording that somebody asked. See ADR-0012.
+
+`POST /billing/webhook` is public for the same reason, and it is the one route
+in the application whose caller cannot be signed in even in principle. It
+authorises by an HMAC over the exact bytes Stripe sent, checked before a byte of
+the payload is read, and the User it moves comes from a Checkout reference
+Brieflyy minted and stored — never from anything in the body. It reads the raw
+body because a parsed one can be re-serialised into something equal as JSON and
+different as a message, so it is registered in its own encapsulated scope with a
+JSON parser that yields a string; the application's own JSON surface keeps
+parsing into objects. A signature that does not hold is a 400 and writes nothing
+at all. A replayed event, an event of a kind Brieflyy does not act on, and an
+event naming a reference it never issued are each a 200 with no write — they are
+not failures, and a 5xx would have Stripe retrying for days something no retry
+can fix. One event is one grant because the provider's event id is the primary
+key of `payment_events`. See ADR-0023.
 
 ## Changing the database schema
 
@@ -387,7 +428,9 @@ src/
 ├── archive/               # the Archive view: the search results page. Its route is
 │                          # in pages/routes.ts, with the rest of the shell's; its
 │                          # full-text index is in db/archive-index.ts
-├── billing/               # tier routes: /upgrade and the dev-only POST /dev/tier
+├── billing/               # the PaymentProvider seam (Stripe), the BillingService, and
+│                          # the two routes: POST /billing/checkout and the public
+│                          # POST /billing/webhook
 ├── discover/              # the discover layer's view: the DiscoverTab page + routes
 ├── email/                 # EmailTransport seam (Console + Resend)
 ├── oauth/                 # OAuthClient seam (Google) + the PKCE exchange
@@ -456,13 +499,16 @@ purpose, and each is reached by something other than a request:
 | `src/ingest/test-constants.ts` | the ingest suites |
 | `src/testing/`, `src/app-wiring.ts` | the suites |
 
-`oauth/` and `billing/` are inside the closure but conditional: `oauth/` builds a
-client only when `OAUTH_PROVIDER` names a provider, and where there is none the
-sign-in page offers no Google and the two Google routes refuse rather than throw
-(ADR-0019); `billing/` exists only when the development-only routes are on, which
-they are not in production. One thing the glossary asks for and no module provides
-is a LivingBrief derived from a BriefPlan; the in-app surface is a rendering of
-the Topic's Clusters instead. `CONTEXT.md` says so on the entry rather than leaving
+`oauth/` and the PaymentProvider are inside the closure but conditional: `oauth/`
+builds a client only when `OAUTH_PROVIDER` names a provider, and where there is none
+the sign-in page offers no Google and the two Google routes refuse rather than throw
+(ADR-0019); `billing/` registers its two routes either way and only builds a
+PaymentProvider when all three of `STRIPE_SECRET_KEY`,
+`STRIPE_WEBHOOK_SECRET` and `STRIPE_PAID_PRICE_ID` are set, so an instance that takes
+no payments still has a surface the route guard can check and an upgrade page that
+says why it has nothing to offer. One thing the glossary asks for and no module
+provides is a LivingBrief derived from a BriefPlan; the in-app surface is a rendering
+of the Topic's Clusters instead. `CONTEXT.md` says so on the entry rather than leaving
 it to be found.
 
 ### Seams
@@ -483,6 +529,7 @@ double in `src/testing/`, a lambda a test supplies, or a test of its own.
 | `FeedFetcher` | `fetch(feedUrl)` | `HttpFeedFetcher`, `StaticFeedFetcher`, `FailingFeedFetcher` |
 | `HttpClient` | `get(url)` | `systemHttpClient`, a `FakeHttp` in the feed tests |
 | `OAuthClient` | `buildAuthorizationUrl()`, `exchangeCode()` | `GoogleOAuthClient`, or absent when `OAUTH_PROVIDER` is unset |
+| `PaymentProvider` | `startCheckout(request)`, `readEvent(signed)` | `StripePaymentProvider`, `RecordingPaymentProvider`, or absent when no payment credential is set |
 | `cycleIdFn` | `() => string` | `nodeRandom.uuid()`, or a counting lambda in the ingest tests |
 | `afterCycle` | `run(report)` | `ClusterFormationService`, wired into the ingest loop by `createApp` |
 | The whole ingest loop | `IngestScheduler` | `createApp` builds one from a `FeedFetcher`, or takes the caller's |
@@ -499,7 +546,14 @@ Tests at the `AuthService` seam use real SQLite (in-memory), a fake clock, a fak
 random source, and a `ConsoleEmailTransport`. Tests at the HTTP seam use Fastify's
 `inject()` against the same `createApp` factory. The summary client is held by
 `server.ts` rather than constructed by `createApp`, so a test injects a counting
-double and asserts what a brief cost instead of what a brief was sent.
+double and asserts what a brief cost instead of what a brief was sent. The
+PaymentProvider is held the same way, and the billing routes are the one place a
+test drives the real Stripe provider rather than the double — with only `fetch`
+stubbed — because a signature the double verifies itself would prove nothing about
+whether a real one is checked. The requests it is sent are signed by
+`src/testing/stripe-webhook.ts` from a secret that file declares itself, and the
+digest is checked against one computed outside this repository so the signer and
+the verifier cannot agree on the same mistake.
 
 ### Background jobs
 
@@ -520,7 +574,7 @@ signed-in User at `/admin/ingest` and `/admin/briefs`.
 pnpm test
 ```
 
-The suite is 89 test files across `src/`, one per module, holding 1,369 cases —
+The suite is 93 test files across `src/`, one per module, holding 1,440 cases —
 Vitest prints the live figure at the end of every run. `docs-agreement.test.ts`
 checks the file count and cannot check the case count without running the suite it
 lives in, so that one number is worth reading off a run rather than trusting.
@@ -545,8 +599,8 @@ of the files are guards that fail the build when the shape of the system drifts:
 
 The rest cover the auth and OAuth flows, onboarding, ingest, clustering, brief
 planning and rendering, feedback, trends, discover, archive search, unsubscribe,
-topic settings, delivery settings, the repositories, the migration runner, and the
-rate limiter.
+billing and the payment webhook, topic settings, delivery settings, the
+repositories, the migration runner, and the rate limiter.
 
 The suites that drive a state-changing route submit it through `submitForm` in
 `src/testing/forms.ts`, which echoes the request token out of the same cookies the
