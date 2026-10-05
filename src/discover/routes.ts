@@ -5,6 +5,7 @@ import type { Tier, UserId } from '../domain/types.js';
 import { resolveTier } from '../domain/tier.js';
 import {
   AUTHENTICATED_ROUTE_CONFIG,
+  AUTHENTICATED_WRITE_ROUTE_CONFIG,
   requireAuthPage,
 } from '../http/access.js';
 import { humanTopicSelectionReason } from '../onboarding/routes.js';
@@ -104,7 +105,7 @@ export async function registerDiscoverRoutes(
 
   fastify.post<{ Body: Record<string, unknown> | undefined }>(
     '/discover/add',
-    AUTHENTICATED_ROUTE_CONFIG,
+    AUTHENTICATED_WRITE_ROUTE_CONFIG,
     async (req, reply) => {
       if (!requireAuthPage(req, reply)) return reply;
       const account = await shellFor(req);

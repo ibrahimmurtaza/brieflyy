@@ -223,18 +223,48 @@ made for `iris@example.com` instead of nearly creating a second one for the same
 human. An address the application will not store refuses the sign-in rather than
 becoming an Account row no lookup could find. See ADR-0020.
 
-A write route can refuse a submission whose form does not echo the request token
-the application set. `src/http/request-token.ts` puts a random token in an httpOnly
-cookie on the first page a browser is handed, and the same value in every POST
-form on it; a state-changing route that checks the pair answers a submission
-missing one, or naming one the cookie does not, with a page saying the submission
-did not come from a Brieflyy page rather than with a bare 403. The token names no
-User and no session, so it tells a reader of the page nothing the page does not
-already show them; the httpOnly cookie is the half script on the page cannot get
-at, which is why the check needs both. The Feedback write is the only route that
-checks it today — every other state-changing route already carries the token in
-its forms, so applying the same one line to each of them changes no markup. See
-ADR-0021.
+A state-changing route that *submits* refuses a submission whose form does not echo
+the request token the application set. `src/http/request-token.ts` puts a random
+token in an httpOnly cookie on the first page a browser is handed, and the same
+value in every POST form on it. Every write route says it is behind that check
+(`config: { stateChange: 'guarded' }`), and `src/http/write-guard.ts` reads the
+declaration in an `onRoute` hook and answers a submission whose cookie and form
+field are missing, or disagree, with a page saying the submission did not come
+from a Brieflyy page rather than with a bare 403. The token names no User and no
+session, so it tells a reader of the page nothing the page does not already show
+them; the httpOnly cookie is the half script on the page cannot get at, which is
+why the check needs both.
+
+A route with no token cookie in it has nothing to spend, so the guard leaves it
+to the route: an authenticated write still sends it to `/signup`, and a sign-out
+button on a tab that has already been signed out still signs out. What a page on
+another site can cause always carries the session cookie, and that is the case
+the guard reads. Three writes are named in `WRITE_GUARD_EXEMPTIONS`
+(`src/http/access.ts`) with the reason they cannot be behind it: the two
+one-click unsubscribes, which a mail client sends with a token in the URL and no
+Brieflyy page to carry a field; and `POST /auth/magic-link/request`, whose caller
+is the sign-in page's own script — with no signed-in User there is no page
+carrying the field it would echo, and it spends no session either. Nothing else
+is exempt: an operator's script asking `POST /api/ingest/tick` for a cycle fetches
+a page and echoes the token like any other submission, rather than leaning on the
+session cookie's `SameSite`.
+
+`src/http/write-guard.test.ts` builds the real application, enumerates every route
+it registers, and fails the build for one that submits something and declares
+neither the guard nor an exemption, for a route that declares the guard and is
+not behind it, and for an exemption that names a route which no longer exists. It
+also drives a cross-site submission at every guarded route in turn, so the claim
+is about what the application answers rather than about a unit of the guard.
+Signing out is treated as the state change it is: a stranger's page cannot end a
+User's session, the shell's own sign-out still works, and so does the one on the
+page a refusal is answered with. See ADR-0021 and ADR-0022.
+
+Two `GET` routes do change something and are not behind the guard, because a GET
+has no body to echo a token in: following a magic link (or a Google callback)
+writes a session. Nothing stops a stranger from sending a reader to their own
+verify link and signing them into the attacker's account; `write-guard.test.ts`
+names both routes so the gap is on the record rather than implied away, and
+CONTEXT.md records it as not built.
 
 An unexpected failure answers a page or a JSON body, never a bare 500. The
 handler in `src/http/errors.ts` is installed on the instance every route is
@@ -344,8 +374,9 @@ src/
 ├── directory/             # Seed JSON + directory loader (Sources, TopicTemplates)
 ├── domain/                # pure types & helpers (crypto, clock, timezone,
 │                          # DeliverySlot, tier, story signature, trends, LLM contract)
-├── http/                  # route access declarations, auth guard, rate limiter,
-│                          # and the error handler every route's failures reach
+├── http/                  # route access declarations, the cross-site write guard,
+│                          # rate limiter, and the error handler every route's
+│                          # failures reach
 ├── repos/                 # persistence adapters (users, accounts, sessions,
 │                          # magic-links, topics, sources, stories, clusters, briefs,
 │                          # feedback, trends, archive, unsubscribe, ...)
@@ -489,17 +520,20 @@ signed-in User at `/admin/ingest` and `/admin/briefs`.
 pnpm test
 ```
 
-The suite is 88 test files across `src/`, one per module, holding 1,352 cases —
+The suite is 89 test files across `src/`, one per module, holding 1,369 cases —
 Vitest prints the live figure at the end of every run. `docs-agreement.test.ts`
 checks the file count and cannot check the case count without running the suite it
 lives in, so that one number is worth reading off a run rather than trusting.
-Alongside the behavioural suites, five
+Alongside the behavioural suites, six
 of the files are guards that fail the build when the shape of the system drifts:
 
 - `app-wiring.test.ts` — every `*Service` is constructed by the application
   (the entrypoint or `createApp`) or explicitly deferred to a ticket.
 - `route-guard.test.ts` — every registered route is public by allowlist or
   refuses an anonymous request.
+- `write-guard.test.ts` — every registered route that submits something is behind
+  the cross-site guard or a named exemption, and every one of those refuses a
+  submission that names no token the cookie names.
 - `env-example.test.ts` — configuration is read in one module, and `.env.example`
   documents exactly the variables it reads.
 - `schema-agreement.test.ts` — the declared schema and the applied DDL agree.
@@ -513,6 +547,14 @@ The rest cover the auth and OAuth flows, onboarding, ingest, clustering, brief
 planning and rendering, feedback, trends, discover, archive search, unsubscribe,
 topic settings, delivery settings, the repositories, the migration runner, and the
 rate limiter.
+
+The suites that drive a state-changing route submit it through `submitForm` in
+`src/testing/forms.ts`, which echoes the request token out of the same cookies the
+request carries — the hidden field a Brieflyy page carries, put in the body the way
+the browser would. A test harness therefore holds the same pair a User's browser
+does, and one that forgot the token would be testing the guard rather than the
+route. The suite that is *about* the guard builds its submissions by hand, because
+varying the token is the thing it is there to check.
 
 The browser suite is separate because it needs a Chromium download:
 

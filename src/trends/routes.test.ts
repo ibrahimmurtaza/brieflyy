@@ -10,6 +10,7 @@ import { DrizzleEntityRepo } from '../repos/entity-repo.js';
 import { DrizzleStoryRepo } from '../repos/story-repo.js';
 import { DrizzleTopicRepo } from '../repos/topic-repo.js';
 import { extractMagicLinkToken } from '../testing/email.js';
+import { signedInCookies, submitForm } from '../testing/forms.js';
 import { makeArticle, makeCluster, makeTopic } from '../testing/fixtures.js';
 import {
   deterministicRandom,
@@ -64,7 +65,10 @@ async function harness(): Promise<Harness> {
     url: `/auth/magic-link/verify?token=${encodeURIComponent(token)}`,
   });
   const raw = verify.headers['set-cookie'];
-  const cookie = (Array.isArray(raw) ? raw[0]! : raw!).split(';')[0]!;
+  const sessionCookie = (Array.isArray(raw) ? raw[0]! : raw!).split(';')[0]!;
+  // The session and the request token: a browser is handed a page before it
+  // can submit a form, and every write checks the pair (ADR-0021).
+  const { cookies: cookie } = await signedInCookies(app, sessionCookie);
 
   const topicRepo = new DrizzleTopicRepo(db);
   const articleRepo = new DrizzleArticleRepo(db);
@@ -163,12 +167,7 @@ async function insertArticle(input: {
 
 /** Put the signed-in User on a tier, through the application's own switch. */
 async function switchTier(h: Harness, tier: Tier): Promise<void> {
-  await h.app.inject({
-    method: 'POST',
-    url: '/dev/tier',
-    headers: { cookie: h.cookie },
-    payload: { tier },
-  });
+  await submitForm(h.app, h.cookie, '/dev/tier', { tier });
 }
 
 describe('GET /topics/:slug/trends', () => {

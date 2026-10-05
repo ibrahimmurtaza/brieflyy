@@ -5,6 +5,7 @@ import { createApp } from '../app.js';
 import { ConsoleEmailTransport } from '../email/console-transport.js';
 import { createTestDb } from '../testing/test-db.js';
 import { extractMagicLinkToken } from '../testing/email.js';
+import { signedInCookies, submitForm } from '../testing/forms.js';
 import { countRows } from '../testing/db.js';
 import { makeTopic } from '../testing/fixtures.js';
 import {
@@ -50,7 +51,10 @@ async function signInWithTopic(): Promise<Harness> {
     url: `/auth/magic-link/verify?token=${encodeURIComponent(token)}`,
   });
   const setCookie = verify.headers['set-cookie'];
-  const cookie = (Array.isArray(setCookie) ? setCookie[0]! : setCookie!).split(';')[0]!;
+  const sessionCookie = (Array.isArray(setCookie) ? setCookie[0]! : setCookie!).split(';')[0]!;
+  // The session and the request token: a browser is handed a page before it can
+  // submit a form, and all six of these forms check the pair (ADR-0021).
+  const { cookies } = await signedInCookies(app, sessionCookie);
 
   const topicRepo = new DrizzleTopicRepo(db);
   const sourceRepo = new DrizzleSourceRepo(db);
@@ -74,7 +78,7 @@ async function signInWithTopic(): Promise<Harness> {
   await topicRepo.addSource('topic-1', 'wire-reuters');
   await topicRepo.addSource('topic-1', 'wire-ft');
 
-  return { app, cookie, topicRepo, sourceRepo, driver };
+  return { app, cookie: cookies, topicRepo, sourceRepo, driver };
 }
 
 function page(h: Harness, url: string) {
@@ -82,7 +86,7 @@ function page(h: Harness, url: string) {
 }
 
 function post(h: Harness, url: string, payload: Record<string, string>) {
-  return h.app.inject({ method: 'POST', url, headers: { cookie: h.cookie }, payload });
+  return submitForm(h.app, h.cookie, url, payload);
 }
 
 describe('HTTP: /topics/:slug/settings', () => {

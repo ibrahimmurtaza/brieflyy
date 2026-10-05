@@ -6,6 +6,7 @@ import { ConsoleEmailTransport } from '../email/console-transport.js';
 import { INITIAL_TOPIC_COUNT } from '../onboarding/onboarding-service.js';
 import { createTestDb } from '../testing/test-db.js';
 import { extractMagicLinkToken } from '../testing/email.js';
+import { signedInCookies, submitForm } from '../testing/forms.js';
 import {
   deterministicRandom,
   makeTestClock,
@@ -180,7 +181,10 @@ async function signInOn(input: {
   });
   const setCookie = verify.headers['set-cookie'];
   const setCookieText = Array.isArray(setCookie) ? setCookie[0]! : setCookie!;
-  return setCookieText.split(';')[0]!;
+  // The session and the request token: a browser is handed a page before it can
+  // submit a form, and every write checks the pair (ADR-0021).
+  const { cookies } = await signedInCookies(input.app, setCookieText.split(';')[0]!);
+  return cookies;
 }
 
 async function signInFresh(): Promise<{
@@ -215,21 +219,18 @@ async function signInOnboarded(
   cookie: string;
 }> {
   const made = await signInFresh();
-  await made.app.inject({
-    method: 'POST',
-    url: '/onboarding/pick-topics',
-    headers: { cookie: made.cookie },
-    payload: { templateIds: await firstTemplateIds(made.app, count) },
-  });
-  await made.app.inject({
-    method: 'POST',
-    url: '/onboarding/delivery-time',
-    headers: {
-      cookie: made.cookie,
-      'content-type': 'application/x-www-form-urlencoded',
-    },
-    payload: 'hour=8&minute=0&timezone=UTC',
-  });
+  await submitForm(
+    made.app,
+    made.cookie,
+    '/onboarding/pick-topics',
+    { templateIds: await firstTemplateIds(made.app, count) },
+  );
+  await submitForm(
+    made.app,
+    made.cookie,
+    '/onboarding/delivery-time',
+    'hour=8&minute=0&timezone=UTC',
+  );
   return made;
 }
 

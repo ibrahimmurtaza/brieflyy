@@ -1,4 +1,4 @@
-import { test, expect, SIGNED_IN_COOKIE } from './fixtures.js';
+import { test, expect, requestTokenOn, SIGNED_IN_COOKIE } from './fixtures.js';
 import { E2E_TOPIC_SLUG } from './fixture-data.js';
 
 /**
@@ -294,10 +294,17 @@ test.describe('forms', () => {
     // `max="23"`, so the browser's own constraint validation stops an
     // out-of-range number before it is ever sent, and the server's own check is
     // only reachable for a value the controls cannot produce. `page.request`
-    // shares the context's cookies, so this is still the real route with the
-    // real session.
+    // shares the context's cookies, so this is still the real route with the real
+    // session — and it carries the token the page's own form would have carried,
+    // because a write route now refuses a submission that does not.
+    await page.goto('/settings/delivery');
     const response = await page.request.post('/settings/delivery', {
-      form: { hour: '23', minute: '30', timezone: 'Middle/Earth' },
+      form: {
+        hour: '23',
+        minute: '30',
+        timezone: 'Middle/Earth',
+        requestToken: await requestTokenOn(page),
+      },
     });
     expect(response.status()).toBe(400);
     const body = await response.text();
@@ -331,7 +338,7 @@ test.describe('forms', () => {
     // get around what the page will not offer.
     const title = (await held.locator('.title').textContent())?.trim();
     const outcome = await page.request.post('/pick-topics', {
-      form: { templateIds: 'world-news' },
+      form: { templateIds: 'world-news', requestToken: await requestTokenOn(page) },
     });
     expect(outcome.status()).toBe(400);
     expect(await outcome.text()).toContain('already have one of those topics');

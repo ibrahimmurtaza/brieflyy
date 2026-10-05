@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { buildAppHarness, type AppHarness } from '../testing/app-harness.js';
+import { submitForm } from '../testing/forms.js';
 import { makeTopic } from '../testing/fixtures.js';
 import { WIRE_COPIES } from '../testing/story-fixtures.js';
 import { DrizzleTopicRepo } from '../repos/topic-repo.js';
@@ -58,11 +59,7 @@ const FEEDS: Readonly<Record<string, RawFeed>> = {
  * a copy per `describe`, so a change to how a cycle is triggered is one edit.
  */
 function tick(h: AppHarness) {
-  return h.app.inject({
-    method: 'POST',
-    url: '/api/ingest/tick',
-    headers: { cookie: h.cookie },
-  });
+  return submitForm(h.app, h.cookie, '/api/ingest/tick');
 }
 
 function brief(h: AppHarness, slug = 'topic-1', query = '') {
@@ -193,12 +190,12 @@ describe('a Topic filling with Clusters from one ingest cycle', () => {
     await tick(h);
     expect(h.count('clusters')).toBe(2);
 
-    const saved = await h.app.inject({
-      method: 'POST',
-      url: '/topics/topic-1/cluster-window',
-      headers: { cookie: h.cookie },
-      payload: { windowDays: '1' },
-    });
+    const saved = await submitForm(
+      h.app,
+      h.cookie,
+      '/topics/topic-1/cluster-window',
+      { windowDays: '1' },
+    );
     expect(saved.statusCode).toBe(302);
 
     // Both stories are still inside a one-day window, so the count holds; what
@@ -338,11 +335,7 @@ describe('one story two outlets reported, on a Topic that follows one of them', 
   });
 
   it('is one Story for the User, and only the followed outlet in the one Topic', async () => {
-    const resp = await h.app.inject({
-      method: 'POST',
-      url: '/api/ingest/tick',
-      headers: { cookie: h.cookie },
-    });
+    const resp = await tick(h);
     expect(resp.statusCode).toBe(200);
 
     // One Story across both outlets, for both Topics: which outlets reported

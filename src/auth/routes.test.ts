@@ -38,6 +38,7 @@ async function makeTestApp(opts?: {
 
 import { countRows } from '../testing/db.js';
 import { extractMagicLinkToken as extractToken } from '../testing/email.js';
+import { signedInCookies, submitForm } from '../testing/forms.js';
 
 describe('HTTP: /auth/magic-link/request', () => {
   let app: FastifyInstance;
@@ -441,20 +442,19 @@ describe('HTTP: /auth/logout', () => {
     });
     const rawVerifyCookie = verify.headers['set-cookie'];
     const setCookieText = Array.isArray(rawVerifyCookie) ? rawVerifyCookie[0]! : rawVerifyCookie!;
-    const cookie = setCookieText.split(';')[0]!;
+    const sessionCookie = setCookieText.split(';')[0]!;
+    // The session and the request token, because signing out is a state-changing
+    // route like any other and the shell's control carries the pair (ADR-0021).
+    const { cookies } = await signedInCookies(app, sessionCookie);
 
     const before = await app.inject({
       method: 'GET',
       url: '/onboarding/pick-topics',
-      headers: { cookie },
+      headers: { cookie: cookies },
     });
     expect(before.statusCode).toBe(200);
 
-    const logout = await app.inject({
-      method: 'POST',
-      url: '/auth/logout',
-      headers: { cookie },
-    });
+    const logout = await submitForm(app, cookies, '/auth/logout', '');
     expect(logout.statusCode).toBe(302);
     expect(logout.headers.location).toBe('/');
 
@@ -464,7 +464,7 @@ describe('HTTP: /auth/logout', () => {
     const after = await app.inject({
       method: 'GET',
       url: '/onboarding/pick-topics',
-      headers: { cookie },
+      headers: { cookie: cookies },
     });
     expect(after.statusCode).toBe(302);
     expect(after.headers.location).toBe('/signup');

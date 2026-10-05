@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 
 import { createApp } from '../app.js';
+import { REQUEST_TOKEN_FIELD, SESSION_COOKIE_NAME } from '../config.js';
 import { ConsoleEmailTransport } from '../email/console-transport.js';
 import { createTestDb } from '../testing/test-db.js';
 import { extractMagicLinkToken } from '../testing/email.js';
+import { signedInCookies, submitForm } from '../testing/forms.js';
 import {
   deterministicRandom,
   makeTestClock,
@@ -56,9 +58,10 @@ function setCookie(headers: Record<string, unknown>, name: string): string {
   return raw;
 }
 
-/** Every value of `name="requestToken"` on the page, in document order. */
+/** Every value of the token field on the page, in document order. */
 function formTokens(html: string): string[] {
-  return [...html.matchAll(/name="requestToken" value="([^"]+)"/g)].map((m) => m[1]!);
+  const field = new RegExp(`name="${REQUEST_TOKEN_FIELD}" value="([^"]+)"`, 'g');
+  return [...html.matchAll(field)].map((m) => m[1]!);
 }
 
 /** The opening tags of every POST form on the page, in document order. */
@@ -106,27 +109,24 @@ describe('HTTP: the request token', () => {
       method: 'GET',
       url: `/auth/magic-link/verify?token=${encodeURIComponent(magicLink)}`,
     });
-    const sessionCookie = setCookie(verify.headers, 'brieflyy_session').split(';')[0]!;
+    const sessionCookie = setCookie(verify.headers, SESSION_COOKIE_NAME).split(';')[0]!;
+    // The pair, because onboarding is itself a set of writes: a browser is handed
+    // a page before it can submit a form, and the token comes with the first one.
+    const { cookies, token } = await signedInCookies(app, sessionCookie);
 
     const templates = await app.inject({
       method: 'GET',
       url: '/api/onboarding/templates',
     });
-    await app.inject({
-      method: 'POST',
-      url: '/onboarding/pick-topics',
-      headers: { cookie: sessionCookie },
-      payload: {
-        templateIds: (templates.json() as { templates: { id: string }[] }).templates
-          .slice(0, INITIAL_TOPIC_COUNT)
-          .map((t) => t.id),
-      },
+    await submitForm(app, cookies, '/onboarding/pick-topics', {
+      templateIds: (templates.json() as { templates: { id: string }[] }).templates
+        .slice(0, INITIAL_TOPIC_COUNT)
+        .map((t) => t.id),
     });
-    await app.inject({
-      method: 'POST',
-      url: '/onboarding/delivery-time',
-      headers: { cookie: sessionCookie, 'content-type': 'application/x-www-form-urlencoded' },
-      payload: 'hour=8&minute=0&timezone=UTC',
+    await submitForm(app, cookies, '/onboarding/delivery-time', {
+      hour: '8',
+      minute: '0',
+      timezone: 'UTC',
     });
 
     // The Topic and its Cluster, written straight in: what a brief would look
@@ -157,18 +157,10 @@ describe('HTTP: the request token', () => {
       ['story-1' as StoryId],
     );
 
-    const brief = await app.inject({
-      method: 'GET',
-      url: `/topics/${SLUG}`,
-      headers: { cookie: sessionCookie },
-    });
-    const tokenCookie = setCookie(brief.headers, 'brieflyy_request_token');
-    const token = tokenCookie.split('=')[1]!.split(';')[0]!;
-
     h = {
       app,
       sessionCookie,
-      cookies: `${sessionCookie}; brieflyy_request_token=${token}`,
+      cookies,
       token,
     };
   });
@@ -325,14 +317,21 @@ describe('HTTP: the request token', () => {
   });
 
   it('names the token on every signed-in page, not only the brief', async () => {
+    // Every page a signed-in User can be on, and the shell's own sign-out form is
+    // on all of them: a page that rendered without the token would refuse every
+    // submission made from it, including the one that leaves.
     for (const url of [
       '/topics',
       '/pick-topics',
       '/settings/delivery',
+      '/onboarding/welcome',
+      '/upgrade',
       '/discover',
       `/topics/${SLUG}/settings`,
+      `/topics/${SLUG}/trends`,
       '/trends',
       '/archive/search',
+      '/admin/briefs',
       EMAIL_BRIEFS_PATH,
     ]) {
       const resp = await h.app.inject({

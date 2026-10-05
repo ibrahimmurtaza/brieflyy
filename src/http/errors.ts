@@ -1,9 +1,9 @@
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 
 import type { OnboardingService } from '../onboarding/onboarding-service.js';
 import { isJsonSurface } from './access.js';
 import { layout, type ShellAccount } from '../pages/layout.js';
-import { resolveShellAccount } from '../pages/shell.js';
+import { accountForUnaskedPage } from '../pages/shell.js';
 
 /**
  * What an unexpected failure answers.
@@ -43,7 +43,7 @@ export function setApplicationErrorHandler(
     if (isJsonSurface(req.url)) {
       return reply.code(status).send({ error: jsonErrorFor(status) });
     }
-    const account = await accountForFailedRequest(req, opts.onboardingService);
+    const account = await accountForUnaskedPage(req, opts.onboardingService);
     return reply
       .code(status)
       .type('text/html; charset=utf-8')
@@ -101,28 +101,6 @@ function jsonErrorFor(status: number): string {
       return 'rate_limited';
     default:
       return 'bad_request';
-  }
-}
-
-/**
- * The signed-in User for the shell of this page, or null when there is not one.
- *
- * A failure can arrive before the session is resolved — the session lookup is a
- * database read like any other, and can be the thing that fails — so `req.auth` is
- * not a promise. Asking the shell resolver again can fail the same way, and a
- * header is not worth turning one failed request into two.
- */
-async function accountForFailedRequest(
-  req: FastifyRequest,
-  onboardingService: OnboardingService,
-): Promise<ShellAccount | null> {
-  const auth = req.auth;
-  if (!auth) return null;
-  try {
-    return await resolveShellAccount(auth, onboardingService);
-  } catch (err) {
-    req.log.error({ err }, 'the shell could not be resolved for the error page');
-    return null;
   }
 }
 

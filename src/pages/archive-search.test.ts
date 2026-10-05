@@ -6,6 +6,7 @@ import { ConsoleEmailTransport } from '../email/console-transport.js';
 import { createTestDb } from '../testing/test-db.js';
 import type { Db, SqliteDriver } from '../db/client.js';
 import { extractMagicLinkToken } from '../testing/email.js';
+import { signedInCookies, submitForm } from '../testing/forms.js';
 import {
   deterministicRandom,
   makeTestClock,
@@ -58,24 +59,23 @@ async function signInWithArchive(email = 'iris@example.com'): Promise<Harness> {
     url: `/auth/magic-link/verify?token=${encodeURIComponent(token)}`,
   });
   const raw = verify.headers['set-cookie'];
-  const cookie = (Array.isArray(raw) ? raw[0]! : raw!).split(';')[0]!;
+  const sessionCookie = (Array.isArray(raw) ? raw[0]! : raw!).split(';')[0]!;
+  // A browser is handed a page before it can submit a form, and the token on
+  // that page is what every write route now checks (ADR-0021).
+  const { cookies: cookie } = await signedInCookies(app, sessionCookie);
 
   const templates = (
     (await app.inject({ method: 'GET', url: '/api/onboarding/templates' })).json() as {
       templates: { id: string }[];
     }
   ).templates;
-  await app.inject({
-    method: 'POST',
-    url: '/onboarding/pick-topics',
-    headers: { cookie },
-    payload: { templateIds: templates.slice(0, 3).map((t) => t.id) },
+  await submitForm(app, cookie, '/onboarding/pick-topics', {
+    templateIds: templates.slice(0, 3).map((t) => t.id),
   });
-  await app.inject({
-    method: 'POST',
-    url: '/onboarding/delivery-time',
-    headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
-    payload: 'hour=8&minute=0&timezone=UTC',
+  await submitForm(app, cookie, '/onboarding/delivery-time', {
+    hour: '8',
+    minute: '0',
+    timezone: 'UTC',
   });
 
   const userId = (driver.prepare(`SELECT id FROM users LIMIT 1`).get() as { id: string }).id;

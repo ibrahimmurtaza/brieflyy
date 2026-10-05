@@ -7,6 +7,7 @@ import { layout, type ShellAccount } from '../pages/layout.js';
 import { shellAccountFor } from '../pages/shell.js';
 import {
   AUTHENTICATED_ROUTE_CONFIG,
+  AUTHENTICATED_WRITE_ROUTE_CONFIG,
   PUBLIC_ROUTE_CONFIG,
   requireAuthPage,
 } from '../http/access.js';
@@ -62,7 +63,7 @@ export async function registerOnboardingRoutes(
     });
   });
 
-  fastify.post('/onboarding/pick-topics', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
+  fastify.post('/onboarding/pick-topics', AUTHENTICATED_WRITE_ROUTE_CONFIG, async (req, reply) => {
     if (!requireAuthPage(req, reply)) return reply;
     const body = req.body;
     const templateIds = readTemplateIds(body);
@@ -108,7 +109,7 @@ export async function registerOnboardingRoutes(
       );
   });
 
-  fastify.post('/pick-topics', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
+  fastify.post('/pick-topics', AUTHENTICATED_WRITE_ROUTE_CONFIG, async (req, reply) => {
     if (!requireAuthPage(req, reply)) return reply;
     const body = req.body;
     const templateIds = readTemplateIds(body);
@@ -158,7 +159,7 @@ export async function registerOnboardingRoutes(
 
   fastify.post<{ Params: { slug: string } }>(
     '/pick-topics/remove',
-    AUTHENTICATED_ROUTE_CONFIG,
+    AUTHENTICATED_WRITE_ROUTE_CONFIG,
     async (req, reply) => {
       if (!requireAuthPage(req, reply)) return reply;
       const body = (req.body ?? {}) as Record<string, unknown>;
@@ -186,7 +187,7 @@ export async function registerOnboardingRoutes(
     },
   );
 
-  fastify.post('/onboarding/delivery-time', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
+  fastify.post('/onboarding/delivery-time', AUTHENTICATED_WRITE_ROUTE_CONFIG, async (req, reply) => {
     if (!requireAuthPage(req, reply)) return reply;
     const body = (req.body ?? {}) as Record<string, unknown>;
     const submitted = readSubmittedDeliveryTime(body);
@@ -235,7 +236,7 @@ export async function registerOnboardingRoutes(
       );
   });
 
-  fastify.post('/settings/delivery', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
+  fastify.post('/settings/delivery', AUTHENTICATED_WRITE_ROUTE_CONFIG, async (req, reply) => {
     if (!requireAuthPage(req, reply)) return reply;
     const body = (req.body ?? {}) as Record<string, unknown>;
     const submitted = readSubmittedDeliveryTime(body);

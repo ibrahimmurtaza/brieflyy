@@ -10,7 +10,7 @@ import {
 import type { AuthService, CompleteGoogleFailure, CurrentAuth } from './auth-service.js';
 import { emailSchema, googleCallbackPath, makeGoogleCallbackUrl } from './auth-service.js';
 import { postSigninPath } from './post-signin.js';
-import { PUBLIC_ROUTE_CONFIG } from '../http/access.js';
+import { PUBLIC_ROUTE_CONFIG, PUBLIC_WRITE_ROUTE_CONFIG } from '../http/access.js';
 import type { FixedWindowRateLimiter } from '../http/rate-limit.js';
 import { hashOauthState } from '../domain/crypto.js';
 import { escapeHtml } from '../domain/html.js';
@@ -183,7 +183,17 @@ export async function registerAuthRoutes(
     },
   );
 
-  fastify.post('/auth/logout', PUBLIC_ROUTE_CONFIG, async (req, reply) => {
+  /**
+   * Signing out.
+   *
+   * Public, because a signed-out User asking to be signed out is not a thing that
+   * can fail — but a state change all the same, and the only one that spends
+   * nothing to be expensive: a page on another site could submit this form and
+   * end a User's session without touching anything else of theirs. So it sits
+   * behind the cross-site guard like every other write, and the shell's sign-out
+   * form carries the token it checks (ADR-0021).
+   */
+  fastify.post('/auth/logout', PUBLIC_WRITE_ROUTE_CONFIG, async (req, reply) => {
     const sessionId = readSessionCookie(req);
     if (sessionId) {
       await authService.destroySession(sessionId);

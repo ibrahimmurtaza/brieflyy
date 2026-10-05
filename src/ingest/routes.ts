@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 
-import { AUTHENTICATED_ROUTE_CONFIG, requireAuth } from '../http/access.js';
+import { AUTHENTICATED_ROUTE_CONFIG, AUTHENTICATED_WRITE_ROUTE_CONFIG, requireAuth } from '../http/access.js';
 import { escapeHtml } from '../domain/html.js';
 import { factValue, renderStatusDashboard } from '../pages/status-dashboard.js';
 import type { ShellAccount } from '../pages/layout.js';
@@ -54,25 +54,33 @@ export async function registerIngestRoutes(
     return reply.type('text/html; charset=utf-8').send(html);
   });
 
-  fastify.post('/api/ingest/tick', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
-    if (!requireAuth(req, reply, { json: true })) return reply;
-    const report = await scheduler.tick();
-    return reply.send({
-      cycleId: report.cycleId,
-      startedAt: report.startedAt.toISOString(),
-      finishedAt: report.finishedAt.toISOString(),
-      totals: report.totals,
-      sources: report.sources.map((r) => ({
-        sourceId: r.sourceId,
-        success: r.success,
-        fetched: r.fetched,
-        inserted: r.inserted,
-        merged: r.merged,
-        storiesAffected: r.storiesAffected,
-        error: r.error ?? null,
-      })),
-    });
-  });
+  fastify.post(
+    '/api/ingest/tick',
+    // Guarded like every other write, even though no page submits it: the route
+    // runs a whole ingest cycle against a User's session, and a caller that wants
+    // it can fetch a page and echo the token rather than relying on the session
+    // cookie's `SameSite` being enough (ADR-0022).
+    AUTHENTICATED_WRITE_ROUTE_CONFIG,
+    async (req, reply) => {
+      if (!requireAuth(req, reply, { json: true })) return reply;
+      const report = await scheduler.tick();
+      return reply.send({
+        cycleId: report.cycleId,
+        startedAt: report.startedAt.toISOString(),
+        finishedAt: report.finishedAt.toISOString(),
+        totals: report.totals,
+        sources: report.sources.map((r) => ({
+          sourceId: r.sourceId,
+          success: r.success,
+          fetched: r.fetched,
+          inserted: r.inserted,
+          merged: r.merged,
+          storiesAffected: r.storiesAffected,
+          error: r.error ?? null,
+        })),
+      });
+    },
+  );
 }
 
 function renderDashboard(

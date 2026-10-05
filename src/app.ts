@@ -14,6 +14,7 @@ import { applyDirectorySeed } from './directory/seed.js';
 import { attachRouteManifest } from './http/access.js';
 import { setApplicationErrorHandler } from './http/errors.js';
 import { installRequestToken } from './http/request-token.js';
+import { installWriteGuard } from './http/write-guard.js';
 import { FixedWindowRateLimiter } from './http/rate-limit.js';
 import { DrizzleAccountRepo } from './repos/account-repo.js';
 import { DrizzleArticleRepo } from './repos/article-repo.js';
@@ -286,6 +287,13 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     clock,
     random: opts.random ?? nodeRandom,
   });
+
+  // Every state-changing route sits behind the cross-site guard, and the guard is
+  // one hook reading what each route declared rather than a line in each of them:
+  // a route cannot forget to check the token, and the guard test fails the build
+  // for a route that forgets to declare that it changes anything. Registered
+  // before any route so `onRoute` has seen every one of them.
+  installWriteGuard(app, { onboardingService });
 
   const clusterFormationService = new ClusterFormationService({
     storyRepo,
