@@ -306,6 +306,31 @@ CREATE TABLE IF NOT EXISTS brief_job_runs (
   discarded_bullets INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS brief_job_runs_started_at_idx ON brief_job_runs (started_at);
+
+CREATE TABLE IF NOT EXISTS checkout_references (
+  reference TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS checkout_references_user_idx ON checkout_references (user_id);
+
+CREATE TABLE IF NOT EXISTS payment_events (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  received_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS payment_events_user_idx ON payment_events (user_id);
+
+CREATE TABLE IF NOT EXISTS subscriptions (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  subscription_ref TEXT NOT NULL,
+  customer_ref TEXT NOT NULL,
+  started_at INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS subscriptions_user_unique ON subscriptions (user_id);
 `;
 
 /**

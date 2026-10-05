@@ -8,6 +8,11 @@ several findings here are closed. Nothing below was re-verified as part of the
 documentation reconciliation in #52, because a dated audit is allowed to be a
 dated audit.
 
+One finding has since been overtaken rather than merely drifted: `/upgrade` used
+to carry no `<form>` because there was no checkout to submit one to, and it now
+carries one wherever a PaymentProvider is configured (ADR-0023). The invariant in
+C2 below still holds, scoped to an instance that takes no payments.
+
 **Date:** 2026-09-29 · **Branch:** `feature/14-archive-search` · **Base commit:** `e825016`
 **Scope:** Read-only when written. Phase 1 and the Phase 2 foundation were
 implemented afterwards; see §8 for the six decisions and what each one became.

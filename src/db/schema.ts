@@ -819,6 +819,86 @@ export const archiveItems = sqliteTable(
   }),
 );
 
+/**
+ * One Checkout this application started, named by the reference it minted.
+ *
+ * The primary key is the reference rather than a generated id because the
+ * reference *is* the thing: it is what travels to the PaymentProvider and what a
+ * completed event comes back naming, so a row whose key were anything else would
+ * be a row that has to be found before it can be trusted. One User may hold many —
+ * a Checkout that is abandoned leaves its row behind, which is the honest record
+ * that it was started — and the cascade is what takes them when the User goes.
+ */
+export const checkoutReferences = sqliteTable(
+  'checkout_references',
+  {
+    reference: text('reference').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    userIdx: index('checkout_references_user_idx').on(t.userId),
+  }),
+);
+
+/**
+ * One event the payment provider sent, once it has been acted on.
+ *
+ * The provider's own event id is the primary key, and that is the whole
+ * single-use property: a replayed event cannot be recorded twice because the
+ * insert fails, rather than because something read a flag first and wrote an
+ * answer to a race. The same arrangement the unsubscribe token has, for the same
+ * reason.
+ */
+export const paymentEvents = sqliteTable(
+  'payment_events',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    kind: text('kind', { enum: ['checkout_completed'] }).notNull(),
+    receivedAt: integer('received_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    userIdx: index('payment_events_user_idx').on(t.userId),
+  }),
+);
+
+/**
+ * What a User is paying for, under `subscriptions`.
+ *
+ * One row per User, enforced rather than assumed: a second Checkout completes for
+ * a User who already has one, and two rows would leave the question of which
+ * provider subscription decides the tier with no answer. Written on every
+ * accepted event, so it is refreshed rather than only created, and kept up to date
+ * without asking the provider again.
+ */
+export const subscriptions = sqliteTable(
+  'subscriptions',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** Which provider this was learned from, so two can never be confused. */
+    provider: text('provider').notNull(),
+    subscriptionRef: text('subscription_ref').notNull(),
+    customerRef: text('customer_ref').notNull(),
+    startedAt: integer('started_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    userUnique: uniqueIndex('subscriptions_user_unique').on(t.userId),
+  }),
+);
+
+export type CheckoutReferenceRow = typeof checkoutReferences.$inferSelect;
+export type NewCheckoutReferenceRow = typeof checkoutReferences.$inferInsert;
+export type PaymentEventRow = typeof paymentEvents.$inferSelect;
+export type SubscriptionRow = typeof subscriptions.$inferSelect;
+
 export type ArchiveItemRow = typeof archiveItems.$inferSelect;
 export type NewArchiveItemRow = typeof archiveItems.$inferInsert;
 

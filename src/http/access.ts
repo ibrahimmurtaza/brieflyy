@@ -9,6 +9,7 @@ import type {
 import { layout } from '../pages/layout.js';
 import type { CurrentAuth } from '../auth/auth-service.js';
 import { UNSUBSCRIBE_ALL_PATH, UNSUBSCRIBE_TOPIC_PATH } from '../services/unsubscribe-links.js';
+import { BILLING_WEBHOOK_PATH } from '../billing/paths.js';
 
 /**
  * How much of the application a route exposes. Every route declares one, and
@@ -40,6 +41,14 @@ export const PUBLIC_ROUTES: ReadonlySet<string> = new Set([
   `POST ${UNSUBSCRIBE_TOPIC_PATH}`,
   `GET ${UNSUBSCRIBE_ALL_PATH}`,
   `POST ${UNSUBSCRIBE_ALL_PATH}`,
+  // The payment provider telling Brieflyy a Checkout completed. Public for the
+  // same reason the magic link is: the provider is not signed in and cannot be,
+  // so it authorises by signature over the bytes it sent rather than by a
+  // session. Named here, with the route named in `WRITE_GUARD_EXEMPTIONS` and the
+  // reasoning in `docs/adr/`, because a public route that moves a User onto the
+  // paid tier is the one place in the application where "reachable without a
+  // session" has to be a decision somebody wrote down rather than a default.
+  `POST ${BILLING_WEBHOOK_PATH}`,
 ]);
 
 declare module 'fastify' {
@@ -110,6 +119,10 @@ export const PUBLIC_WRITE_ROUTE_CONFIG: RouteShorthandOptions = {
  *   page carries the field. It spends no session either — it writes a row an
  *   emailed token will one day be spent on, for an address the caller supplied —
  *   and the per-address and per-caller rate limits are what stand in front of it.
+ * - The payment provider's webhook is a server calling a URL, with no session and
+ *   no Brieflyy document anywhere in the exchange. The signature over the raw body
+ *   is the authorisation, checked before a byte of the payload is read, and the
+ *   reference the event names is one this application minted — see ADR-0023.
  *
  * Nothing else is exempt. An operator surface called by a script is still a write
  * against a User's session, and `POST /api/ingest/tick` runs a whole ingest cycle
@@ -128,6 +141,10 @@ export const WRITE_GUARD_EXEMPTIONS: ReadonlyMap<string, string> = new Map([
   [
     `POST ${UNSUBSCRIBE_ALL_PATH}`,
     'a one-click mail client: the token in the URL is the authorisation and there is no page',
+  ],
+  [
+    `POST ${BILLING_WEBHOOK_PATH}`,
+    'the payment provider is not a browser and has no Brieflyy page to carry a field; the signature over the raw body is the authorisation',
   ],
 ]);
 

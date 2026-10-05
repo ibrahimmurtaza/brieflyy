@@ -49,6 +49,29 @@ import {
   requireAuthPage,
 } from '../http/access.js';
 import { requestTokenInput } from '../http/request-token.js';
+import {
+  CHECKOUT_CANCELLED_VALUE,
+  CHECKOUT_PATH,
+  CHECKOUT_RETURNED_VALUE,
+} from '../billing/paths.js';
+import type { BillingService } from '../billing/billing-service.js';
+
+/**
+ * Where the hosted checkout left the User, as the page reads it.
+ *
+ * Two answers rather than a boolean, because the third case is not a state
+ * anybody reaches: the query string is written by the provider's redirect and by
+ * whatever else might have put one there, so an unrecognised value is no answer
+ * at all rather than a reason to say something about a payment that did not
+ * happen.
+ */
+type CheckoutReturn = 'complete' | 'cancelled';
+
+function checkoutReturn(value: string | undefined): CheckoutReturn | null {
+  if (value === CHECKOUT_RETURNED_VALUE) return 'complete';
+  if (value === CHECKOUT_CANCELLED_VALUE) return 'cancelled';
+  return null;
+}
 
 export interface PageRoutesOptions {
   readonly appBaseUrl: string;
@@ -106,6 +129,13 @@ export interface PageRoutesOptions {
    * disagree.
    */
   readonly googleSignInAvailable: boolean;
+  /**
+   * Whether this instance can take a payment, and where the hosted checkout comes
+   * from — asked here rather than read out of configuration, so the button the
+   * upgrade page offers and the route behind it cannot disagree. The same shape
+   * as `googleSignInAvailable` above, for the same reason (ADR-0019).
+   */
+  readonly billingService: BillingService;
 }
 
 export async function registerPageRoutes(
@@ -349,22 +379,30 @@ export async function registerPageRoutes(
     },
   );
 
-  fastify.get('/upgrade', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
-    if (!requireAuthPage(req, reply)) return reply;
-    // Both paywall surfaces link here, so this has to be a real page. Billing is
-    // not connected yet, and saying so beats a checkout that cannot work.
-    const topics = await onboardingService.listTopics(req.auth.user.id);
-    return reply
-      .type('text/html')
-      .send(
-        upgradePage({
-          account: await shellFor(req),
-          topicCount: topics.length,
-          tier: resolveTier(req.auth.user),
-          requestToken: req.requestToken ?? null,
-        }),
-      );
-  });
+  fastify.get<{ Querystring: { checkout?: string } }>(
+    '/upgrade',
+    AUTHENTICATED_ROUTE_CONFIG,
+    async (req, reply) => {
+      if (!requireAuthPage(req, reply)) return reply;
+      // Both paywall surfaces link here, so this has to be a real page. What it
+      // offers is the deployment's to decide, so the checkout and the question of
+      // whether this instance can take one are both asked of the BillingService
+      // rather than read out of configuration here.
+      const topics = await onboardingService.listTopics(req.auth.user.id);
+      return reply
+        .type('text/html')
+        .send(
+          upgradePage({
+            account: await shellFor(req),
+            topicCount: topics.length,
+            tier: resolveTier(req.auth.user),
+            checkoutAvailable: opts.billingService.checkoutAvailable(),
+            returned: checkoutReturn(req.query.checkout),
+            requestToken: req.requestToken ?? null,
+          }),
+        );
+    },
+  );
 
   fastify.get<{ Querystring: Record<string, unknown> }>(
     ARCHIVE_SEARCH_PATH,
@@ -1341,6 +1379,10 @@ function upgradePage(input: {
   account: ShellAccount;
   topicCount: number;
   tier: Tier;
+  /** Whether this instance can take a payment at all. Asked of the BillingService. */
+  checkoutAvailable: boolean;
+  /** Where the hosted checkout left the User, when it just did. */
+  returned?: CheckoutReturn | null;
   readonly requestToken?: string | null;
 }): string {
   const used = input.topicCount === 1 ? '1 topic' : `${input.topicCount} topics`;
@@ -1353,9 +1395,6 @@ function upgradePage(input: {
   const priceHtml = alreadyPaid
     ? '<p class="price"><strong>Paid &middot; $15 / month</strong></p>'
     : '<p class="price"><strong>$15 / month</strong></p>';
-  // Deliberately no form: nothing on this page can be submitted, because there
-  // is no checkout to submit it to. The sign-out control lives in the header,
-  // which is the only form this document contains.
   return layout({
     title: 'Upgrade to paid',
     width: 'form',
@@ -1364,12 +1403,71 @@ function upgradePage(input: {
     body: `    <h1>${headline}</h1>
     ${priceHtml}
     <p>Paid Brieflyy includes unlimited topics, indefinite archive retention, and the full trends view.</p>
-    <div class="callout callout--paywall">
-      <p><strong>Billing isn't connected yet.</strong></p>
-      <p>There is nothing to pay with on this page today, so it is not a checkout. It will become one when payments are wired up. Until then free Brieflyy covers 3 topics, and you are using ${used}.</p>
-    </div>
-    <p class="actions"><a class="button" href="/topics">Back to your topics</a></p>`,
+${checkoutBlock({
+      state: alreadyPaid ? 'already_paid' : input.checkoutAvailable ? 'checkout' : 'unconfigured',
+      used,
+      token: input.requestToken ?? null,
+    })}${returnedBlock(input.returned ?? null)}    <p class="actions"><a class="button" href="/topics">Back to your topics</a></p>`,
   });
+}
+
+/**
+ * The part of the upgrade page that either starts a payment or says why it cannot.
+ *
+ * Three answers, and only one of them is a form. An instance with no PaymentProvider
+ * gets the same honest sentence it gave before payments existed, rather than a
+ * button that would be refused — the Google sign-in page makes the same distinction
+ * between "not configured here" and "configured and you chose not to", and a
+ * checkout that could not possibly work is worse than one that is plainly absent.
+ */
+function checkoutBlock(input: {
+  readonly state: 'checkout' | 'unconfigured' | 'already_paid';
+  readonly used: string;
+  readonly token: string | null;
+}): string {
+  if (input.state === 'already_paid') return '';
+  if (input.state === 'checkout') {
+    // The request token is what makes this a Brieflyy submission rather than
+    // something a page elsewhere caused (ADR-0021), so the form carries the same
+    // hidden field every other form on every other page carries.
+    return `    <form method="post" action="${CHECKOUT_PATH}">
+      ${requestTokenInput(input.token ?? '')}
+      <button class="button button--primary" type="submit">Upgrade to paid</button>
+    </form>
+    <p class="muted">You will pay on a secure checkout page, and can cancel there. Until then free Brieflyy covers 3 topics, and you are using ${input.used}.</p>
+`;
+  }
+  return `    <div class="callout callout--paywall">
+      <p><strong>Billing isn't connected yet.</strong></p>
+      <p>There is nothing to pay with on this page today, so it is not a checkout. Until then free Brieflyy covers 3 topics, and you are using ${input.used}.</p>
+    </div>
+`;
+}
+
+/**
+ * What the hosted checkout left the User with, if it is the page they came back to.
+ *
+ * Both answers are true regardless of what the User's tier says now, because the
+ * event that moves the tier arrives on the provider's schedule and not on theirs:
+ * a User who has just paid is told their payment went through rather than being
+ * shown a plan they have not been switched to yet and left to guess.
+ */
+function returnedBlock(returned: CheckoutReturn | null): string {
+  if (returned === 'complete') {
+    return `    <div class="callout callout--success" role="status">
+      <p><strong>Payment received.</strong></p>
+      <p>Paid Brieflyy is being switched on for your account now. If your plan still says Free in a moment, refresh this page.</p>
+    </div>
+`;
+  }
+  if (returned === 'cancelled') {
+    return `    <div class="callout" role="status">
+      <p><strong>Checkout cancelled.</strong></p>
+      <p>You have not been charged, and your plan has not changed.</p>
+    </div>
+`;
+  }
+  return '';
 }
 
 function homePage(input: {

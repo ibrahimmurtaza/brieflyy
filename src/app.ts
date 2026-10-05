@@ -77,6 +77,10 @@ import { DrizzleTrendsRepo } from './repos/trends-repo.js';
 import { UnsubscribeService } from './services/unsubscribe-service.js';
 import { registerUnsubscribeRoutes } from './services/unsubscribe-routes.js';
 import { registerTierRoutes } from './billing/tier-routes.js';
+import { BillingService } from './billing/billing-service.js';
+import { registerBillingRoutes } from './billing/billing-routes.js';
+import { DrizzleBillingRepo } from './repos/billing-repo.js';
+import type { PaymentProvider } from './domain/payment.js';
 import type { FeedFetcher } from './ingest/feed-fetcher.js';
 
 export interface CreateAppOptions {
@@ -146,6 +150,17 @@ export interface CreateAppOptions {
    * construction, so there is nothing to fail and nothing to report.
    */
   readonly llmSummaryClient?: LLMSummaryClient | undefined;
+  /**
+   * Somebody a User can pay through.
+   *
+   * The caller's to hold, for the same reason the summary client is: whether a
+   * deployment can take money is a decision about the deployment. With none, the
+   * upgrade page offers no checkout and the routes behind it refuse with a page
+   * naming what is missing, which is the shape ADR-0019 settled for Google —
+   * a surface that changed shape with a deployment variable would be a surface the
+   * route guard could not check.
+   */
+  readonly paymentProvider?: PaymentProvider | undefined;
   /**
    * How many Clusters of a brief are written rather than quoted. Absent means
    * the shared default, which is five; zero turns the written path off without
@@ -399,6 +414,19 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
       : { intervalMs: opts.trendsIntervalMs }),
   });
 
+  // What a User's payment bought. Built here because the upgrade page, the route
+  // that starts a Checkout and the webhook that reports one completed are three
+  // readers of the same rule, and a route that reached past it for the reference it
+  // was given would be a route able to move a User's tier on its own.
+  const billingService = new BillingService({
+    repo: new DrizzleBillingRepo(opts.db),
+    userRepo,
+    provider: opts.paymentProvider,
+    appBaseUrl: opts.appBaseUrl,
+    clock,
+    random: opts.random ?? nodeRandom,
+  });
+
   // What one of a User's own Topics is set to: how often it briefs, what it reads
   // from, and what it is called. Built here rather than at the routes because the
   // six forms that submit these answers and the page that offers them have to
@@ -472,6 +500,7 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     trendsService,
     archiveSearchService,
     googleSignInAvailable,
+    billingService,
   });
 
   // One Topic's settings, as its own workflow: the page and the six forms on it
@@ -497,6 +526,10 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     onboardingService,
     clock,
   });
+
+  // Registered with the rest of the routes rather than with the pages: the
+  // checkout is a page's write, and the webhook is nothing but a provider's.
+  await registerBillingRoutes(app, { billingService, onboardingService });
 
   // Registered with the rest of the routes rather than with the pages: these are
   // the links a brief carries, and they are public.

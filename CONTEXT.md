@@ -179,6 +179,21 @@ _Avoid_: popularity, buzz, score
 **Not built**: realtime briefs. There is no realtime anything: a brief goes out when the User's DeliveryTime arrives and is answered for, and no tier changes that.
 _Avoid_: free plan, basic
 
-**PaidTier**: Unlimited Topics, indefinite Archive retention, BriefSnapshots retained forever, full trends history. The trends layer is the paid differentiator.
-**Not built**: billing, and so the price. $15/mo is what the upgrade page says; there is no provider behind it, and the only way onto this tier is the development-only `POST /dev/tier`, which is registered only when `DEV_TOOLS_ENABLED` is set — off by default, and a production instance is expected to leave it off.
+**PaidTier**: Unlimited Topics, indefinite Archive retention, BriefSnapshots retained forever, full trends history. The trends layer is the paid differentiator. Reached by paying, or by the development-only `POST /dev/tier` — the only way a User moves back down.
 _Avoid_: pro, premium
+
+**PaymentProvider**: Somebody a User pays through, currently only Stripe. It is the sole door money comes in by: a hosted **Checkout** to start one, and a **Payment event** saying one completed. Whether one is configured is a property of the deployment — an instance with none offers no checkout and the route behind it refuses, in the same shape as **Provider** above (ADR-0019). Distinct from Provider, which is about identity and never about money.
+_Avoid_: gateway, payment processor, billing provider
+
+**Checkout**: The hosted page a User actually pays on. Brieflyy sends a User there and takes them back to its own upgrade page; the card number is entered on the PaymentProvider's page and never reaches this application. One is started by `POST /billing/checkout`, which mints a **Checkout reference** and stores it first, so that a completed Checkout always names something Brieflyy issued.
+_Avoid_: payment form, order, basket
+
+**Checkout reference**: An opaque value Brieflyy minted when it started a Checkout, stored against the User and carried to the PaymentProvider, which is what tells this application which User a completed Checkout was for. Never a User id, and never anything read out of an event: a signed event about somebody else's Checkout resolves to a reference this application does not hold, and to nothing else.
+_Avoid_: session id, order id, metadata
+
+**Payment event**: A signed message from the PaymentProvider saying a Checkout completed. Its own id is the replay key — the provider's identifier, and the primary key of the table that records what was acted on — so one event is one grant and a replay is refused rather than applied again. Nothing in it is believed because it arrived; the signature is what authorises it, and the User comes from the Checkout reference. An event of a kind Brieflyy does not act on is acknowledged and dropped.
+_Avoid_: callback, webhook payload, notification
+
+**Subscription**: What a User is paying the PaymentProvider for, stored under `subscriptions` as the provider's own names for the payer and the subscription, so naming it later is a read rather than a round trip. One per User, enforced by a unique index. It is the record behind `users.tier`, which stays the fact every paywall reads.
+**Not built**: cancelling one. There is no state column, so a row is exactly the claim "this User is paying"; an ended subscription is still a subscribed row, which is wrong the moment one exists. Nothing here has to change to add it — a provider event naming a cancellation, a column, and the tier write that follows. See ADR-0023.
+_Avoid_: plan, membership, billing account

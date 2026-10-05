@@ -509,6 +509,69 @@ export interface FeedbackEvent {
 }
 
 /**
+ * The one thing this application acts on when the PaymentProvider says something.
+ *
+ * A value rather than a bare string so a stored row and a signed event cannot
+ * disagree about what one of them is, and so an event of a kind this application
+ * has never heard of is a refusal rather than a row nobody can read back.
+ */
+export type PaymentEventKind = 'checkout_completed';
+
+/**
+ * A Checkout reference Brieflyy minted, and the User it belongs to.
+ *
+ * The reference rather than the User id is what travels to the PaymentProvider,
+ * because a value the application issued is the only kind of value it can
+ * recognise as its own. Nothing about a signed event is taken on trust except its
+ * signature, and the signature says the provider sent it — not that this
+ * application asked for it, which is what the row records.
+ *
+ * Written when a Checkout is started and never edited, so a User may hold several
+ * and only the one whose completed event arrives names them.
+ */
+export interface CheckoutReference {
+  readonly reference: string;
+  readonly userId: UserId;
+  readonly createdAt: Date;
+}
+
+/**
+ * What a User is paying the PaymentProvider for, kept so a later read does not
+ * have to ask.
+ *
+ * `users.tier` is the fact every paywall reads and is set the moment an event is
+ * accepted; this row is what the provider calls the same thing, so naming it,
+ * showing it or ending it never needs a round trip. One per User, and no state
+ * column: the row existing is what "paying" means here, and a cancellation is not
+ * something this application can be told about yet.
+ */
+export interface Subscription {
+  readonly id: string;
+  readonly userId: UserId;
+  readonly provider: string;
+  /** The provider's own name for it, which this application never parses. */
+  readonly subscriptionRef: string;
+  /** The provider's own name for the payer. */
+  readonly customerRef: string;
+  readonly startedAt: Date;
+}
+
+/**
+ * One event from the PaymentProvider, once it has been acted on.
+ *
+ * `id` is the provider's own identifier for the event and the primary key, so a
+ * replayed event cannot be recorded twice: the insert fails rather than writing
+ * a second row, which is what makes "one event is one grant" a property of the
+ * database instead of a check somebody has to remember.
+ */
+export interface RecordedPaymentEvent {
+  readonly id: string;
+  readonly userId: UserId;
+  readonly kind: PaymentEventKind;
+  readonly receivedAt: Date;
+}
+
+/**
  * The 7d observation window and the 30d baseline it is compared against.
  *
  * Both bounds are half-open and they meet: the baseline ends where the

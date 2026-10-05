@@ -7,6 +7,8 @@ import { createApp } from './app.js';
 import { createEmailTransport } from './email/index.js';
 import { loadServerConfig } from './env.js';
 import { GoogleOAuthClient } from './oauth/google-client.js';
+import { createStripePaymentProvider } from './billing/stripe-payment-provider.js';
+import { systemClock } from './domain/clock.js';
 import { HttpFeedFetcher } from './ingest/http-feed-fetcher.js';
 import { systemHttpClient } from './ingest/system-http-client.js';
 import { createLLMSummaryClient } from './services/llm-summary-service.js';
@@ -44,6 +46,18 @@ async function main(): Promise<void> {
     });
   }
 
+  // Somebody to pay, or nobody at all. Held here rather than built by `createApp`
+  // for the reason the written-summary client is: whether this deployment takes
+  // payments is a decision about the deployment. With no credential the provider is
+  // nothing, the upgrade page offers no checkout and the routes behind it refuse
+  // — a complete configuration rather than a degraded one.
+  const paymentProvider = createStripePaymentProvider({
+    secretKey: config.stripeSecretKey,
+    webhookSecret: config.stripeWebhookSecret,
+    priceId: config.stripePaidPriceId,
+    clock: systemClock,
+  });
+
   let feedFetcher: FeedFetcher | undefined;
   if (config.ingestEnabled) {
     feedFetcher = new HttpFeedFetcher({ http: systemHttpClient });
@@ -60,6 +74,7 @@ async function main(): Promise<void> {
     feedFetcher,
     devToolsEnabled: config.devToolsEnabled,
     ...(llmSummaryClient ? { llmSummaryClient } : {}),
+    ...(paymentProvider ? { paymentProvider } : {}),
     briefMaxClusters: config.briefMaxClusters,
     briefGeneratedClusters: config.briefGeneratedClusters,
     briefGenerationBudgetMs: config.briefGenerationBudgetMs,

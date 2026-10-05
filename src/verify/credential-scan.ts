@@ -23,6 +23,8 @@ const PROVIDER_PATTERNS: readonly CredentialPattern[] = [
   { rule: 'Google OAuth client secret', pattern: /\bGOCSPX-[A-Za-z0-9_-]{10,}/ },
   { rule: 'Google API key', pattern: /\bAIza[0-9A-Za-z_-]{30,}/ },
   { rule: 'Resend API key', pattern: /\bre_[0-9A-Za-z]{16,}/ },
+  { rule: 'Stripe secret key', pattern: /\b[sr]k_live_[A-Za-z0-9]{16,}/ },
+  { rule: 'Stripe webhook signing secret', pattern: /\bwhsec_[A-Za-z0-9]{32,}/ },
   { rule: 'AWS access key id', pattern: /\bAKIA[0-9A-Z]{16}\b/ },
   { rule: 'GitHub token', pattern: /\bgh[pousr]_[A-Za-z0-9]{20,}/ },
   { rule: 'Slack token', pattern: /\bxox[abprs]-[A-Za-z0-9-]{10,}/ },

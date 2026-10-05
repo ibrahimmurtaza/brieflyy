@@ -101,6 +101,9 @@ describe('configuration surface', () => {
       'OPENAI_API_URL',
       'PORT',
       'RESEND_API_KEY',
+      'STRIPE_PAID_PRICE_ID',
+      'STRIPE_SECRET_KEY',
+      'STRIPE_WEBHOOK_SECRET',
       'TRUST_PROXY',
     ]);
   });

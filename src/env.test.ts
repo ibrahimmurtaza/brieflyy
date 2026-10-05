@@ -303,6 +303,39 @@ describe('loadServerConfig', () => {
     ).toBe('re_x');
   });
 
+  it('takes payments when all three payment variables are set', () => {
+    const config = loadServerConfig({
+      ...MINIMAL,
+      STRIPE_SECRET_KEY: 'sk_x',
+      STRIPE_WEBHOOK_SECRET: 'whsec_x',
+      STRIPE_PAID_PRICE_ID: 'price_x',
+    });
+    expect(config.stripeSecretKey).toBe('sk_x');
+    expect(config.stripeWebhookSecret).toBe('whsec_x');
+    expect(config.stripePaidPriceId).toBe('price_x');
+  });
+
+  it('takes no payments when none of them is set', () => {
+    // A complete configuration rather than a broken one: an instance that takes no
+    // payments is a free Brieflyy, and the page says so rather than failing.
+    const config = loadServerConfig(MINIMAL);
+    expect(config.stripeSecretKey).toBeUndefined();
+    expect(config.stripeWebhookSecret).toBeUndefined();
+    expect(config.stripePaidPriceId).toBeUndefined();
+  });
+
+  it('refuses to boot on half-configured payments, naming what is missing', () => {
+    // The alternative is an instance that boots, serves a page offering a
+    // checkout, and refuses it when the User presses the button — so this is
+    // checked where a wrong setting is still only a startup failure.
+    expect(() =>
+      loadServerConfig({ ...MINIMAL, STRIPE_SECRET_KEY: 'sk_x' }),
+    ).toThrow(/STRIPE_WEBHOOK_SECRET and STRIPE_PAID_PRICE_ID/);
+    expect(() =>
+      loadServerConfig({ ...MINIMAL, STRIPE_SECRET_KEY: 'sk_x', STRIPE_WEBHOOK_SECRET: 'whsec_x' }),
+    ).toThrow(/STRIPE_PAID_PRICE_ID/);
+  });
+
   it('fails at boot, naming the variable, when a value is not recognised', () => {
     const cases: Record<string, string> = {
       EMAIL_TRANSPORT: 'mailgun',
