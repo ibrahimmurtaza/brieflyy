@@ -3,6 +3,7 @@ import type { DeliverySlot } from '../domain/delivery-slot.js';
 import type { Tier } from '../domain/types.js';
 import { requestTokenInput } from '../http/request-token.js';
 import { EMAIL_BRIEFS_PATH } from '../services/unsubscribe-links.js';
+import { BILLING_SETTINGS_PATH } from '../billing/paths.js';
 import { formatHumanTime } from './human-time.js';
 import { STYLESHEET } from './styles.js';
 
@@ -117,7 +118,14 @@ export interface LayoutInput {
  * "Trends" is here because the trends view is a paid differentiator, and a
  * differentiator nobody can find is not one. It is the across-your-topics page
  * rather than a per-Topic one, because the navigation has no Topic to be relative
- * to; the per-Topic trends page is reached from the LivingBrief and from this one.
+* to; the per-Topic trends page is reached from the LivingBrief and from this one.
+ *
+ * "Delivery time" and "Billing" are here together because they are the two answers
+ * about the account rather than about its contents, and a User who wants to change
+ * something about what they are paying for should not have to find it by following
+ * a paywall. Billing is the surface that says the plan, the renewal date and how to
+ * stop it; leaving it out made a cancellation something a User could only perform on
+ * the provider's own site.
  */
 export const PRIMARY_NAV: readonly NavLink[] = [
   { href: '/topics', label: 'Topics' },
@@ -127,6 +135,7 @@ export const PRIMARY_NAV: readonly NavLink[] = [
   { href: '/archive/search', label: 'Archive' },
   { href: EMAIL_BRIEFS_PATH, label: 'Email briefs' },
   { href: '/settings/delivery', label: 'Delivery time' },
+  { href: BILLING_SETTINGS_PATH, label: 'Billing' },
 ];
 
 const FOOTER = 'Aggregated, clustered, summarised. One brief per topic, every day.';

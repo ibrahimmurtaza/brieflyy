@@ -859,7 +859,7 @@ export const paymentEvents = sqliteTable(
     userId: text('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    kind: text('kind', { enum: ['checkout_completed'] }).notNull(),
+    kind: text('kind', { enum: ['checkout_completed', 'subscription_ended'] }).notNull(),
     receivedAt: integer('received_at', { mode: 'timestamp_ms' }).notNull(),
   },
   (t) => ({
@@ -875,6 +875,11 @@ export const paymentEvents = sqliteTable(
  * provider subscription decides the tier with no answer. Written on every
  * accepted event, so it is refreshed rather than only created, and kept up to date
  * without asking the provider again.
+ *
+ * The row is not deleted when a Subscription ends. A subscription that has ended
+ * is the record of what the User was paying for and until when, and deleting it
+ * would leave them indistinguishable from one who never subscribed — so the
+ * period they had is answerable after the fact.
  */
 export const subscriptions = sqliteTable(
   'subscriptions',
@@ -888,9 +893,35 @@ export const subscriptions = sqliteTable(
     subscriptionRef: text('subscription_ref').notNull(),
     customerRef: text('customer_ref'),
     startedAt: integer('started_at', { mode: 'timestamp_ms' }).notNull(),
+    /**
+     * Which period of the Subscription this row is in.
+     *
+     * `active` rather than a nullable column because "paying" is the state almost
+     * every Subscription is in and the row existing is the honest default for the
+     * ones written before this column did. `cancelling` is the state that makes
+     * the other two legible: the User has been told the next charge will not
+     * happen, but the period they already paid for has not run out.
+     */
+    status: text('status', { enum: ['active', 'cancelling', 'ended'] })
+      .notNull()
+      .default('active'),
+    /**
+     * The end of the period already paid for.
+     *
+     * Nullable because no provider has been asked until somebody opens the
+     * Subscription settings page, and a date worked out from `startedAt` rather
+     * than read from the provider is a date the application would be inventing.
+     */
+    renewsAt: integer('renews_at', { mode: 'timestamp_ms' }),
+    /** When the User asked to stop, and null for every Subscription still paying. */
+    cancelledAt: integer('cancelled_at', { mode: 'timestamp_ms' }),
   },
   (t) => ({
     userUnique: uniqueIndex('subscriptions_user_unique').on(t.userId),
+    // A provider event naming a Subscription is resolved against this, and it is
+    // the only way a `subscription_ended` finds the User it belongs to: such an
+    // event carries no Checkout reference, because the Checkout was months ago.
+    refIdx: index('subscriptions_ref_idx').on(t.subscriptionRef),
   }),
 );
 

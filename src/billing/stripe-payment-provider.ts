@@ -6,19 +6,25 @@ import {
 } from '../config.js';
 import type { Clock } from '../domain/clock.js';
 import type {
+  CancellationReading,
   Checkout,
   CheckoutRequest,
   PaymentEvent,
   PaymentEventReading,
   PaymentProvider,
+  ProviderSubscription,
   SignedRequest,
+  SubscriptionReading,
 } from '../domain/payment.js';
 
 /** The header a signed event arrives in, and the one this provider reads it from. */
 export const STRIPE_SIGNATURE_HEADER = 'stripe-signature';
 
-/** The one event type this application acts on. Everything else is acknowledged and dropped. */
+/** The one event type this application acts on for a payment. Everything else is acknowledged and dropped. */
 export const STRIPE_CHECKOUT_COMPLETED = 'checkout.session.completed';
+
+/** The event that says a subscription stopped charging, which is how a User moves back down. */
+export const STRIPE_SUBSCRIPTION_DELETED = 'customer.subscription.deleted';
 
 export interface StripePaymentProviderOptions {
   readonly secretKey: string;
@@ -107,6 +113,47 @@ export class StripePaymentProvider implements PaymentProvider {
   }
 
   /**
+   * What the provider currently says about a Subscription.
+   *
+   * Three answers rather than one, and the middle one is the reason this is not a
+   * plain `fetch` behind a helper. A 404 is the provider telling this application
+   * the Subscription is gone, which is a fact about the Subscription and is what
+   * stops a cancelled one still reading as paid. Any other failure is somebody
+   * else's service not answering, which says nothing about the Subscription and
+   * must leave what is stored alone.
+   */
+  async readSubscription(subscriptionRef: string): Promise<SubscriptionReading> {
+    const response = await this.call(`/v1/subscriptions/${encodeURIComponent(subscriptionRef)}`);
+    if (response === 'unavailable') return { status: 'unavailable' };
+    if (response === 'not_found') return { status: 'unknown' };
+    return { status: 'known', current: readProviderSubscription(response) };
+  }
+
+  /**
+   * Ask the provider to stop charging, at the end of the period already paid for.
+   *
+   * An update carrying `cancel_at_period_end` rather than a deletion: a deletion
+   * would end the period early, and "cancel" here means the next charge does not
+   * happen rather than the days already paid for disappearing. What comes back is
+   * the state the provider then holds, so the date the Subscription stops is the
+   * provider's own rather than one worked out from when it started.
+   */
+  async cancelSubscription(subscriptionRef: string): Promise<CancellationReading> {
+    const response = await this.call(`/v1/subscriptions/${encodeURIComponent(subscriptionRef)}`, {
+      method: 'POST',
+      body: new URLSearchParams({ cancel_at_period_end: 'true' }).toString(),
+    });
+    // Not collapsed into `unavailable`, and the reason is the sentence the page
+    // writes: a provider holding no such Subscription is telling this application
+    // the thing the User asked for is already true, and announcing that as "we could
+    // not reach the payment provider, it will keep charging" is the one answer that
+    // could not be further from the truth.
+    if (response === 'not_found') return { status: 'already_ended' };
+    if (response === 'unavailable') return { status: 'unavailable' };
+    return { status: 'stopping', current: readProviderSubscription(response) };
+  }
+
+  /**
    * What a signed request carried.
    *
    * Three answers, and the order they are decided in is the security of the whole
@@ -123,7 +170,27 @@ export class StripePaymentProvider implements PaymentProvider {
     if (payload === null) return { status: 'unrecognised' };
     const type = readString(payload, 'type');
     const id = readString(payload, 'id');
-    if (type !== STRIPE_CHECKOUT_COMPLETED || id === null) {
+    if (type === null || id === null) return { status: 'unrecognised' };
+
+    const object = readObject(payload, 'data', 'object');
+    if (type === STRIPE_SUBSCRIPTION_DELETED) {
+      // An event that ends a subscription names the subscription and nothing else
+      // this application issued — there is no Checkout reference on it, because the
+      // Checkout was months ago. An event with no subscription in it is not one it
+      // can act on, and is acknowledged rather than refused: the signature held.
+      if (object === null) return { status: 'unrecognised' };
+      const subscriptionRef = readString(object, 'id');
+      if (subscriptionRef === null) return { status: 'unrecognised' };
+      const event: PaymentEvent = {
+        id,
+        kind: 'subscription_ended',
+        subscriptionRef,
+        customerRef: readString(object, 'customer'),
+      };
+      return { status: 'verified', event };
+    }
+
+    if (type !== STRIPE_CHECKOUT_COMPLETED) {
       return { status: 'unrecognised' };
     }
 
@@ -151,6 +218,45 @@ export class StripePaymentProvider implements PaymentProvider {
       customerRef: readString(session, 'customer'),
     };
     return { status: 'verified', event };
+  }
+
+  /**
+   * One call to the provider's API, as the three answers the callers need.
+   *
+   * `not_found` is separated from `unavailable` because they mean opposite things
+   * to a caller: one is the provider saying there is nothing there, and the other
+   * is the provider not saying anything. A helper that collapsed them would make
+   * a failed request look like an ended subscription.
+   */
+  private async call(
+    path: string,
+    init: { readonly method: string; readonly body: string } | undefined = undefined,
+  ): Promise<Record<string, unknown> | 'unavailable' | 'not_found'> {
+    let response: Response;
+    try {
+      response = await fetch(`${this.apiBaseUrl}${path}`, {
+        method: init?.method ?? 'GET',
+        headers: {
+          Authorization: `Bearer ${this.secretKey}`,
+          ...(init === undefined
+            ? {}
+            : { 'Content-Type': 'application/x-www-form-urlencoded' }),
+        },
+        ...(init === undefined ? {} : { body: init.body }),
+      });
+    } catch {
+      // Somebody else's service, so a failure to reach it is a fact about them
+      // rather than about this User. Answered rather than thrown, because every
+      // caller has a page to answer and none of them can tell the User anything
+      // useful about a stack trace.
+      return 'unavailable';
+    }
+    if (response.status === 404) return 'not_found';
+    if (!response.ok) return 'unavailable';
+    const json = parseJson(JSON.stringify(await response.json()));
+    // A body that is not an object is a provider that answered something other than
+    // what it promises, and reading fields off it would be reading a guess.
+    return json === null ? 'unavailable' : json;
   }
 
   /**
@@ -257,6 +363,37 @@ export interface StripePaymentProviderConfig {
 
 function fromHex(value: string): Buffer | null {
   return /^[0-9a-f]{64}$/.test(value) ? Buffer.from(value, 'hex') : null;
+}
+
+/**
+ * The three facts this application keeps about a Subscription, out of the
+ * provider's whole object for it.
+ *
+ * Each one read rather than assumed, and each nullable where the provider's own
+ * answer can be missing: a `current_period_end` of null becomes a null renewal
+ * date and not today's date plus thirty, because a date this application worked
+ * out itself is an invention that a page would then print as though the provider
+ * had said it. `cancel_at_period_end` is a boolean in Stripe's API and is read as
+ * exactly that rather than through a truthiness test, so a provider that sent a
+ * string is refused rather than believed.
+ */
+function readProviderSubscription(payload: Record<string, unknown>): ProviderSubscription {
+  return {
+    customerRef: readString(payload, 'customer'),
+    renewsAt: readUnixSeconds(payload, 'current_period_end'),
+    cancelAtPeriodEnd: readBoolean(payload, 'cancel_at_period_end'),
+  };
+}
+
+/** A Unix-second timestamp as a `Date`, or null for anything that is not one. */
+function readUnixSeconds(source: Record<string, unknown>, key: string): Date | null {
+  const value = source[key];
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return null;
+  return new Date(value * 1000);
+}
+
+function readBoolean(source: Record<string, unknown>, key: string): boolean {
+  return source[key] === true;
 }
 
 function parseJson(body: string): Record<string, unknown> | null {

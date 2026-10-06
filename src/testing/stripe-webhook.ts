@@ -106,3 +106,50 @@ export function signedEvent(input: {
     ),
   };
 }
+
+/**
+ * A `customer.subscription.deleted`, in the shape the provider sends it.
+ *
+ * Signed here rather than written out because the subscription it names is the only
+ * thing in it that resolves a User: there is no Checkout reference on it, the
+ * Checkout having happened months before, so a cancellation this application did
+ * not record would arrive with nothing this application can match.
+ */
+export function subscriptionDeletedBody(input: {
+  readonly eventId: string;
+  readonly subscriptionRef?: string;
+  readonly customerRef?: string | null;
+  readonly createdAt?: number;
+}): string {
+  return JSON.stringify({
+    id: input.eventId,
+    type: 'customer.subscription.deleted',
+    created: input.createdAt ?? 0,
+    data: {
+      object: {
+        id: input.subscriptionRef ?? 'sub_test_1',
+        object: 'subscription',
+        status: 'canceled',
+        ...(input.customerRef === null ? {} : { customer: input.customerRef ?? 'cus_test_1' }),
+      },
+    },
+  });
+}
+
+/** A signed `customer.subscription.deleted`, ready to be posted with no session. */
+export function signedSubscriptionDeleted(input: {
+  readonly eventId: string;
+  readonly timestamp: number;
+  readonly subscriptionRef?: string;
+  readonly secret?: string;
+}): SignedWebhook {
+  const body = subscriptionDeletedBody(input);
+  return {
+    body,
+    signature: stripeSignatureHeader(
+      input.secret ?? STRIPE_WEBHOOK_SECRET,
+      input.timestamp,
+      body,
+    ),
+  };
+}

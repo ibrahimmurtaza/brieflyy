@@ -39,6 +39,7 @@ const SIGNED_IN_PAGES: readonly (readonly [string, number])[] = [
   ['/onboarding/welcome', 200],
   ['/settings/delivery', 200],
   ['/settings/briefs', 200],
+  ['/settings/billing', 200],
   ['/upgrade', 200],
   ['/archive/search', 200],
   ['/admin/briefs', 200],

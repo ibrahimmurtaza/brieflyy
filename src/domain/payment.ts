@@ -41,17 +41,86 @@ export interface SignedRequest {
   readonly signature: string;
 }
 
-/** The one event this application acts on. */
-export interface PaymentEvent {
-  /** The provider's own identifier. The replay key: one event is one grant. */
-  readonly id: string;
-  readonly kind: PaymentEventKind;
-  /** The Checkout reference Brieflyy minted, which resolves the User. */
-  readonly reference: string;
-  readonly subscriptionRef: string;
-  /** Nullable because a provider can complete a payment before it names the payer. */
+/**
+ * The events this application acts on, as two shapes rather than one with blanks.
+ *
+ * A `subscription_ended` names a Subscription and nothing else: there is no
+ * Checkout behind it, because the Checkout happened months ago and the reference
+ * it carried was minted for the moment the payment completed. Modelling it as one
+ * interface with an optional reference would mean writing an empty string for a
+ * value that is genuinely absent, and an empty string reads back like an id
+ * somebody gave us — which is the mistake the `customerRef` half of this same
+ * interface was already written to avoid.
+ *
+ * Both carry the provider's own name for the Subscription, which is what resolves
+ * the User for the second and is recorded alongside the first.
+ */
+export type PaymentEvent =
+  | {
+      readonly kind: 'checkout_completed';
+      /** The provider's own identifier. The replay key: one event is one grant. */
+      readonly id: string;
+      /** The Checkout reference Brieflyy minted, which resolves the User. */
+      readonly reference: string;
+      readonly subscriptionRef: string;
+      /** Nullable because a provider can complete a payment before it names the payer. */
+      readonly customerRef: string | null;
+    }
+  | {
+      readonly kind: 'subscription_ended';
+      /** The provider's own identifier, and the replay key as it is for the other. */
+      readonly id: string;
+      readonly subscriptionRef: string;
+      readonly customerRef: string | null;
+    };
+
+/**
+ * What the provider currently says about one Subscription.
+ *
+ * Three facts, and the third is the one that decides whether a cancellation has
+ * happened. `renewsAt` is the end of the period already paid for: while it is in
+ * the future the User is still paying, and a cancellation asked for today stops
+ * the charge *after* it rather than immediately, so this date is what the
+ * Subscription settings page has to name rather than a day computed from
+ * `startedAt`.
+ */
+export interface ProviderSubscription {
+  /** The provider's own name for the payer, or null where it has named none. */
   readonly customerRef: string | null;
+  /** When the period already paid for ends, or null where the provider named none. */
+  readonly renewsAt: Date | null;
+  /** Whether the provider has been told to stop, taking effect at that date. */
+  readonly cancelAtPeriodEnd: boolean;
 }
+
+/**
+ * What asking the provider about a Subscription came back with.
+ *
+ * `known` and `unknown` are both answers, and they are different ones: a provider
+ * holding no such Subscription is telling this application something real, and it
+ * is the answer that ends a cancelled Subscription rather than leaving it as one
+ * the User is still paying for. `unavailable` is somebody else's service not
+ * answering, which is not a fact about the Subscription at all — it is why the
+ * stored row is left standing rather than overwritten with a guess.
+ */
+export type SubscriptionReading =
+  | { readonly status: 'known'; readonly current: ProviderSubscription }
+  | { readonly status: 'unknown' }
+  | { readonly status: 'unavailable' };
+
+/**
+ * What asking the provider to stop a Subscription came back with.
+ *
+ * `already_ended` is a separate answer from `unavailable` for a reason a User feels:
+ * a provider holding no such Subscription is not unreachable, and the sentence the
+ * page writes for the second one — "it has not been changed and will keep charging
+ * as it is" — is the exact opposite of the truth for the first. A User who pressed
+ * the button after the provider had already finished must be told it is stopped.
+ */
+export type CancellationReading =
+  | { readonly status: 'stopping'; readonly current: ProviderSubscription }
+  | { readonly status: 'already_ended' }
+  | { readonly status: 'unavailable' };
 
 /**
  * What a signed request carried, in three answers rather than two.
@@ -92,6 +161,19 @@ export interface PaymentProvider {
   readonly signatureHeader: string;
   /** The hosted page the User pays on. */
   startCheckout(request: CheckoutRequest): Promise<Checkout>;
+  /** What the provider currently says about a Subscription. */
+  readSubscription(subscriptionRef: string): Promise<SubscriptionReading>;
+  /**
+   * Ask the provider to stop charging for a Subscription.
+   *
+   * It must take effect at the end of the period the User has already paid for,
+   * not immediately: "stop the next charge" is what a cancellation means, and an
+   * implementation that cut the period short would be a different promise from the
+   * one the page beside it makes. The answer carries the state the provider then
+   * holds, so the date the Subscription stops is the provider's rather than one
+   * derived here.
+   */
+  cancelSubscription(subscriptionRef: string): Promise<CancellationReading>;
   /** What a signed request carried. Only a `verified` reading may change anything. */
   readEvent(signed: SignedRequest): PaymentEventReading;
 }

@@ -1,5 +1,7 @@
 # A paid subscription is a hosted Checkout and a signed event
 
+**Amended by [ADR-0024](0024-a-subscription-stops-at-the-end-of-the-period-already-paid-for.md)**: the "Cancellation" paragraph under *What is deliberately not here* no longer describes this repository. A Subscription now carries a state, a renewal date and a cancellation date, a second signed event ends one, and `GET /settings/billing` states and stops it. Everything else below — the hosted page, the public webhook, the raw bytes, the reference rather than the event naming the User, one event being one grant, the timestamp being checked as well as the signature, the two credentials — still holds unchanged. Read that one paragraph as the decision that was made once and then replaced, and ADR-0024 for why.
+
 PaidTier was the product's differentiator and there was no way onto it. The upgrade page said billing was not connected and carried no form, and the only route that moved a User's tier was `POST /dev/tier` — development-only, off in production, and therefore not a way for a User to pay for anything. This records the step that was taken to change that, and why it is shaped this way.
 
 ## The shape

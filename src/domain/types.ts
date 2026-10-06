@@ -509,13 +509,16 @@ export interface FeedbackEvent {
 }
 
 /**
- * The one thing this application acts on when the PaymentProvider says something.
+ * The things this application acts on when the PaymentProvider says something.
  *
  * A value rather than a bare string so a stored row and a signed event cannot
  * disagree about what one of them is, and so an event of a kind this application
- * has never heard of is a refusal rather than a row nobody can read back.
+ * has never heard of is a refusal rather than a row nobody can read back. Two,
+ * because a payment is not the only thing a subscription does: it starts, and then
+ * it ends, and an application that only hears about the first can never move a
+ * User back down.
  */
-export type PaymentEventKind = 'checkout_completed';
+export type PaymentEventKind = 'checkout_completed' | 'subscription_ended';
 
 /**
  * A Checkout reference Brieflyy minted, and the User it belongs to.
@@ -539,11 +542,22 @@ export interface CheckoutReference {
  * What a User is paying the PaymentProvider for, kept so a later read does not
  * have to ask.
  *
- * `users.tier` is the fact every paywall reads and is set the moment an event is
+ * `users.tier` is the fact every paywall reads and is set the moment a payment is
  * accepted; this row is what the provider calls the same thing, so naming it,
- * showing it or ending it never needs a round trip. One per User, and no state
- * column: the row existing is what "paying" means here, and a cancellation is not
- * something this application can be told about yet.
+ * showing it or ending it never needs a round trip. One per User.
+ *
+ * `status` is what the row is for. A row without one was the claim "this User is
+ * paying" and nothing more, so an ended subscription stayed a subscribed row,
+ * which is wrong the moment one exists. The three states are the three periods of
+ * a subscription: paying and will renew again (`active`), told to stop at the end
+ * of the period already paid for (`cancelling`), and no longer charging anything
+ * (`ended`). `cancelling` is not `ended`, because the User has paid for the rest
+ * of the month and the tier they bought still applies until that month is up.
+ *
+ * `renewsAt` is the end of the period already paid for, and it is what the
+ * Subscription settings page names rather than a date derived from `startedAt`:
+ * a month is not always thirty days, and a page that prints one it worked out
+ * itself is a page whose date can be wrong.
  */
 export interface Subscription {
   readonly id: string;
@@ -551,11 +565,25 @@ export interface Subscription {
   readonly provider: string;
   /** The provider's own name for it, which this application never parses. */
   readonly subscriptionRef: string;
-  /** The provider's own name for the payer. */
   /** The provider's name for the payer, or null where it has not named one yet. */
   readonly customerRef: string | null;
   readonly startedAt: Date;
+  readonly status: SubscriptionStatus;
+  /** End of the period already paid for, or null while no provider has said. */
+  readonly renewsAt: Date | null;
+  /** When the User asked to stop, or null while they are still paying. */
+  readonly cancelledAt: Date | null;
 }
+
+/**
+ * Where a Subscription is in its life, as the three periods rather than a flag.
+ *
+ * The third is the one that makes the second meaningful: without it, "cancelled"
+ * has to be read as "cancelled immediately", and a cancellation that ended a
+ * period the User had paid for would be indistinguishable from a cancellation that
+ * did not.
+ */
+export type SubscriptionStatus = 'active' | 'cancelling' | 'ended';
 
 /**
  * One event from the PaymentProvider, once it has been acted on.

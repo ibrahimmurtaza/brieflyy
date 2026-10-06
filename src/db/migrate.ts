@@ -328,9 +328,13 @@ CREATE TABLE IF NOT EXISTS subscriptions (
   provider TEXT NOT NULL,
   subscription_ref TEXT NOT NULL,
   customer_ref TEXT,
-  started_at INTEGER NOT NULL
+  started_at INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  renews_at INTEGER,
+  cancelled_at INTEGER
 );
 CREATE UNIQUE INDEX IF NOT EXISTS subscriptions_user_unique ON subscriptions (user_id);
+CREATE INDEX IF NOT EXISTS subscriptions_ref_idx ON subscriptions (subscription_ref);
 `;
 
 /**
@@ -779,6 +783,28 @@ const COLUMN_MIGRATIONS: readonly ColumnMigration[] = [
     table: 'brief_job_runs',
     column: 'discarded_bullets',
     ddl: `ALTER TABLE brief_job_runs ADD COLUMN discarded_bullets INTEGER NOT NULL DEFAULT 0`,
+  },
+  {
+    // Which period of the Subscription a row is in. `active` is the honest default
+    // for every row written before this existed: each of them was a subscription
+    // this application had heard of completing, and none of them had been told it
+    // had ended, because nothing could tell it.
+    table: 'subscriptions',
+    column: 'status',
+    ddl: `ALTER TABLE subscriptions ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`,
+  },
+  {
+    // The end of the period already paid for. Nullable with no default because the
+    // state it records is the absence of the column: a Subscription whose end date
+    // no provider has been asked about has none, and null is exactly that.
+    table: 'subscriptions',
+    column: 'renews_at',
+    ddl: `ALTER TABLE subscriptions ADD COLUMN renews_at INTEGER`,
+  },
+  {
+    table: 'subscriptions',
+    column: 'cancelled_at',
+    ddl: `ALTER TABLE subscriptions ADD COLUMN cancelled_at INTEGER`,
   },
 ];
 

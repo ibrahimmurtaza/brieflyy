@@ -50,6 +50,7 @@ import {
 } from '../http/access.js';
 import { requestTokenInput } from '../http/request-token.js';
 import {
+  BILLING_SETTINGS_PATH,
   CHECKOUT_CANCELLED_VALUE,
   CHECKOUT_PATH,
   CHECKOUT_RETURNED_VALUE,
@@ -1396,6 +1397,13 @@ function upgradePage(input: {
   const priceHtml = alreadyPaid
     ? '<p class="price"><strong>Paid &middot; $15 / month</strong></p>'
     : '<p class="price"><strong>$15 / month</strong></p>';
+  // A User who is already paying is sent to the one page that can stop it. This
+  // page sells the plan; it cannot end one, and a page that says "you are on the
+  // paid plan" with no way onwards is a dead end for the only decision left.
+  const manageHtml = alreadyPaid
+    ? `    <p class="actions"><a class="button" href="${BILLING_SETTINGS_PATH}">Manage or cancel your subscription</a></p>
+`
+    : '';
   return layout({
     title: 'Upgrade to paid',
     width: 'form',
@@ -1408,7 +1416,7 @@ ${checkoutBlock({
       state: alreadyPaid ? 'already_paid' : input.checkoutAvailable ? 'checkout' : 'unconfigured',
       used,
       token,
-    })}${returnedBlock(input.returned ?? null)}    <p class="actions"><a class="button" href="/topics">Back to your topics</a></p>`,
+    })}${returnedBlock(input.returned ?? null)}${manageHtml}    <p class="actions"><a class="button" href="/topics">Back to your topics</a></p>`,
   });
 }
 

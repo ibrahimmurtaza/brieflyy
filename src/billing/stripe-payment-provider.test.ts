@@ -12,6 +12,7 @@ import {
   STRIPE_WEBHOOK_SECRET,
   checkoutCompletedBody,
   signedCheckoutCompleted,
+  signedSubscriptionDeleted,
   stripeSignatureHeader,
 } from '../testing/stripe-webhook.js';
 import {
@@ -233,6 +234,191 @@ describe('reading a signed payment event', () => {
     expect(reading).toMatchObject({
       status: 'verified',
       event: { subscriptionRef: 'sub_test_1', customerRef: null },
+    });
+  });
+
+  it('reads a subscription that has ended as the other event this application acts on', () => {
+    // An application that only ever hears about a payment completing can put a User
+    // onto the paid tier and has no way at all to move them down again.
+    const signed = signedSubscriptionDeleted({ eventId: 'evt_3', timestamp: TIMESTAMP });
+
+    const reading = aProvider().readEvent(signed);
+
+    expect(reading).toEqual({
+      status: 'verified',
+      event: {
+        id: 'evt_3',
+        kind: 'subscription_ended',
+        subscriptionRef: 'sub_test_1',
+        customerRef: 'cus_test_1',
+      },
+    });
+  });
+
+  it('will not act on a subscription that ended without naming itself', () => {
+    const body = JSON.stringify({
+      id: 'evt_4',
+      type: 'customer.subscription.deleted',
+      data: { object: { customer: 'cus_test_1' } },
+    });
+
+    const reading = aProvider().readEvent({
+      body,
+      signature: stripeSignatureHeader(STRIPE_WEBHOOK_SECRET, TIMESTAMP, body),
+    });
+
+    expect(reading).toEqual({ status: 'unrecognised' });
+  });
+
+  it('still refuses a forged cancellation, before it reads anything of it', () => {
+    const forged = signedSubscriptionDeleted({
+      eventId: 'evt_3',
+      timestamp: TIMESTAMP,
+      secret: 'whsec_a_secret_this_application_never_had',
+    });
+
+    expect(aProvider().readEvent(forged)).toEqual({ status: 'unsigned' });
+  });
+});
+
+describe('reading a subscription from the provider', () => {
+  const RENEWAL = new Date('2026-04-02T09:00:00Z');
+
+  /** The provider's own shape, which is what the reader has to understand. */
+  function subscriptionBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      id: 'sub_test_1',
+      object: 'subscription',
+      customer: 'cus_test_1',
+      status: 'active',
+      cancel_at_period_end: false,
+      current_period_end: Math.floor(RENEWAL.getTime() / 1000),
+      ...overrides,
+    };
+  }
+
+  it('reads the end of the period already paid for and whether it has been told to stop', async () => {
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', async (url: string) => {
+      calls.push(String(url));
+      return { ok: true, status: 200, async json() { return subscriptionBody(); } };
+    });
+
+    const reading = await aProvider().readSubscription('sub_test_1');
+
+    expect(reading).toEqual({
+      status: 'known',
+      current: {
+        customerRef: 'cus_test_1',
+        renewsAt: RENEWAL,
+        cancelAtPeriodEnd: false,
+      },
+    });
+    expect(calls).toEqual(['https://api.stripe.com/v1/subscriptions/sub_test_1']);
+  });
+
+  it('reads a subscription the provider has been told to stop as one already stopping', async () => {
+    vi.stubGlobal('fetch', async () => ({
+      ok: true,
+      status: 200,
+      async json() {
+        return subscriptionBody({ cancel_at_period_end: true, status: 'active' });
+      },
+    }));
+
+    expect(await aProvider().readSubscription('sub_test_1')).toEqual({
+      status: 'known',
+      current: { customerRef: 'cus_test_1', renewsAt: RENEWAL, cancelAtPeriodEnd: true },
+    });
+  });
+
+  it('answers that the provider holds no such subscription, rather than throwing', async () => {
+    // A real answer rather than a failure: a subscription that has already gone is
+    // the reason a User's row stops claiming they are paying, and it must not be
+    // confused with somebody else's service being unreachable.
+    vi.stubGlobal('fetch', async () => ({ ok: false, status: 404, async json() { return {}; } }));
+
+    expect(await aProvider().readSubscription('sub_gone')).toEqual({ status: 'unknown' });
+  });
+
+  it('says unavailable rather than guessing, when the provider is not answering', async () => {
+    vi.stubGlobal('fetch', async () => ({ ok: false, status: 503, async json() { return {}; } }));
+
+    expect(await aProvider().readSubscription('sub_test_1')).toEqual({ status: 'unavailable' });
+  });
+
+  it('records a renewal date the provider did not name as unknown', async () => {
+    vi.stubGlobal('fetch', async () => ({
+      ok: true,
+      status: 200,
+      async json() {
+        return subscriptionBody({ current_period_end: null });
+      },
+    }));
+
+    // A date the application worked out from `startedAt` would be an invention
+    // printed on a page as though the provider had said it.
+    expect(await aProvider().readSubscription('sub_test_1')).toEqual({
+      status: 'known',
+      current: { customerRef: 'cus_test_1', renewsAt: null, cancelAtPeriodEnd: false },
+    });
+  });
+});
+
+describe('stopping a subscription', () => {
+  const RENEWAL = new Date('2026-04-02T09:00:00Z');
+
+  it('asks the provider to stop at the end of the period already paid for', async () => {
+    const calls: { url: string; init: RequestInit }[] = [];
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
+      calls.push({ url: String(url), init });
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            id: 'sub_test_1',
+            customer: 'cus_test_1',
+            status: 'active',
+            cancel_at_period_end: true,
+            current_period_end: Math.floor(RENEWAL.getTime() / 1000),
+          };
+        },
+      };
+    });
+
+    const reading = await aProvider().cancelSubscription('sub_test_1');
+
+    // The date the User keeps their plan for is the provider's, read back out of
+    // what it then held rather than calculated here.
+    expect(reading).toEqual({
+      status: 'stopping',
+      current: { customerRef: 'cus_test_1', renewsAt: RENEWAL, cancelAtPeriodEnd: true },
+    });
+    // Not `cancel_now`, and not a deletion: a cancellation that cut the period short
+    // would be a different promise from the one the page beside it makes.
+    const sent = new URLSearchParams(String(calls[0]?.init.body ?? ''));
+    expect(calls[0]?.url).toBe('https://api.stripe.com/v1/subscriptions/sub_test_1');
+    expect(sent.get('cancel_at_period_end')).toBe('true');
+    expect(calls[0]?.init.headers).toMatchObject({ Authorization: `Bearer ${STRIPE_API_KEY}` });
+  });
+
+  it('says unavailable rather than throwing, so the page can tell the User', async () => {
+    vi.stubGlobal('fetch', async () => ({ ok: false, status: 502, async json() { return {}; } }));
+
+    expect(await aProvider().cancelSubscription('sub_test_1')).toEqual({
+      status: 'unavailable',
+    });
+  });
+
+  it('says the Subscription has already finished, rather than unreachable', async () => {
+    vi.stubGlobal('fetch', async () => ({ ok: false, status: 404, async json() { return {}; } }));
+
+    // The one distinction that reaches a person: the page writes "it will keep
+    // charging as it is" for `unavailable`, so answering a subscription the provider
+    // has already dropped that way would tell a User their money is still going.
+    expect(await aProvider().cancelSubscription('sub_gone')).toEqual({
+      status: 'already_ended',
     });
   });
 });
