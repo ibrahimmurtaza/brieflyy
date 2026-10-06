@@ -23,9 +23,14 @@ export interface RecordedCheckout {
 /**
  * One Subscription the double was asked about, by the name it was given.
  *
- * A type rather than a bare string because it is recorded in two lists that mean
- * different things — asked about, and told to stop — and a test that compared them
- * has to be able to say which it is looking at.
+ * A type rather than a bare string so the field name travels with the value: an
+ * assertion reads `[{ subscriptionRef: 'sub_1' }]` rather than `['sub_1']`, which is
+ * the difference between naming the provider's own identifier and naming a string
+ * whose meaning a reader has to go and look up.
+ *
+ * It carries no record of *which* question was asked, and does not need to — the
+ * two lists this appears in are already separate arrays, so `reads` and
+ * `cancellations` say which it is without the element having to say it again.
  */
 export interface RecordedSubscription {
   readonly subscriptionRef: string;
