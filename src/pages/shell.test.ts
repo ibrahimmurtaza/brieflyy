@@ -47,6 +47,7 @@ const SIGNED_IN_PAGES: readonly (readonly [string, number])[] = [
   ['/topics/probe/trends', 404],
   ['/topics/probe/settings', 404],
   ['/briefs/probe', 404],
+  ['/briefs/probe/edit', 404],
 ];
 
 /**
