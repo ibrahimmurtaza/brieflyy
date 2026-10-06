@@ -502,6 +502,7 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     feedbackService,
     briefPlanService,
     briefSnapshotRepo,
+    briefPlanRepo,
     unsubscribeService,
     trendsService,
     archiveSearchService,
