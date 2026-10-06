@@ -1,7 +1,8 @@
 import { escapeHtml } from '../domain/html.js';
+import type { TopicCapOverflow } from '../domain/tier.js';
 import type { TopicCategory } from '../domain/types.js';
 import { requestTokenInput } from '../http/request-token.js';
-import { layout, planLine, type ShellAccount } from '../pages/layout.js';
+import { capCallout, layout, planLine, type ShellAccount } from '../pages/layout.js';
 import type {
   DirectoryEntry,
   DiscoverService,
@@ -26,6 +27,15 @@ export interface DiscoverPageInput {
   readonly discover: DiscoverService;
   /** A refusal from a submission, said in words rather than as a status code. */
   readonly message?: string | undefined;
+  /**
+   * How far over their cap they are, when they are over it — null otherwise.
+   *
+   * Passed rather than worked out here from `account.tier` and `discover.heldCount`,
+   * because those two numbers are what the four other surfaces that carry this
+   * reason are given too, and a page that derived its own would be a fifth place
+   * able to disagree about who is over the cap.
+   */
+  readonly overflow: TopicCapOverflow | null;
   readonly requestToken?: string | null;
 }
 
@@ -56,11 +66,14 @@ export function discoverPage(input: DiscoverPageInput): string {
     </div>`
     : '';
 
-  const paywallHtml = atCap
-    ? `    <div class="callout callout--paywall">You have reached the free-topic limit (${
-        discover.cap
-      }). <a href="/upgrade">Upgrade</a> to add more, or <a href="/pick-topics">remove one</a> to pick a replacement.</div>`
-    : '';
+  const paywallHtml = capCallout(
+    input.overflow,
+    atCap
+      ? `    <div class="callout callout--paywall">You have reached the free-topic limit (${
+          discover.cap
+        }). <a href="/upgrade">Upgrade</a> to add more, or <a href="/pick-topics">remove one</a> to pick a replacement.</div>`
+      : '',
+  );
 
   const emptyStateHtml = hasTopics
     ? ''

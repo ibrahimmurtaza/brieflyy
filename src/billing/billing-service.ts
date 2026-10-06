@@ -1,8 +1,19 @@
 import type { Clock } from '../domain/clock.js';
 import type { RandomSource } from '../domain/crypto.js';
 import type { PaymentEvent, PaymentProvider, SignedRequest } from '../domain/payment.js';
-import type { Account, PaymentEventKind, Subscription, User } from '../domain/types.js';
+import { resolveTier, topicCapFor, topicCapOverflow, type TopicCapOverflow } from '../domain/tier.js';
+import { planTopicReduction } from '../domain/topic-reduction.js';
+import type {
+  Account,
+  PaymentEventKind,
+  Subscription,
+  Topic,
+  TopicReduction,
+  User,
+} from '../domain/types.js';
 import type { BillingRepo } from '../repos/billing-repo.js';
+import type { TopicReductionRepo } from '../repos/topic-reduction-repo.js';
+import type { TopicRepo } from '../repos/topic-repo.js';
 import type { UserRepo } from '../repos/user-repo.js';
 import {
   CHECKOUT_CANCELLED_QUERY,
@@ -13,6 +24,16 @@ import {
 export interface BillingServiceDeps {
   readonly repo: BillingRepo;
   readonly userRepo: UserRepo;
+  /**
+   * The User's Topics, and the answers they have given about them.
+   *
+   * Held here rather than passed in per call because both questions are about the
+   * tier, and the tier is what this service moves: a Subscription ending is what
+   * puts a paid User over the free cap, so the Service that moves the tier is the
+   * one that has to be able to say what happens to the Topics it left behind.
+   */
+  readonly topicRepo: TopicRepo;
+  readonly reductions: TopicReductionRepo;
   /**
    * Absent rather than a provider that fails, for the reason the written-summary
    * client is: whether this deployment can take money is a question about the
@@ -102,6 +123,49 @@ export type CancellationOutcome =
   | { readonly status: 'nothing_to_stop' }
   | { readonly status: 'not_configured' }
   | { readonly status: 'unavailable' };
+
+/**
+ * Whether a User is holding more Topics than their tier's cap, and what this
+ * application suggests should give.
+ *
+ * Two answers, and the second is the whole of it: a User who is over the cap has a
+ * decision waiting for them and a User who is not has nothing to decide. Derived
+ * from the tier and the Topics rather than recorded when the plan changed, so it
+ * cannot be left behind by a tier that moved for some other reason — the
+ * development switch among them — and so that paying again clears it by itself.
+ */
+export type TopicOverflow =
+  | { readonly kind: 'within_cap' }
+  | (TopicCapOverflow & {
+      readonly kind: 'over_cap';
+      /** Every Topic they hold, in the order their topic list reads. */
+      readonly topics: readonly Topic[];
+      /**
+       * The Topics to keep working, as `planTopicReduction` suggests them. Everything
+       * else in `topics` is what would stop, which is why this is one list and not
+       * two.
+       */
+      readonly kept: readonly Topic[];
+    });
+
+/**
+ * What answering the question came to.
+ *
+ * `not_over_cap` is separate from `refused` because there is no question to have
+ * answered: a User who is within the cap and submits anyway has not chosen which
+ * Topics to stop, so nothing is taken from them. Both refusals say nothing was
+ * removed, which is the promise the page beside the form makes.
+ */
+export type TopicReductionOutcome =
+  | {
+      readonly status: 'reduced';
+      /** The Topics that keep being emailed, in the order they were named. */
+      readonly kept: readonly Topic[];
+      /** The Topics that stopped, which are gone from the application. */
+      readonly stopped: readonly Topic[];
+    }
+  | { readonly status: 'not_over_cap' }
+  | { readonly status: 'refused'; readonly reason: 'nothing_kept' | 'too_many_kept' };
 
 export class BillingService {
   constructor(private readonly deps: BillingServiceDeps) {}
@@ -470,6 +534,114 @@ export class BillingService {
       status: current === null ? 'already_stopped' : 'stopping',
       endsAt: current?.renewsAt ?? stored.renewsAt,
     };
+  }
+
+  /**
+   * Where a User has ended up against their tier's cap, and what would have to give.
+   *
+   * Derived, never stored, because the state is a fact about two other things — the
+   * tier and the Topics — and both of them can move without this being consulted: a
+   * User can remove a Topic by hand, and a User who pays again is no longer over
+   * anything. A row written at the moment the plan changed would go stale in both
+   * directions, and a downgrade that quietly removed Topics a month later is the
+   * failure this whole arrangement exists to prevent (ADR-0025).
+   *
+   * The cap is read once and asked of twice rather than two rules being consulted:
+   * the counts and the suggestion are one fact about one number, and a caller that
+   * could be handed two different caps for the same User would be one that has to
+   * reconcile them.
+   *
+   * **Nothing here removes anything.** The suggestion is what the page says;
+   * `reduceTopics` is what the User's answer does. Keeping those two apart is what
+   * makes "before anything is removed, the User is told" a property of the code
+   * rather than a promise the page makes.
+   */
+  async topicOverflowFor(user: User): Promise<TopicOverflow> {
+    const cap = topicCapFor(resolveTier(user));
+    const topics = await this.deps.topicRepo.listByUser(user.id);
+    const counts = topicCapOverflow(resolveTier(user), topics.length);
+    const kept = planTopicReduction(topics, cap);
+    // Either one saying there is nothing to decide is enough, and they cannot
+    // disagree: a User over the cap always has a cap's worth to keep.
+    if (counts === null || kept === null) return { kind: 'within_cap' };
+    return { kind: 'over_cap', ...counts, topics, kept };
+  }
+
+  /**
+   * Whether this User has ever answered the question, which is what stops the page
+   * announcing an answer they never gave.
+   *
+   * The answer travels in a query string on the User's own address, so it can be
+   * typed, and `?topics=reduced` over an account that never answered would be a claim
+   * about somebody's data that nothing on the page contradicts. The record is the
+   * only thing that can tell the two apart — the state cannot, because a User who has
+   * answered is within their cap and a User who never had a question is too.
+   */
+  async hasAnsweredTopicReduction(user: User): Promise<boolean> {
+    return (await this.deps.reductions.findForUser(user.id)).length > 0;
+  }
+
+  /**
+   * Record the answer a User gave about which of their Topics stop, and act on it.
+   *
+   * This is the only thing in the application that removes a Topic on a User's
+   * behalf rather than at their request, so it is one method and the answer has to
+   * come through it whole. Three refusals before any write, each of which is a
+   * submission the page's form cannot produce and a browser can: no Topic kept, more
+   * than the cap, and a User who is not over the cap in the first place.
+   *
+   * Slugs rather than ids, because the page renders what the User reads. They are
+   * resolved against this User's own Topics, so a name belonging to somebody else
+   * is not one of theirs to keep and never reaches the removal — the same rule the
+   * Topic settings page resolves a slug by.
+   *
+   * **The removals, then the record.** The opposite order would leave a row saying
+   * six Topics stopped when a failure had stopped none, which is a claim about a
+   * User's data that nothing could later contradict. This way a failure between them
+   * leaves the Topics removed and no row — and because a removal is soft, the state
+   * is then consistent rather than broken: they are within their cap, which is what
+   * the answer was for, and are asked nothing. What is lost is the record of why,
+   * which the removal dates on those rows still carry.
+   */
+  async reduceTopics(
+    user: User,
+    input: { readonly keptSlugs: readonly string[] },
+  ): Promise<TopicReductionOutcome> {
+    const cap = topicCapFor(resolveTier(user));
+    const topics = await this.deps.topicRepo.listByUser(user.id);
+    // A User within the cap has no question, so there is nothing for a submission to
+    // answer. Refused rather than obeyed: acting on it would remove a Topic from an
+    // account that was never over the cap to begin with.
+    if (topics.length <= cap) return { status: 'not_over_cap' };
+
+    const mine = new Map(topics.map((topic) => [topic.slug, topic]));
+    const named = [...new Set(input.keptSlugs)];
+    const kept = named
+      .map((slug) => mine.get(slug))
+      .filter((topic): topic is Topic => topic !== undefined);
+
+    if (kept.length === 0) return { status: 'refused', reason: 'nothing_kept' };
+    if (kept.length > cap) return { status: 'refused', reason: 'too_many_kept' };
+
+    const keptIds = new Set(kept.map((topic) => topic.id));
+    const stopped = topics.filter((topic) => !keptIds.has(topic.id));
+    const now = this.deps.clock.now();
+
+    await this.deps.topicRepo.removeMany(
+      stopped.map((topic) => topic.id),
+      now,
+    );
+    const reduction: TopicReduction = {
+      id: this.deps.random.uuid(),
+      userId: user.id,
+      cap,
+      held: topics.length,
+      keptTopicIds: kept.map((topic) => topic.id),
+      stoppedTopicIds: stopped.map((topic) => topic.id),
+      answeredAt: now,
+    };
+    await this.deps.reductions.insert(reduction);
+    return { status: 'reduced', kept, stopped };
   }
 
   /**

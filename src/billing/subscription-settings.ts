@@ -2,13 +2,15 @@ import { escapeHtml } from '../domain/html.js';
 import { requestTokenInput } from '../http/request-token.js';
 import { formatHumanTime } from '../pages/human-time.js';
 import { layout, type ShellAccount } from '../pages/layout.js';
-import type { BillingState } from './billing-service.js';
+import type { BillingState, TopicOverflow } from './billing-service.js';
 import type { Subscription } from '../domain/types.js';
 import {
   BILLING_CANCEL_PATH,
   BILLING_SETTINGS_PATH,
+  BILLING_TOPICS_PATH,
   UPGRADE_PATH,
   type BillingStoppedAnswer,
+  type BillingTopicsAnswer,
 } from './paths.js';
 
 /**
@@ -19,12 +21,31 @@ import {
  * stop it. A subscription page that also carried the price would be a second place
  * the price is written down, and the price is written down on the upgrade page
  * where it is being sold.
+ *
+ * The fifth thing it can carry is what happens to a User's Topics when their cap is
+ * lower than the number of them. That is here rather than on the topic list because
+ * it is this page that says why: the plan is what set the cap.
  */
 export function subscriptionSettingsPage(input: {
   readonly account: ShellAccount;
   readonly state: BillingState;
   /** What the last cancellation submission said, when they came from one. */
   readonly stopped: BillingStoppedAnswer | null;
+  /** What the last topic answer said, when they came from one. */
+  readonly reduced: BillingTopicsAnswer | null;
+  /**
+   * Whether this User has a recorded answer. Not derivable from `overflow`, because a
+   * User within their cap and a User who has answered are both within their cap —
+   * and the page must not say a User's Topics were removed when they never chose
+   * which to remove (ADR-0025).
+   */
+  readonly reducedAnswered: boolean;
+  /**
+   * Whether this User is holding more Topics than their tier allows, and what would
+   * have to give. Asked of the service rather than worked out here, so the page and
+   * the paywalls read the same fact through one rule.
+   */
+  readonly overflow: TopicOverflow;
   /**
    * Whether this instance can talk to a provider at all. Both the checkout and the
    * cancellation need one, so the control is offered on the same condition the
@@ -47,7 +68,14 @@ ${stoppedBlock(input.stopped, input.state)}${planBlock({
       paymentsAvailable: input.paymentsAvailable,
       timezone: input.timezone,
       requestToken: input.requestToken ?? null,
-    })}`,
+    })}${reducedBlock({
+      reduced: input.reduced,
+      overflow: input.overflow,
+      answered: input.reducedAnswered,
+    })}${overflowBlock(
+      input.overflow,
+      input.requestToken ?? null,
+    )}`,
   });
 }
 
@@ -130,7 +158,120 @@ function stoppedBlock(
 }
 
 /**
- * What the plan, the renewal, the status, and the control that stops it, all derived
+ * What an answer about which Topics stop came to.
+ *
+ * The same discipline as `stoppedBlock` beside it, and for the same reason: the
+ * answer travels in a query string on a User's own address, so it is a value they
+ * can type. Two of the four make a claim about the state rather than about an action,
+ * and both are checked against the state the page has just read:
+ *
+ * - `reduced` says Topics were removed, and is said only for a User within their cap
+ *   who has actually answered — over a User still over the cap it would claim six
+ *   Topics were removed while the page below asks them which six, and over a User who
+ *   never had a question it would be a claim about an account nothing else
+ *   contradicts. The record is what tells those two apart, because the state cannot:
+ *   a User who answered is within their cap and a User who was never asked is too.
+ * - `not-over-cap` says there was nothing to decide, which is a statement about the
+ *   cap rather than about an action, and is the same claim over a User who *is* past
+ *   it.
+ *
+ * The two refusals are not gated, because each claims nothing happened and there is
+ * no state in which that is untrue. Both are said over a User still over the cap on
+ * purpose: the question is below them, unanswered, and saying so is the point.
+ */
+function reducedBlock(input: {
+  readonly reduced: BillingTopicsAnswer | null;
+  readonly overflow: TopicOverflow;
+  /** Whether this User has a recorded answer, which the state cannot establish. */
+  readonly answered: boolean;
+}): string {
+  const { reduced, overflow, answered } = input;
+  if (reduced === null) return '';
+  if (reduced === 'reduced') {
+    if (overflow.kind !== 'within_cap' || !answered) return '';
+    return `    <div class="callout callout--success" role="status">
+      <p><strong>Your answer has been applied.</strong></p>
+      <p>The topics you did not keep have stopped being emailed and have been removed from this account. The slots in the free plan are free, and you can add the same subjects again whenever you want them.</p>
+    </div>
+`;
+  }
+  if (reduced === 'too-many-kept') {
+    return `    <div class="callout" role="alert">
+      <p><strong>That is more topics than the free plan holds.</strong></p>
+      <p>An answer that keeps more than the cap cannot be applied, so it has not been. Nothing has been removed.</p>
+    </div>
+`;
+  }
+  if (reduced === 'nothing-kept') {
+    return `    <div class="callout" role="alert">
+      <p><strong>No topics were ticked, so nothing was changed.</strong></p>
+      <p>Every one of your topics has been left as it is. Tick at least one below to say which of them should keep working.</p>
+    </div>
+`;
+  }
+  if (overflow.kind !== 'within_cap') return '';
+  return `    <div class="callout" role="status">
+    <p><strong>There was nothing to decide.</strong></p>
+    <p>You are not holding more topics than the free plan allows, so there were no topics to stop and nothing has been changed.</p>
+  </div>
+`;
+}
+
+/**
+ * The question, the proposal and the answer, for a User holding more Topics than
+ * their tier allows.
+ *
+ * **The count before the choice, and the choice before any removal.** A User is told
+ * how many of their Topics are over the cap, then which of them this application
+ * suggests stopping, then asked — and nothing happens until they submit. The order
+ * is the whole promise: ADR-0024 left this undecided and said nothing would be
+ * removed in the meantime, and a page that showed the form before saying how many
+ * were over the cap would be the same omission in a different shape.
+ *
+ * **Ticked, not fixed.** The three most recently added are ticked because that is
+ * what `planTopicReduction` suggests, and a ticked box the User unticks is a
+ * suggestion they have disagreed with. Every topic carries a box rather than being
+ * listed under a heading, so the page says which Topics stop and which keep without
+ * script: a box that is ticked keeps working, and a box that is not does not.
+ *
+ * **What "stops" means is said below the form.** A removed Topic is not a quiet one.
+ * Its slot goes to a Topic the User picks instead, which is why the sentence about
+ * what they cannot add yet is above it and the sentence about what has happened is
+ * beside the button.
+ */
+function overflowBlock(overflow: TopicOverflow, requestToken: string | null): string {
+  if (overflow.kind !== 'over_cap') return '';
+  const keeping = new Set(overflow.kept.map((topic) => topic.id));
+  const rows = overflow.topics
+    .map(
+      (topic) => `        <li><label><input type="checkbox" name="keep" value="${escapeHtml(
+        topic.slug,
+      )}"${keeping.has(topic.id) ? ' checked' : ''}> ${escapeHtml(topic.title)}</label></li>`,
+    )
+    .join('\n');
+  return `    <div class="callout callout--paywall" role="alert">
+      <p><strong>You hold ${overflow.held} topics and the free plan holds ${overflow.cap}.</strong></p>
+      <p>${overflow.overBy} of them are over the cap. Nothing has been removed, and nothing will be until you answer. Until you do, adding another topic is refused — this is why.</p>
+      <p>Tick the topics you want to keep working. The ${overflow.cap} you added most recently are ticked for you, and every topic you leave unticked stops being emailed.</p>
+    </div>
+    <form method="post" action="${BILLING_TOPICS_PATH}">
+      ${requestTokenInput(requestToken ?? '')}
+      <fieldset>
+        <legend>Your topics</legend>
+        <ul class="choices">
+${rows}
+        </ul>
+      </fieldset>
+      <div class="actions">
+        <button class="button" type="submit">Stop the topics I did not keep</button>
+      </div>
+      <p class="muted">A topic that stops is removed from this account and its slot is free again. Its past briefs are kept, and you can add the same subject later.</p>
+    </form>
+`;
+}
+
+/**
+ * The plan, its renewal, its status, and the control that stops it, all derived
  * from one input.
  *
  * Everything below the headline is derived from the page's own reading of the

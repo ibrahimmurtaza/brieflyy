@@ -3,12 +3,14 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { applySchema } from '../db/migrate.js';
 import type { SqliteDriver } from '../db/client.js';
 import type { PaymentEvent } from '../domain/payment.js';
-import type { Account, User } from '../domain/types.js';
+import type { Account, Topic, User } from '../domain/types.js';
 import { DrizzleBillingRepo } from '../repos/billing-repo.js';
+import { DrizzleTopicReductionRepo } from '../repos/topic-reduction-repo.js';
+import { DrizzleTopicRepo } from '../repos/topic-repo.js';
 import { DrizzleUserRepo } from '../repos/user-repo.js';
 import { countRows } from '../testing/db.js';
 import { createTestDb } from '../testing/test-db.js';
-import { makeAccount, makeUser } from '../testing/fixtures.js';
+import { makeAccount, makeTopic, makeUser } from '../testing/fixtures.js';
 import { answeringWith, RECORDED_RENEWAL, RecordingPaymentProvider } from '../testing/payment-provider.js';
 import {
   deterministicRandom,
@@ -38,6 +40,8 @@ const RENEWAL = RECORDED_RENEWAL;
 let db: ReturnType<typeof createTestDb>['db'];
 let driver: SqliteDriver;
 let users: DrizzleUserRepo;
+let topics: DrizzleTopicRepo;
+let reductions: DrizzleTopicReductionRepo;
 let service: BillingService;
 let provider: RecordingPaymentProvider;
 
@@ -58,11 +62,34 @@ function aService(input: {
   return new BillingService({
     repo: new DrizzleBillingRepo(db),
     userRepo: users,
+    topicRepo: topics,
+    reductions,
     provider: input.provider ?? undefined,
     appBaseUrl: 'https://app.brieflyy.test',
     clock: makeTestClock(input.at ?? NOW).clock,
     random: deterministicRandom,
   });
+}
+
+/**
+ * `count` Topics this User holds, oldest first, one a day apart.
+ *
+ * Ascending creation with distinct instants, because the plan's rule is "the most
+ * recently added keep working" and nine Topics written against one clock would make
+ * that rule a tie-break rather than a rule.
+ */
+async function holdTopics(count: number, userId = 'user-iris'): Promise<readonly Topic[]> {
+  const held = Array.from({ length: count }, (_unused, index) =>
+    makeTopic({
+      id: `${userId}-topic-${index}`,
+      slug: `topic-${index}`,
+      title: `Topic ${index}`,
+      userId,
+      createdAt: new Date(`2026-01-${String(index + 1).padStart(2, '0')}T00:00:00Z`),
+    }),
+  );
+  await topics.insertMany(held);
+  return held;
 }
 
 beforeEach(async () => {
@@ -71,6 +98,8 @@ beforeEach(async () => {
   db = test.db;
   driver = test.driver;
   users = new DrizzleUserRepo(db);
+  topics = new DrizzleTopicRepo(db);
+  reductions = new DrizzleTopicReductionRepo(db);
   await users.insert(IRIS);
   provider = new RecordingPaymentProvider({ checkoutUrl: HOSTED });
   service = aService({ provider });
@@ -578,6 +607,197 @@ describe('stopping a subscription', () => {
     expect(await aService({ provider: null }).cancelSubscription(IRIS)).toEqual({
       status: 'not_configured',
     });
+  });
+});
+
+describe('being over the FreeTier cap', () => {
+  it('is not a state a free User within the cap is in', async () => {
+    await holdTopics(3);
+
+    // The boundary that separates this from the paywall: three is the cap, and a
+    // User holding three has nothing over it.
+    expect(await service.topicOverflowFor(IRIS)).toEqual({ kind: 'within_cap' });
+  });
+
+  it('is not a state a paid User is in however many Topics they hold', async () => {
+    await holdTopics(9);
+
+    // PaidTier has no cap, so a User on it has no question to answer — which is
+    // what makes it safe to derive this rather than to record it at the moment the
+    // plan changed.
+    expect(await service.topicOverflowFor({ ...IRIS, tier: 'paid' })).toEqual({
+      kind: 'within_cap',
+    });
+  });
+
+  it('says how many Topics are over the cap, and which of them would stop', async () => {
+    await holdTopics(9);
+
+    const overflow = await service.topicOverflowFor(IRIS);
+
+    expect(overflow).toMatchObject({ kind: 'over_cap', cap: 3, held: 9, overBy: 6 });
+    expect(overflow.kind === 'over_cap' ? overflow.kept.map((t) => t.title) : null).toEqual([
+      'Topic 6',
+      'Topic 7',
+      'Topic 8',
+    ]);
+    // The half that would stop is the complement of what is kept, so the split is
+    // checked against the Topics they actually hold rather than a second list.
+    const held = await topics.listByUser('user-iris');
+    expect(
+      held.filter((t) => (overflow.kind === 'over_cap' ? overflow.kept : []).every((k) => k.id !== t.id)),
+    ).toHaveLength(6);
+  });
+
+  it('lists every Topic of theirs, so the page can name all nine', async () => {
+    await holdTopics(9);
+
+    const overflow = await service.topicOverflowFor(IRIS);
+
+    expect(overflow.kind === 'over_cap' ? overflow.topics : []).toHaveLength(9);
+  });
+});
+
+describe('answering the question', () => {
+  it('removes the Topics that were not kept, and keeps the ones that were', async () => {
+    await holdTopics(9);
+
+    const outcome = await service.reduceTopics(IRIS, {
+      keptSlugs: ['topic-6', 'topic-7', 'topic-8'],
+    });
+
+    expect(outcome.status).toBe('reduced');
+    const left = await topics.listByUser('user-iris');
+    expect(left.map((t) => t.title)).toEqual(['Topic 6', 'Topic 7', 'Topic 8']);
+  });
+
+  it('records the answer, both halves of it and the numbers it was given against', async () => {
+    await holdTopics(9);
+
+    await service.reduceTopics(IRIS, { keptSlugs: ['topic-6', 'topic-7', 'topic-8'] });
+
+    // The row is the record of a decision, so it has to name which rows the answer
+    // was about: a count of six would survive a User who removed three of them by
+    // hand and then said something different.
+    expect(await reductions.findForUser('user-iris')).toEqual([
+      {
+        id: expect.any(String),
+        userId: 'user-iris',
+        cap: 3,
+        held: 9,
+        keptTopicIds: ['user-iris-topic-6', 'user-iris-topic-7', 'user-iris-topic-8'],
+        stoppedTopicIds: [
+          'user-iris-topic-0',
+          'user-iris-topic-1',
+          'user-iris-topic-2',
+          'user-iris-topic-3',
+          'user-iris-topic-4',
+          'user-iris-topic-5',
+        ],
+        answeredAt: NOW,
+      },
+    ]);
+  });
+
+  it('answers with something other than the plan, because the User may disagree with it', async () => {
+    await holdTopics(9);
+
+    await service.reduceTopics(IRIS, { keptSlugs: ['topic-0', 'topic-1', 'topic-2'] });
+
+    // The three oldest are the ones the plan would have stopped, and the page said
+    // so before anything happened. Honouring the opposite answer is the whole of
+    // "stated where the User can act on it".
+    expect((await topics.listByUser('user-iris')).map((t) => t.title)).toEqual([
+      'Topic 0',
+      'Topic 1',
+      'Topic 2',
+    ]);
+    expect(countRows(driver, 'topic_reductions')).toBe(1);
+  });
+
+  it('frees the slots, so a Topic can be added straight afterwards', async () => {
+    await holdTopics(9);
+    await service.reduceTopics(IRIS, { keptSlugs: ['topic-6', 'topic-7', 'topic-8'] });
+
+    // The consequence the whole question exists for: six slots are free, and a
+    // removed Topic does not go on counting against the cap.
+    await topics.insert(makeTopic({ id: 'new', slug: 'new', userId: 'user-iris' }));
+    expect((await topics.listByUser('user-iris')).length).toBe(4);
+  });
+
+  it('refuses an answer that keeps nothing, and removes nothing', async () => {
+    await holdTopics(9);
+
+    // A submission whose checkboxes arrived unticked, or a browser that sent the
+    // field with no value, is not an instruction to remove every Topic the User has.
+    expect(await service.reduceTopics(IRIS, { keptSlugs: [] })).toEqual({
+      status: 'refused',
+      reason: 'nothing_kept',
+    });
+    expect(await topics.listByUser('user-iris')).toHaveLength(9);
+    expect(countRows(driver, 'topic_reductions')).toBe(0);
+  });
+
+  it('refuses an answer that keeps more than the cap allows', async () => {
+    await holdTopics(9);
+
+    // Dropping two of the ticked Topics to fit would be this application making
+    // the decision the User was asked for, which is the thing this page exists not
+    // to do.
+    expect(await service.reduceTopics(IRIS, { keptSlugs: ['topic-0', 'topic-1', 'topic-2', 'topic-3'] })).toEqual({
+      status: 'refused',
+      reason: 'too_many_kept',
+    });
+    expect(await topics.listByUser('user-iris')).toHaveLength(9);
+  });
+
+  it('has nothing to answer for a User within the cap, and takes nothing', async () => {
+    await holdTopics(3);
+
+    expect(await service.reduceTopics(IRIS, { keptSlugs: ['topic-0'] })).toEqual({
+      status: 'not_over_cap',
+    });
+    expect(await topics.listByUser('user-iris')).toHaveLength(3);
+    expect(countRows(driver, 'topic_reductions')).toBe(0);
+  });
+
+  it('has nothing to answer for a paid User, however many they submitted', async () => {
+    await holdTopics(9);
+
+    expect(await service.reduceTopics({ ...IRIS, tier: 'paid' }, { keptSlugs: [] })).toEqual({
+      status: 'not_over_cap',
+    });
+    expect(await topics.listByUser('user-iris')).toHaveLength(9);
+  });
+
+  it('does not remove a Topic belonging to somebody else, whatever the submission names', async () => {
+    await users.insert(makeUser({ id: 'user-sam' }));
+    await holdTopics(9);
+    const sams = await holdTopics(2, 'user-sam');
+
+    await service.reduceTopics(IRIS, {
+      keptSlugs: ['topic-6', 'topic-7', 'topic-8', sams[0]!.slug],
+    });
+
+    // A slug resolved against this User's own Topics and nobody else's, the same
+    // rule the topic settings page resolves a slug by. Sam's Topics are not part of
+    // the decision and are not touched by it.
+    expect((await topics.listByUser('user-sam')).map((t) => t.id)).toEqual(
+      sams.map((t) => t.id),
+    );
+  });
+
+  it('removes nothing but the six, leaving a removed Topic a removed Topic rather than a hard delete', async () => {
+    await holdTopics(9);
+    await service.reduceTopics(IRIS, { keptSlugs: ['topic-6', 'topic-7', 'topic-8'] });
+
+    // Soft removal, so the Topic's brief history is still there and its slug still
+    // belongs to them — the two things `topics.removed_at` exists for.
+    const rows = driver
+      .prepare('SELECT slug, removed_at FROM topics ORDER BY slug')
+      .all() as { slug: string; removed_at: number | null }[];
+    expect(rows.filter((r) => r.removed_at !== null)).toHaveLength(6);
+    expect(rows).toHaveLength(9);
   });
 });
 

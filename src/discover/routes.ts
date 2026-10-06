@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 
 import type { Clock } from '../domain/clock.js';
 import type { Tier, UserId } from '../domain/types.js';
-import { resolveTier } from '../domain/tier.js';
+import { resolveTier, topicCapOverflow } from '../domain/tier.js';
 import {
   AUTHENTICATED_ROUTE_CONFIG,
   AUTHENTICATED_WRITE_ROUTE_CONFIG,
@@ -92,6 +92,17 @@ export async function registerDiscoverRoutes(
       clock: opts.clock,
     });
 
+  /**
+   * Whether this User is holding more Topics than their tier allows.
+   *
+   * The DiscoverTab's own count and the session's tier are what it is made of, and
+   * the same two facts every other surface carrying this reason is given. Not the
+   * cap in the plan line below, because that one counts down from zero on a tier with
+   * no limit and this is a question only a capped tier can answer.
+   */
+  const overflowFor = (user: { readonly id: UserId; readonly tier: Tier }, held: number) =>
+    topicCapOverflow(resolveTier(user), held);
+
   fastify.get('/discover', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
     if (!requireAuthPage(req, reply)) return reply;
     const account = await shellFor(req);
@@ -99,7 +110,12 @@ export async function registerDiscoverRoutes(
     return reply
       .type('text/html')
       .send(
-        discoverPage({ account, discover, requestToken: req.requestToken ?? null }),
+        discoverPage({
+          account,
+          discover,
+          overflow: overflowFor(req.auth.user, discover.heldCount),
+          requestToken: req.requestToken ?? null,
+        }),
       );
   });
 
@@ -144,6 +160,7 @@ export async function registerDiscoverRoutes(
             account,
             discover,
             ...(message === null ? {} : { message }),
+            overflow: overflowFor(req.auth.user, discover.heldCount),
             requestToken: req.requestToken ?? null,
           }),
         );

@@ -586,6 +586,41 @@ export interface Subscription {
 export type SubscriptionStatus = 'active' | 'cancelling' | 'ended';
 
 /**
+ * One answer a User gave to holding more Topics than their tier's cap allows.
+ *
+ * PaidTier holds unlimited Topics and FreeTier holds three, so a User whose
+ * Subscription ends while they hold nine has six of them the new plan cannot pay
+ * for. Nothing is taken from them until they have been asked which of them to stop
+ * and have answered (ADR-0025); this is that answer, written down once it is given.
+ *
+ * The two lists are Ids and not slugs, because a Topic's slug is its address rather
+ * than its identity: it survives a removal, so re-adding the same subject allocates
+ * `fusion-energy-2` beside the removed row and a slug recorded as the answer would
+ * no longer name one Topic. What the User was shown was the title and the slug of
+ * each; what is kept is which rows the answer was about.
+ *
+ * `cap` and `held` are the numbers the answer was given against, held rather than
+ * recomputed: the tier may have moved again by the time this row is read, and what
+ * a row is evidence of is the page the User was looking at when they answered it.
+ *
+ * There is no uniqueness on the User, because one answer per User would be wrong:
+ * somebody who pays again and later stops paying is answering twice, and the second
+ * answer is a new decision rather than an edit of the first.
+ */
+export interface TopicReduction {
+  readonly id: string;
+  readonly userId: UserId;
+  /** How many Topics the tier held when they answered. */
+  readonly cap: number;
+  /** How many Topics they held when they answered. */
+  readonly held: number;
+  readonly keptTopicIds: readonly TopicId[];
+  readonly stoppedTopicIds: readonly TopicId[];
+  /** When they answered, which is the only moment there is. */
+  readonly answeredAt: Date;
+}
+
+/**
  * One event from the PaymentProvider, once it has been acted on.
  *
  * `id` is the provider's own identifier for the event and the primary key, so a

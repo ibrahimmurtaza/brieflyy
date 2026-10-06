@@ -5,7 +5,12 @@ import {
   MAX_CLUSTER_WINDOW_DAYS,
   MIN_CLUSTER_WINDOW_DAYS,
 } from '../domain/cluster-window.js';
-import { resolveTier, topicCapFor } from '../domain/tier.js';
+import {
+  resolveTier,
+  topicCapFor,
+  topicCapOverflow,
+  type TopicCapOverflow,
+} from '../domain/tier.js';
 import { escapeHtml } from '../domain/html.js';
 import { titleKey } from '../domain/slug.js';
 import { INITIAL_TOPIC_COUNT } from '../onboarding/onboarding-service.js';
@@ -36,7 +41,14 @@ import {
   type UnsubscribeService,
 } from '../services/unsubscribe-service.js';
 import { EMAIL_BRIEFS_PATH } from '../services/unsubscribe-links.js';
-import { layout, planLine, clusterAnchor, type ShellAccount, ARCHIVE_SEARCH_PATH } from './layout.js';
+import {
+  capCallout,
+  layout,
+  planLine,
+  clusterAnchor,
+  type ShellAccount,
+  ARCHIVE_SEARCH_PATH,
+} from './layout.js';
 import { formatHumanTime } from './human-time.js';
 import { resolveShellAccount, shellAccountFor } from './shell.js';
 import { pad2 } from '../domain/timezone.js';
@@ -187,7 +199,7 @@ export async function registerPageRoutes(
     const templates = await onboardingService.listTemplates();
     const existing = await onboardingService.listTopics(req.auth.user.id);
     const cap = await onboardingService.topicCapForUser(req.auth.user.id);
-    const atCap = existing.length >= cap;
+    const tier = resolveTier(req.auth.user);
     return reply
       .type('text/html')
       .send(
@@ -195,8 +207,9 @@ export async function registerPageRoutes(
           account: await shellFor(req),
           templates,
           existing,
-          atCap,
+          atCap: existing.length >= cap,
           cap,
+          overflow: topicCapOverflow(tier, existing.length),
           mode: 'onboarding',
           requestToken: req.requestToken ?? null,
         }),
@@ -208,7 +221,7 @@ export async function registerPageRoutes(
     const templates = await onboardingService.listTemplates();
     const existing = await onboardingService.listTopics(req.auth.user.id);
     const cap = await onboardingService.topicCapForUser(req.auth.user.id);
-    const atCap = existing.length >= cap;
+    const tier = resolveTier(req.auth.user);
     return reply
       .type('text/html')
       .send(
@@ -216,8 +229,9 @@ export async function registerPageRoutes(
           account: await shellFor(req),
           templates,
           existing,
-          atCap,
+          atCap: existing.length >= cap,
           cap,
+          overflow: topicCapOverflow(tier, existing.length),
           mode: 'manage',
           requestToken: req.requestToken ?? null,
         }),
@@ -469,6 +483,7 @@ export async function registerPageRoutes(
           topics,
           tier,
           atCap: topics.length >= cap,
+          overflow: topicCapOverflow(tier, topics.length),
           ...(rollup === null ? {} : { rollup }),
           requestToken: req.requestToken ?? null,
         }),
@@ -847,6 +862,12 @@ function pickTopicsPage(input: {
   existing: readonly Topic[];
   atCap: boolean;
   cap: number;
+  /**
+   * How far over their cap they are, when they are over it. Separate from `atCap`
+   * because the two are different problems with different answers: at the cap is a
+   * refusal to add, over it is a decision about what is already there.
+   */
+  overflow: TopicCapOverflow | null;
   mode: 'onboarding' | 'manage';
   readonly requestToken?: string | null;
 }): string {
@@ -955,9 +976,12 @@ function pickTopicsPage(input: {
         ? 'Add as many topics as you like — from the Directory below, your own free-form idea, or a mix.'
         : `Pick up to ${remaining} more topic${remaining === 1 ? '' : 's'} — from the Directory below, your own free-form idea, or a mix.`;
 
-  const paywallHtml = locked
-    ? `    <div class="callout callout--paywall">You have reached the free-topic limit (${cap}). <a href="/upgrade">Upgrade</a> to add more, or remove a topic to swap it.</div>`
-    : '';
+  const paywallHtml = capCallout(
+    input.overflow,
+    locked
+      ? `    <div class="callout callout--paywall">You have reached the free-topic limit (${cap}). <a href="/upgrade">Upgrade</a> to add more, or remove a topic to swap it.</div>`
+      : '',
+  );
 
   const actionHref = onboarding ? '/onboarding/pick-topics' : '/pick-topics';
 
@@ -1484,6 +1508,12 @@ function homePage(input: {
   topics: readonly Topic[];
   tier: Tier;
   atCap: boolean;
+  /**
+   * How far over their cap they are, when they are over it — which is a different
+   * sentence from being at it, and is stated on this page too because this is the
+   * page a User lands on.
+   */
+  overflow: TopicCapOverflow | null;
   /** Every Topic's volume added together, when a trends service is mounted. */
   rollup?: TrendsRollup;
   readonly requestToken?: string | null;
@@ -1499,9 +1529,12 @@ function homePage(input: {
   });
   // A user who cannot add another topic is told so on the page they land on,
   // not only on the picker they have to go and find.
-  const atCapHtml = input.atCap
-    ? `    <div class="callout callout--paywall">You are using all ${cap} free topics. <a href="/upgrade">Upgrade</a> to add more, or remove one to pick a replacement.</div>`
-    : '';
+  const atCapHtml = capCallout(
+    input.overflow,
+    input.atCap
+      ? `    <div class="callout callout--paywall">You are using all ${cap} free topics. <a href="/upgrade">Upgrade</a> to add more, or remove one to pick a replacement.</div>`
+      : '',
+  );
   const rows = input.topics
     .map((t) => {
       // A free-form Topic is stored with the `unspecified` category, which is

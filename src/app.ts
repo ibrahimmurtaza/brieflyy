@@ -80,6 +80,7 @@ import { registerTierRoutes } from './billing/tier-routes.js';
 import { BillingService } from './billing/billing-service.js';
 import { registerBillingRoutes } from './billing/billing-routes.js';
 import { DrizzleBillingRepo } from './repos/billing-repo.js';
+import { DrizzleTopicReductionRepo } from './repos/topic-reduction-repo.js';
 import type { PaymentProvider } from './domain/payment.js';
 import type { FeedFetcher } from './ingest/feed-fetcher.js';
 
@@ -421,6 +422,11 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
   const billingService = new BillingService({
     repo: new DrizzleBillingRepo(opts.db),
     userRepo,
+    // A Subscription ending is what can leave a User holding more Topics than their
+    // new cap allows, so the service that moves the tier is the one that can say
+    // what happens to them and record what the User decided about it.
+    topicRepo,
+    reductions: new DrizzleTopicReductionRepo(opts.db),
     provider: opts.paymentProvider,
     appBaseUrl: opts.appBaseUrl,
     clock,
