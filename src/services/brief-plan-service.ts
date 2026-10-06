@@ -98,6 +98,33 @@ export interface SendBriefResult {
   readonly generation: BriefGeneration;
 }
 
+export interface RegenerateBriefInput {
+  readonly userId: UserId;
+  /** The snapshot the User opened and asked to reshape. */
+  readonly briefSnapshotId: string;
+  /** The selection and order the User made their own, newest reading first. */
+  readonly clusterIds: readonly ClusterId[];
+  /** Where the new brief goes. The address is the caller's to resolve. */
+  readonly to: string;
+}
+
+/**
+ * A plan the Topic no longer supports. Not a Cluster-by-Cluster gap filled
+ * in silently: a plan that names one is refused whole, because a brief with a
+ * hole eaten out of it is not what was decided.
+ */
+export class BriefPlanRefusedError extends Error {
+  constructor(reason: string) {
+    super(reason);
+    this.name = 'BriefPlanRefusedError';
+  }
+}
+
+/** Why a plan is refused. Returned rather than thrown, so a page can say it. */
+export interface PlanRefusal {
+  readonly reason: string;
+}
+
 export class BriefPlanService {
   constructor(private readonly deps: BriefPlanServiceDeps) {}
 
@@ -216,6 +243,104 @@ export class BriefPlanService {
       rendered,
     });
     return { plan, snapshot, delivery, generation };
+  }
+
+  /**
+   * The plan a stored snapshot was rendered from, in the order it was sent.
+   *
+   * Read back rather than re-sorted: the stored cluster ids are the decision,
+   * and a plan whose User or snapshot does not match is not found at all, for
+   * the same reason a snapshot lookup is scoped inside the query.
+   */
+  async planForSnapshot(
+    userId: UserId,
+    briefSnapshotId: string,
+  ): Promise<BriefPlan | null> {
+    const snapshot = await this.deps.briefSnapshotRepo.findByIdForUser(
+      userId,
+      briefSnapshotId,
+    );
+    if (!snapshot) return null;
+    return this.deps.briefPlanRepo.findByIdForUser(userId, snapshot.briefPlanId);
+  }
+
+  /**
+   * Whether this Topic's Clusters still hold every Cluster this plan names,
+   * in whatever order it was written in. The one question a User is owed an
+   * answer to before a regenerated brief is rendered: a Cluster that has gone
+   * cannot be quoted, and a plan that names one must be refused with the
+   * reason, not rendered as a brief with the hole hidden.
+   */
+  async checkPlan(plan: BriefPlan): Promise<PlanRefusal | null> {
+    return this.refuseIfUnsupported(plan.topicId, plan.clusterIds);
+  }
+
+  /**
+   * A new, immutable brief from the plan a User was sent: their selection and
+   * order, re-validated against the Topic as it is now, rendered and sent
+   * through the same three steps every brief goes through. The plan the User
+   * opened before is a new plan's parent, never the new plan itself — and the
+   * snapshot it produced is never touched.
+   */
+  async regenerateBrief(input: RegenerateBriefInput): Promise<SendBriefResult> {
+    const snapshot = await this.deps.briefSnapshotRepo.findByIdForUser(
+      input.userId,
+      input.briefSnapshotId,
+    );
+    if (!snapshot) {
+      throw new BriefPlanRefusedError('That brief is not yours, or does not exist.');
+    }
+    const refusal = await this.refuseIfUnsupported(
+      snapshot.topicId,
+      input.clusterIds,
+    );
+    if (refusal) throw new BriefPlanRefusedError(refusal.reason);
+
+    const plan: BriefPlan = {
+      id: this.deps.random.uuid(),
+      topicId: snapshot.topicId,
+      userId: input.userId,
+      createdAt: this.deps.clock.now(),
+      clusterIds: [...input.clusterIds],
+    };
+    await this.deps.briefPlanRepo.insert(plan);
+    const { snapshot: newSnapshot, rendered } = await this.renderSnapshot(plan);
+    const { delivery, generation } = await this.sendSnapshot({
+      to: input.to,
+      snapshot: newSnapshot,
+      rendered,
+    });
+    return { plan, snapshot: newSnapshot, delivery, generation };
+  }
+
+  private async refuseIfUnsupported(
+    topicId: TopicId,
+    clusterIds: readonly ClusterId[],
+  ): Promise<PlanRefusal | null> {
+    if (clusterIds.length === 0) {
+      return { reason: 'A plan with no Clusters is an empty brief.' };
+    }
+    const seen = new Set<string>();
+    const repeated = clusterIds.filter((id) => {
+      const key = id as string;
+      if (seen.has(key)) return true;
+      seen.add(key);
+      return false;
+    });
+    if (repeated.length > 0) {
+      return {
+        reason: `This plan names the same Cluster twice: ${repeated.join(', ')}.`,
+      };
+    }
+    const clusters = await this.deps.clusterRepo.listByTopicId(topicId);
+    const held = new Set(clusters.map((c) => c.id as string));
+    const missing = clusterIds.filter((id) => !held.has(id as string));
+    if (missing.length > 0) {
+      return {
+        reason: `This plan names Clusters the Topic no longer has: ${missing.join(', ')}.`,
+      };
+    }
+    return null;
   }
 
   /**
