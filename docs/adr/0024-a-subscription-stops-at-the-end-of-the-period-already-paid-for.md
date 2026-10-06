@@ -61,13 +61,32 @@ the database. With this rule the provider is reached at most once per period per
 rather than once per page view, and `renews_at` is a column rather than something
 derived because the answer is held, not recomputed per request.
 
-It is also the only state change a `GET` makes anywhere in this application, and it
-is written down rather than left in memory because the alternative is a row that has
-drifted out of date and a provider asked on every visit. It is an answer to "what is
-this Subscription now", moved from a page into the record every other read comes
-from — not a decision, which is why it cannot touch the tier. ADR-0022's gap is the
-other kind of `GET` write: one whose effect a reader could not predict. This one's is
-a copy of what somebody else has already said.
+A Subscription that has **ended** is the one case never asked about at all, and it is
+separate because its renewal date says nothing: it is either null or the date the
+period ran out on, so neither rule above has anything to work with. What does answer
+is the status itself — an ended Subscription has no next charge and the provider will
+not hold it again, so there is nothing left to learn. A `cancelling` Subscription is
+asked about, and the difference is the whole of it: `ended` is a fact and `cancelling`
+is a promise about a date, and the signed event that settles a promise can be missed.
+That read is the recovery.
+
+Without the first of those two rules the promise above is false in the one case a User
+is most likely to keep returning to. An ended Subscription carries a renewal date in
+the past, so the "asked once per period" rule would ask again on every page view, for
+as long as the User kept an account — and worse, write the row back each time. Which is
+also why this is written down here rather than left to the code to imply: a rule that
+holds for `active` and quietly fails for `ended` is a rule with a hole in it the shape
+of the most common Subscription in a mature deployment.
+
+This is one of the two state changes a `GET` makes in this application — the other
+being the Trends rollup, which measures a Topic added since the hourly job last passed
+once on its first read (CONTEXT.md, *Trends rollup*). It is written down rather than
+left in memory because the alternative is a row that has drifted out of date and a
+provider asked again on every visit. It is an answer to "what is this Subscription now",
+moved from a page into the record every other read comes from — not a decision, which
+is why it cannot touch the tier. ADR-0022's gap is the other kind of `GET` write: one
+whose effect a reader could not predict. This one's is a copy of what somebody else has
+already said.
 
 A provider that cannot be reached leaves the row exactly as it was. Overwriting it
 with a guess would be worse than a stale date: it would be a wrong one presented as

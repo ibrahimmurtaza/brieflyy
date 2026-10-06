@@ -216,7 +216,12 @@ answer. A stored renewal date is the end of the period paid for, so while it is 
 in the future it *is* the next charge; once it has passed, the period has rolled over
 and only the provider knows where it moved to. So the provider is reached at most
 once per period per User rather than once per visit, which is what keeps "a later
-read does not depend on asking the provider again" true of this layer. What it is
+read does not depend on asking the provider again" true of this layer. A Subscription
+that has *ended* is never asked about: its renewal date is null or already past, so
+neither rule has anything to work with, and the status is itself the answer — there is
+no next charge and the provider will not hold it again. Without that exception the
+"once per period" claim is false in exactly the case a User keeps returning to, and the
+rule holds only for the Subscription still paying. What it is
 told is written to `subscriptions`, which is what makes that row a record rather than
 a cache. The date is read rather than derived: a month is not always thirty days, and
 a date the application worked out itself is an invention printed as though somebody
@@ -320,12 +325,15 @@ Signing out is treated as the state change it is: a stranger's page cannot end a
 User's session, the shell's own sign-out still works, and so does the one on the
 page a refusal is answered with. See ADR-0021 and ADR-0022.
 
-Two `GET` routes do change something and are not behind the guard, because a GET
-has no body to echo a token in: following a magic link (or a Google callback)
-writes a session. Nothing stops a stranger from sending a reader to their own
-verify link and signing them into the attacker's account; `write-guard.test.ts`
-names both routes so the gap is on the record rather than implied away, and
-CONTEXT.md records it as not built.
+Three `GET` routes do change something and are not behind the guard, because a GET
+has no body to echo a token in. Two of them write a session — following a magic link
+(or a Google callback) — and nothing stops a stranger from sending a reader to their
+own verify link and signing them into the attacker's account. The third is
+`GET /settings/billing`, which writes the renewal date it read from the provider: a
+copy of what somebody else has already said rather than a decision, and still not
+something a `GET` can carry a token for. `write-guard.test.ts` names all three so the
+gap is on the record rather than implied away, and CONTEXT.md records the session-writing
+pair as not built.
 
 An unexpected failure answers a page or a JSON body, never a bare 500. The
 handler in `src/http/errors.ts` is installed on the instance every route is
@@ -468,9 +476,10 @@ src/
 │                          # in pages/routes.ts, with the rest of the shell's; its
 │                          # full-text index is in db/archive-index.ts
 ├── billing/               # the PaymentProvider seam (Stripe), the BillingService, the
-│                          # Subscription settings surface and its two routes:
-│                          # POST /billing/checkout, POST /settings/billing/cancel,
-│                          # and the public POST /billing/webhook
+│                          # Subscription settings surface and its four routes:
+│                          # GET /settings/billing, POST /billing/checkout,
+│                          # POST /settings/billing/cancel, and the public
+│                          # POST /billing/webhook
 ├── discover/              # the discover layer's view: the DiscoverTab page + routes
 ├── email/                 # EmailTransport seam (Console + Resend)
 ├── oauth/                 # OAuthClient seam (Google) + the PKCE exchange
@@ -542,7 +551,7 @@ purpose, and each is reached by something other than a request:
 `oauth/` and the PaymentProvider are inside the closure but conditional: `oauth/`
 builds a client only when `OAUTH_PROVIDER` names a provider, and where there is none
 the sign-in page offers no Google and the two Google routes refuse rather than throw
-(ADR-0019); `billing/` registers its three routes either way and only builds a
+(ADR-0019); `billing/` registers its four routes either way and only builds a
 PaymentProvider when all three of `STRIPE_SECRET_KEY`,
 `STRIPE_WEBHOOK_SECRET` and `STRIPE_PAID_PRICE_ID` are set, so an instance that takes
 no payments still has a surface the route guard can check and an upgrade page that

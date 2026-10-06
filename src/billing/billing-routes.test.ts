@@ -736,10 +736,12 @@ describe('HTTP: the subscription settings surface', () => {
     }
   });
 
-  it('says a User is back on the free plan when the provider has stopped holding the Subscription', async () => {
+  it('says a Subscription has ended when the provider has stopped holding it', async () => {
     // The page reads the Subscription, and the Subscription is what the provider's
     // answer changes. The *tier* is deliberately not moved by a page read, and the
-    // other two halves of this describe do that.
+    // other two halves of this describe do that — so the page must not claim a tier
+    // here. "On the free plan now" under a header that still reads `users.tier` and
+    // says "Paid plan" is two sources disagreeing inside one viewport.
     const gone = await buildHarness({
       provider: () => ({ ok: false, status: 404, async json() { return {}; } }),
     });
@@ -756,7 +758,11 @@ describe('HTTP: the subscription settings surface', () => {
         headers: { cookie: gone.cookie },
       });
       expect(page.body).toMatch(/Your paid plan has ended/);
-      expect(page.body).toMatch(/on the free plan now/);
+      expect(page.body).toMatch(/no charge/i);
+      // The header still states the tier, and the tier has not moved: one source,
+      // stated once.
+      expect(page.body).toMatch(/Paid plan/);
+      expect(page.body).not.toMatch(/on the free plan now/);
       expect(gone.driver.prepare('SELECT status FROM subscriptions').all()).toEqual([
         { status: 'ended' },
       ]);
