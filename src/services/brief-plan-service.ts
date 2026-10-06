@@ -64,6 +64,27 @@ export interface SendBriefInput {
   readonly maxClusters?: number;
 }
 
+/** A stored snapshot and the render it was stored from. One value, indivisible. */
+export interface RenderedSnapshot {
+  readonly snapshot: BriefSnapshot;
+  /**
+   * What the render produced, carried alongside the stored snapshot: the
+   * snapshot holds the document, this holds the subject line, the headers mail
+   * clients read, and what writing cost.
+   */
+  readonly rendered: RenderedBrief;
+}
+
+export interface SendSnapshotInput extends RenderedSnapshot {
+  /** Where the snapshot goes. The address is the caller's to resolve. */
+  readonly to: string;
+}
+
+export interface SendSnapshotResult {
+  readonly delivery: EmailDelivery;
+  readonly generation: BriefGeneration;
+}
+
 export interface SendBriefResult {
   readonly plan: BriefPlan;
   readonly snapshot: BriefSnapshot;
@@ -136,15 +157,13 @@ export class BriefPlanService {
   }
 
   /**
-   * Plan a Topic, render it, store it, send it, and record that it was sent.
+   * Render a stored plan into a snapshot, stored so it is never rendered twice.
    *
-   * The whole path in one call, because a caller that has to remember the order
-   * is a caller that will get it wrong: a plan with no snapshot is a brief nobody
-   * received, and a snapshot with no delivery is a brief that was rendered and
-   * then lost, with no record that it was ever owed to anyone.
+   * Rendering and sending are separate steps: the snapshot is what was (or will
+   * be) sent, so it exists before the send and would survive a failed one. The
+   * caller takes the delivery decision from there.
    */
-  async sendBrief(input: SendBriefInput): Promise<SendBriefResult> {
-    const plan = await this.createPlan(input);
+  async renderSnapshot(plan: BriefPlan): Promise<RenderedSnapshot> {
     // Minted before the render rather than after, because the render is what
     // writes them into the document: an unsubscribe link is part of the brief
     // that was sent, and a BriefSnapshot is never rendered again.
@@ -155,23 +174,48 @@ export class BriefPlanService {
       unsubscribe,
     );
     const snapshot = await this.createSnapshotFromPlan(plan, rendered, unsubscribe);
+    return { snapshot, rendered };
+  }
 
+  /**
+   * Send a stored snapshot and record that it was sent.
+   *
+   * The record is written after the send, because this row is the claim that a
+   * brief reached a User. A transport that threw never delivered anything, and a
+   * delivery recorded for it would be a report of an event that did not happen.
+   */
+  async sendSnapshot(input: SendSnapshotInput): Promise<SendSnapshotResult> {
     await this.deps.emailTransport.send({
       to: input.to,
-      subject: rendered.subject,
-      text: rendered.text,
-      html: rendered.html,
+      subject: input.rendered.subject,
+      text: input.snapshot.text,
+      html: input.snapshot.html,
       // The RFC 8058 headers, which are the only way a client knows it may
       // render a one-click unsubscribe control at all.
-      headers: rendered.headers,
+      headers: input.rendered.headers,
     });
 
-    // Written after the send, because this row is the claim that a brief
-    // reached a User. A transport that threw never delivered anything, and a
-    // delivery recorded for it would be a report of an event that did not
-    // happen.
-    const delivery = await this.recordDelivery(snapshot, rendered.generation);
-    return { plan, snapshot, delivery, generation: rendered.generation };
+    const delivery = await this.recordDelivery(input.snapshot, input.rendered.generation);
+    return { delivery, generation: input.rendered.generation };
+  }
+
+  /**
+   * Plan a Topic, render it, store it, send it, and record that it was sent.
+   *
+   * The whole path in one call, because a caller that has to remember the order
+   * is a caller that will get it wrong: a plan with no snapshot is a brief nobody
+   * received, and a snapshot with no delivery is a brief that was rendered and
+   * then lost, with no record that it was ever owed to anyone.
+   */
+  async sendBrief(input: SendBriefInput): Promise<SendBriefResult> {
+    const plan = await this.createPlan(input);
+    const { snapshot, rendered } = await this.renderSnapshot(plan);
+    const { delivery, generation } = await this.sendSnapshot({
+      to: input.to,
+      snapshot,
+      rendered,
+    });
+    return { plan, snapshot, delivery, generation };
   }
 
   /**
