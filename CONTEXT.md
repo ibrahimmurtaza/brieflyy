@@ -81,14 +81,14 @@ _Avoid_: AI summary, paraphrase
 _Avoid_: stats, telemetry, metrics
 
 **BriefPlan**: A selection and ordering of Clusters for a Topic at a moment in time. The artefact a BriefSnapshot is derived from.
-**Not built**: regenerating a plan, and reading one back. A plan is written in the same step that renders and sends a brief, and nothing reads a stored one back *as a plan* — the Archive index reads a snapshot's plan for the `cluster_ids` it needs to name that snapshot's Sources and Entities, in the same statement that writes the row. So "the regenerable artifact" is the intended shape rather than the current one.
+A stored plan is read back *as a plan* — `GET /briefs/:id/edit` shows the plan a BriefSnapshot was rendered from in the order it was sent, and `POST /briefs/:id/regenerate` turns the User's own selection and order into a new immutable BriefSnapshot delivered and recorded the same way as every other. A plan naming a Cluster the Topic no longer holds is refused with a reason, and a stored plan's order is the order it is read back in, never a fresh sort.
 _Avoid_: brief, digest
 
 **BriefSnapshot**: An immutable, linkable rendering of a BriefPlan — the form of a brief that is emailed. Once sent, does not change. Retained forever regardless of tier, since it is what was sent.
 _Avoid_: email brief, sent brief
 
 **LivingBrief**: What a Topic looks like in the app: its Clusters, ordered by what the User's Feedback says, read fresh on each visit and so reflecting the Topic as of that moment. It is a rendering, not a stored artefact — there is no LivingBrief table, type or route, and the word names the in-app surface rather than anything the database holds.
-**Not built**: deriving it from a BriefPlan. The plan an emailed brief is built from has no in-app counterpart, which is why the two halves of **Brief** below are described separately.
+A plan an emailed brief is built from now has an in-app counterpart — `GET /briefs/:id/edit` — but the LivingBrief itself is still read from the Topic's Clusters directly.
 _Avoid_: feed, topic view
 
 **Brief**: The conceptual product artifact. A specific instance is either a BriefSnapshot (email) or a LivingBrief (in-app). Only the first is produced from a BriefPlan today; the second is read from the Topic's Clusters directly.

@@ -20,7 +20,7 @@ import {
   type TestClock,
 } from '../testing/test-clocks.js';
 import { RecordingSummaryClient } from '../testing/summary-client.js';
-import type { TopicId, UserId } from '../domain/types.js';
+import type { ClusterId, TopicId, UserId } from '../domain/types.js';
 
 const NOW = new Date('2026-09-02T12:00:00Z');
 const APP_BASE_URL = 'https://app.brieflyy.test';
@@ -349,5 +349,128 @@ describe('BriefPlanService.sendBrief', () => {
     // a rendered brief away over a provider that was briefly down.
     expect(harness.count('email_deliveries')).toBe(0);
     expect(harness.count('brief_snapshots')).toBe(1);
+  });
+});
+
+describe('BriefPlanService.planForSnapshot', () => {
+  it('shows the plan a stored snapshot was rendered from, in the order it was sent', async () => {
+    await seedClusters();
+    const { snapshot } = await harness.service.sendBrief(SEND);
+
+    const plan = await harness.service.planForSnapshot('user-1', snapshot.id);
+
+    // The same order the brief was built in, read back rather than re-sorted:
+    // the plan is what was decided, not what the Cluster table says today.
+    expect(plan?.clusterIds).toEqual(['c-fast', 'c-slow']);
+  });
+
+  it('is not the User who owns the snapshot', async () => {
+    await seedClusters();
+    const { snapshot } = await harness.service.sendBrief(SEND);
+
+    expect(await harness.service.planForSnapshot('user-2', snapshot.id)).toBeNull();
+  });
+});
+
+describe('BriefPlanService.regenerateBrief', () => {
+  it('turns a changed selection and order into a new snapshot, delivered and recorded like any other', async () => {
+    await seedClusters();
+    const { snapshot: before } = await harness.service.sendBrief(SEND);
+    const beforeHtml = (await harness.snapshotRepo.findByIdForUser('user-1', before.id))?.html;
+
+    // The User opened the brief they were sent and asked for it again with the
+    // order turned around — the same two Clusters, made their own.
+    harness.clock.advance(1000);
+    const result = await harness.service.regenerateBrief({
+      userId: 'user-1' as UserId,
+      briefSnapshotId: before.id,
+      clusterIds: ['c-slow' as ClusterId, 'c-fast' as ClusterId],
+      to: SEND.to,
+    });
+
+    // A new plan, a new snapshot, a new delivery, a new email.
+    expect(result.plan.clusterIds).toEqual(['c-slow', 'c-fast']);
+    expect(result.plan.id).not.toBe(before.briefPlanId);
+    expect(result.snapshot.id).not.toBe(before.id);
+    expect(result.snapshot.briefPlanId).toBe(result.plan.id);
+    expect(harness.count('brief_snapshots')).toBe(2);
+    expect(harness.count('email_deliveries')).toBe(2);
+    expect(harness.transport.snapshot().filter((m) => m.subject.endsWith('- Brieflyy'))).toHaveLength(2);
+    const sent = harness.transport.snapshot().filter((m) => m.subject.endsWith('- Brieflyy'))[1]!;
+    expect(sent.to).toBe(SEND.to);
+    expect(sent.text!.indexOf('Slow story')).toBeLessThan(sent.text!.indexOf('Fast story'));
+    expect(result.delivery.briefSnapshotId).toBe(result.snapshot.id);
+
+    // Ordering survives the round trip through storage: read the new plan back,
+    // and it is the order the User made their own, not a fresh sort of the table.
+    const storedNewPlan = await harness.planRepo.findByIdForUser('user-1', result.plan.id);
+    expect(storedNewPlan?.clusterIds).toEqual(['c-slow', 'c-fast']);
+
+    // The one rendered before is byte-identical: a snapshot does not change
+    // once it has been sent, and a second brief is a new snapshot, not a
+    // new version of the old one.
+    expect((await harness.snapshotRepo.findByIdForUser('user-1', before.id))?.html).toBe(beforeHtml);
+  });
+
+  it('refuses a plan naming a Cluster its Topic no longer has, with a reason', async () => {
+    await seedClusters();
+    const { snapshot: before } = await harness.service.sendBrief(SEND);
+
+    await expect(
+      harness.service.regenerateBrief({
+        userId: 'user-1' as UserId,
+        briefSnapshotId: before.id,
+        clusterIds: ['c-gone' as ClusterId],
+        to: SEND.to,
+      }),
+    ).rejects.toThrow(/c-gone/);
+
+    // Refusal is not a send: no snapshot rendered, no delivery recorded.
+    expect(harness.count('brief_snapshots')).toBe(1);
+    expect(harness.count('email_deliveries')).toBe(1);
+  });
+
+  it('refuses a plan that names the same Cluster twice with a reason', async () => {
+    await seedClusters();
+    const { snapshot: before } = await harness.service.sendBrief(SEND);
+
+    await expect(
+      harness.service.regenerateBrief({
+        userId: 'user-1' as UserId,
+        briefSnapshotId: before.id,
+        clusterIds: ['c-slow' as ClusterId, 'c-slow' as ClusterId],
+        to: SEND.to,
+      }),
+    ).rejects.toThrow(/twice/);
+    expect(harness.count('brief_snapshots')).toBe(1);
+  });
+
+  it('refuses an empty selection with a reason', async () => {
+    await seedClusters();
+    const { snapshot: before } = await harness.service.sendBrief(SEND);
+
+    await expect(
+      harness.service.regenerateBrief({
+        userId: 'user-1' as UserId,
+        briefSnapshotId: before.id,
+        clusterIds: [],
+        to: SEND.to,
+      }),
+    ).rejects.toThrow(/empty/i);
+    expect(harness.count('brief_snapshots')).toBe(1);
+  });
+
+  it('refuses a snapshot it cannot see rather than guessing whose it is', async () => {
+    await seedClusters();
+    const { snapshot: before } = await harness.service.sendBrief(SEND);
+
+    await expect(
+      harness.service.regenerateBrief({
+        userId: 'user-2' as UserId,
+        briefSnapshotId: before.id,
+        clusterIds: ['c-slow' as ClusterId],
+        to: SEND.to,
+      }),
+    ).rejects.toThrow();
   });
 });
