@@ -157,6 +157,25 @@ async function forge(
   };
 }
 
+/**
+ * The `GET`s that change state, so the guard's edge is on the record.
+ *
+ * Two of them write a session and are the security problem ADR-0022 is about: a link
+ * followed from an inbox is not a submission, so there is no form field for a token
+ * and nothing stops a stranger sending a reader to their own verify link. The third
+ * is `GET /settings/billing`, which writes the renewal date it read from the payment
+ * provider. That one is a copy of what somebody else has already said rather than a
+ * decision, so it is named here for the same reason rather than exempted quietly.
+ *
+ * A `GET` cannot carry a form field, so none of the three can be behind this guard.
+ * They are enumerated because a silent gap reads like a guarantee.
+ */
+const STATE_CHANGING_GETS = [
+  '/auth/google/callback',
+  '/auth/magic-link/verify',
+  '/settings/billing',
+] as const;
+
 describe('the cross-site write guard', () => {
   it('covers the submitting routes there are, rather than a chosen few', () => {
     // The enumeration is the claim: it comes from the manifest the application
@@ -175,19 +194,22 @@ describe('the cross-site write guard', () => {
   });
 
   it('names the routes that change state without submitting, so the gap is on the record', () => {
-    // A GET has no body to echo the token in, so the guard cannot reach these two.
+    // A GET has no body to echo the token in, so the guard cannot reach any of these.
     // They are here because a silent gap reads like a guarantee: following a magic
     // link a stranger chose signs the reader into the account that link belongs to,
     // and nothing in this application stops that (CONTEXT.md, Request token).
+    //
+    // The enumeration is the claim, and it is walked against the real manifest rather
+    // than a list somebody kept — a fourth state-changing `GET` would fail this, which
+    // is the point of naming them here rather than describing them in prose.
     const stateChangingGets = declared()
-      .filter((r) => r.method === 'GET' && ['/auth/magic-link/verify', '/auth/google/callback'].includes(r.url))
+      .filter((r) => r.method === 'GET' && (STATE_CHANGING_GETS as readonly string[]).includes(r.url))
       .map(label)
       .sort();
 
-    expect(stateChangingGets).toEqual([
-      'GET /auth/google/callback',
-      'GET /auth/magic-link/verify',
-    ]);
+    expect(stateChangingGets).toEqual(
+      [...STATE_CHANGING_GETS].sort().map((url) => `GET ${url}`),
+    );
   });
 
   it('names every exemption against a route that exists and is not guarded', () => {

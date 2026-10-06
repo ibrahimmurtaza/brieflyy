@@ -80,11 +80,17 @@ export type BillingState =
  * What asking for the next charge to stop came back with.
  *
  * `already_stopped` is a success rather than a refusal: the User asked for something
- * that is already true, and telling them so is better than asking the provider a
- * second time for an answer that cannot differ. It covers both a Subscription that
- * has already been asked to stop and one the provider has already finished — a User
- * who pressed the button late is owed the same reassurance as one who pressed it
- * early.
+ * that is already true, and telling them so is better than a second write the
+ * provider would answer the same way. It covers both a Subscription that has already
+ * been asked to stop and one the provider has already finished — a User who pressed
+ * the button late is owed the same reassurance as one who pressed it early.
+ *
+ * Short-circuiting on the stored status is not a claim that the provider's answer
+ * could not differ: a User who un-cancels at the provider does change it, and
+ * `subscriptionStateFor` reads exactly that change back on the next visit. What this
+ * one does not do is *write* a request the row already records as made — the user
+ * asked for something that is true of the Subscription as this application holds it,
+ * and the provider is the thing that decides whether it stays true.
  *
  * `nothing_to_stop` is a User who was never paying, which is the state nearly
  * everyone without a subscription is in and the reason the control is not offered to
@@ -336,6 +342,20 @@ export class BillingService {
    * charge, and only the provider knows where it moved to — so that is when it is
    * asked, and what it says is written down.
    *
+   * A Subscription that has **ended** is the one case never asked about, and it is
+   * separate because its stored renewal date says nothing at all: it is either null
+   * or the date the period ran out on, so neither the "still in the future" rule nor
+   * the "rolled over" rule has anything to work with. What does answer is the
+   * status itself — an `ended` Subscription has no next charge, and the provider
+   * will not hold it again, so there is nothing left to learn. A User who wants to
+   * pay again mints a new Subscription.
+   *
+   * A Subscription that is **cancelling** is asked about, and the difference between
+   * the two is the whole of it: `ended` is a fact and `cancelling` is a promise about
+   * a date. The signed event that settles a promise can be missed, and this read is
+   * the recovery — a provider holding no such Subscription is the fact that ends it,
+   * and there is nowhere else to look.
+   *
    * That rule is what keeps ADR-0023's promise intact: a read of this page is a
    * read of the database, and it reaches a third party at most once per period per
    * User rather than once per visit. It is also why `renewsAt` is a column rather
@@ -345,12 +365,13 @@ export class BillingService {
    * says so in the answer. Overwriting it with a guess would be worse than a stale
    * date: it would be a wrong one presented as current.
    *
-   * The write below is the only state change a `GET` in this application makes, and
-   * it is written down rather than left to memory because the alternative is a row
-   * that has drifted out of date and a provider asked again on every visit. It is
-   * the answer to "what is this Subscription now", moved from a page into the record
-   * every other read comes from — not a decision, which is why it cannot touch the
-   * tier (ADR-0024).
+   * The write below is one of the two state changes a `GET` in this application
+   * makes — the other being the Trends rollup, which measures a newly-added Topic
+   * once on its first read (CONTEXT.md, Trends rollup). It is written down rather
+   * than left to memory because the alternative is a row that has drifted out of date
+   * and a provider asked again on every visit. It is the answer to "what is this
+   * Subscription now", moved from a page into the record every other read comes
+   * from — not a decision, which is why it cannot touch the tier (ADR-0024).
    *
    * The tier is never written here. A User's plan moves on the provider's signed
    * event and nowhere else, because a page somebody is looking at must not be the
@@ -363,6 +384,15 @@ export class BillingService {
 
     const provider = this.deps.provider;
     if (provider === undefined) {
+      return { kind: 'known', subscription: stored, freshness: 'recorded' };
+    }
+    // Before the date, not after it: an `ended` Subscription has nothing left to
+    // learn, so it is answered from the row whatever date it carries. `renewsAt` is
+    // null on it, or the date the period ran out on, and neither is a question to
+    // put to a third party — while asking would be actively harmful, because the
+    // provider's answer is about the Subscription rather than about the User, and a
+    // `known` reading would write a stopped Subscription back as paying.
+    if (stored.status === 'ended') {
       return { kind: 'known', subscription: stored, freshness: 'recorded' };
     }
     // The stored date answers the question while it is still ahead of the clock.

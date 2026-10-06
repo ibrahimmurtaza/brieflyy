@@ -421,6 +421,52 @@ describe('stating the subscription state of a User', () => {
     });
   });
 
+  it('never asks the provider about a Subscription that has ended', async () => {
+    const live = await aSubscriber();
+    await deliver({
+      id: 'evt_ended',
+      kind: 'subscription_ended',
+      subscriptionRef: 'sub_1',
+      customerRef: 'cus_1',
+    });
+    const after = aService({ provider: live, at: new Date('2026-06-01T09:00:00Z') });
+
+    // `ended` is a settled fact rather than an absence, which is what separates it
+    // from every other reason to read the provider. The period is over, the provider
+    // will never hold this Subscription again, and a User who wants to pay again
+    // mints a new one. Asking on every visit would put somebody else's API between a
+    // User and a page they can open any number of times, and would write the same
+    // row back every time — the failure ADR-0024 rules out by name.
+    expect(await after.subscriptionStateFor(IRIS)).toMatchObject({
+      kind: 'known',
+      freshness: 'recorded',
+      subscription: { status: 'ended' },
+    });
+    expect(await after.subscriptionStateFor(IRIS)).toMatchObject({ freshness: 'recorded' });
+    expect(live.reads, 'a page view reached the payment provider').toEqual([]);
+    expect((await service.subscriptionFor('user-iris'))?.status).toBe('ended');
+  });
+
+  it('still asks about a cancelled Subscription whose period has run out, and ends it when the provider has let it go', async () => {
+    const live = await aSubscriber();
+    await aService({ provider: live }).cancelSubscription(IRIS);
+
+    // A provider that has stopped holding it, which is where a `cancelling` row
+    // ends up when the signed event that settles it is missed — and the state the
+    // application would otherwise hold forever, because a promise about a date is
+    // not a fact and only the provider can convert it.
+    const gone = new RecordingPaymentProvider({ unknownSubscription: true });
+    const after = aService({ provider: gone, at: new Date('2026-06-01T09:00:00Z') });
+
+    expect(await after.subscriptionStateFor(IRIS)).toMatchObject({
+      kind: 'known',
+      freshness: 'asked',
+      subscription: { status: 'ended' },
+    });
+    expect(gone.reads).toHaveLength(1);
+    expect((await service.subscriptionFor('user-iris'))?.status).toBe('ended');
+  });
+
   it('reads a Subscription the provider no longer holds as one that has ended', async () => {
     await aSubscriber();
     const forgetting = aService({

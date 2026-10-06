@@ -134,6 +134,24 @@ describe('a User who is paying', () => {
     expect(inside(page)).toMatch(/has not been able to ask the payment provider when your next charge falls/);
     expect(inside(page)).not.toMatch(/Next charge on/);
   });
+
+  it('distinguishes a provider that named no date from one that could not be asked', () => {
+    // These are opposites and the page was writing the first as though it were the
+    // second. `asked` means this application reached the provider and it answered
+    // with no renewal date — so "has not been able to ask" is a claim that
+    // something went wrong, printed beside a read that worked.
+    const page = thePage({
+      state: {
+        kind: 'known',
+        freshness: 'asked',
+        subscription: aSubscription({ renewsAt: null }),
+      },
+    });
+
+    expect(inside(page)).toMatch(/has not given us a renewal date/);
+    expect(inside(page)).not.toMatch(/has not been able to ask/);
+    expect(inside(page)).not.toMatch(/Next charge on/);
+  });
 });
 
 describe('a Subscription that is stopping', () => {
@@ -147,7 +165,7 @@ describe('a Subscription that is stopping', () => {
     expect(inside(page)).toMatch(/none of it has been taken away/i);
   });
 
-  it('offers no second cancellation, because asking again could not differ', () => {
+  it('offers no second cancellation, because the button has already been pressed', () => {
     const page = thePage({ state: { kind: 'known', freshness: 'recorded', subscription: cancelling } });
 
     expect(inside(page)).not.toMatch(/<form/);
@@ -171,8 +189,12 @@ describe('a Subscription that has ended', () => {
     });
 
     expect(inside(page)).toMatch(/Your paid plan has ended/);
-    expect(inside(page)).toMatch(/on the free plan now/);
+    expect(inside(page)).toMatch(/no charge/i);
     expect(inside(page)).toMatch(/href="\/upgrade"/);
+    // Not a tier claim. This page read the Subscription; the tier lives in
+    // `users.tier` and moves on the provider's signed event, so stating it here
+    // would put a second answer to the same question next to the header's.
+    expect(inside(page)).not.toMatch(/on the free plan now/);
   });
 });
 
@@ -198,19 +220,35 @@ describe('an instance with no payment provider', () => {
 });
 
 describe('what the last cancellation submission said', () => {
-  const state = { kind: 'known', freshness: 'recorded', subscription: aSubscription() } as const;
+  const paying = { kind: 'known', freshness: 'recorded', subscription: aSubscription() } as const;
+  const cancelling = {
+    kind: 'known',
+    freshness: 'recorded',
+    subscription: aSubscription({ status: 'cancelling', cancelledAt: ASKED }),
+  } as const;
+  const ended = {
+    kind: 'known',
+    freshness: 'asked',
+    subscription: aSubscription({ status: 'ended', cancelledAt: ASKED }),
+  } as const;
 
+  // Each answer paired with a Subscription it is true of, because an answer is only
+  // announced when the state the page has just read supports it — see the forgery
+  // test below. The pairing is the point of the table: every answer has a state that
+  // makes it sayable, which is the same thing as saying every answer has a state that
+  // makes it unsayable.
   const ANSWERS: readonly {
     readonly answer: NonNullable<Parameters<typeof subscriptionSettingsPage>[0]['stopped']>;
     readonly said: RegExp;
+    readonly state: BillingState;
   }[] = [
-    { answer: 'stopped', said: /The next charge has been stopped/ },
-    { answer: 'already-stopped', said: /It was already set to stop/ },
-    { answer: 'nothing-to-stop', said: /There was nothing to stop/ },
-    { answer: 'not-configured', said: /no payment provider set up/i },
+    { answer: 'stopped', said: /The next charge has been stopped/, state: cancelling },
+    { answer: 'already-stopped', said: /It was already set to stop/, state: ended },
+    { answer: 'nothing-to-stop', said: /There was nothing to stop/, state: { kind: 'none' } },
+    { answer: 'not-configured', said: /no payment provider set up/i, state: { kind: 'none' } },
   ];
 
-  for (const { answer, said } of ANSWERS) {
+  for (const { answer, said, state } of ANSWERS) {
     it(`announces ${answer}`, () => {
       expect(inside(thePage({ state, stopped: answer }))).toMatch(said);
     });
@@ -219,14 +257,37 @@ describe('what the last cancellation submission said', () => {
   it('says exactly what did not happen when the provider could not be reached', () => {
     // The opposite claim to the success one, so the sentence has to carry the
     // consequence in it: a User who leaves this page believing the charge had
-    // stopped would not know to come back.
-    const page = thePage({ state, stopped: 'unavailable' });
+    // stopped would not know to come back. Not gated on the state, because it claims
+    // nothing happened — and a Subscription still paying is what it describes.
+    const page = thePage({ state: paying, stopped: 'unavailable' });
 
     expect(inside(page)).toMatch(/could not reach the payment provider/i);
     expect(inside(page)).toMatch(/has not been changed and will keep charging as it is/);
   });
 
   it('says nothing when nobody has submitted anything', () => {
-    expect(inside(thePage({ state }))).not.toMatch(/callout/);
+    expect(inside(thePage({ state: paying }))).not.toMatch(/callout/);
+  });
+
+  it('does not announce a cancellation the state it just read does not show', () => {
+    // The address is a User's own, so `?stopped=stopped` can be typed, bookmarked or
+    // guessed — and the page would then say the next charge has been stopped over a
+    // Subscription that is still paying. Two sentences about money, one of them a
+    // claim about an action nobody took, printed together. The announcement is only
+    // worth making when the state the page has just read agrees with it.
+    const forged = thePage({ state: paying, stopped: 'stopped' });
+
+    expect(inside(forged)).not.toMatch(/next charge has been stopped/i);
+    // And the plan it does state is the real one, rather than the page being emptied
+    // out because somebody guessed a query value.
+    expect(inside(forged)).toMatch(/You are on the paid plan/);
+  });
+
+  it('still announces the cancellation once the state shows it', () => {
+    // The other side of the same rule: a real cancellation redirects here, and by
+    // then the row says `cancelling`, so the announcement is not suppressed.
+    const real = thePage({ state: cancelling, stopped: 'stopped' });
+
+    expect(inside(real)).toMatch(/next charge has been stopped/i);
   });
 });
