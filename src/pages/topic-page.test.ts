@@ -7,7 +7,7 @@ import { ConsoleEmailTransport } from '../email/console-transport.js';
 import { createTestDb } from '../testing/test-db.js';
 import { extractMagicLinkToken } from '../testing/email.js';
 import { requestTokenOf, signedInCookies, submitForm } from '../testing/forms.js';
-import { makeCluster, makeTopic } from '../testing/fixtures.js';
+import { makeBriefPlan, makeCluster, makeTopic } from '../testing/fixtures.js';
 import {
   deterministicRandom,
   makeTestClock,
@@ -17,6 +17,7 @@ import { DrizzleClusterRepo } from '../repos/cluster-repo.js';
 import { DrizzleSourceRepo } from '../repos/source-repo.js';
 import { DrizzleStoryRepo } from '../repos/story-repo.js';
 import { DrizzleTopicRepo } from '../repos/topic-repo.js';
+import { DrizzleBriefPlanRepo } from '../repos/brief-plan-repo.js';
 import { EMPTY_SIGNATURE } from '../domain/story-signature.js';
 import type { SourceId, StoryId, TopicId } from '../domain/types.js';
 
@@ -30,6 +31,7 @@ interface Harness {
   readonly topicRepo: DrizzleTopicRepo;
   readonly sourceRepo: DrizzleSourceRepo;
   readonly storyRepo: DrizzleStoryRepo;
+  readonly planRepo: DrizzleBriefPlanRepo;
   readonly driver: ReturnType<typeof createTestDb>['driver'];
 }
 
@@ -105,6 +107,7 @@ async function signInWithTopic(options: { readonly withSources?: boolean } = {})
     topicRepo,
     sourceRepo,
     storyRepo: new DrizzleStoryRepo(db),
+    planRepo: new DrizzleBriefPlanRepo(db),
     driver,
   };
 }
@@ -472,6 +475,124 @@ describe('HTTP: /topics/:slug as a LivingBrief', () => {
     expect(resp.body).toContain('Cluster window');
     expect(resp.body).toMatch(/name="windowDays"[^>]*value="7"/);
     expect(resp.body).toMatch(/action="\/topics\/topic-1\/cluster-window"/);
+  });
+
+  it('shows the Clusters of the latest BriefPlan in the plan\'s order', async () => {
+    const s1 = await givenStory(h, { id: 's1', title: 'Newer story' });
+    const s2 = await givenStory(h, { id: 's2', title: 'Older story' });
+    await givenCluster(h, { id: 'cluster-new', storyId: s1, summary: 'The newer one.', sourceIds: ['reuters'] });
+    await givenCluster(h, { id: 'cluster-old', storyId: s2, summary: 'The older one.', sourceIds: ['reuters'] });
+    await h.driver
+      .prepare(`UPDATE clusters SET last_seen_at = ? WHERE id = ?`)
+      .run(NOW.getTime(), 'cluster-new');
+    await h.driver
+      .prepare(`UPDATE clusters SET last_seen_at = ? WHERE id = ?`)
+      .run(NOW.getTime() - 86_400_000, 'cluster-old');
+
+    await h.planRepo.insert(
+      makeBriefPlan({
+        id: 'plan-1',
+        topicId: 'topic-1',
+        userId: await firstUserId(h),
+        clusterIds: ['cluster-old', 'cluster-new'],
+      }),
+    );
+
+    const body = (await page(h, '/topics/topic-1')).body;
+
+    expect(body.indexOf('The older one.')).toBeLessThan(body.indexOf('The newer one.'));
+  });
+
+  it('names a Cluster that arrived since the last plan as not yet planned', async () => {
+    const s1 = await givenStory(h, { id: 's1', title: 'Planned story' });
+    const s2 = await givenStory(h, { id: 's2', title: 'New story' });
+    await givenCluster(h, { id: 'cluster-planned', storyId: s1, summary: 'The planned one.', sourceIds: ['reuters'] });
+    await givenCluster(h, { id: 'cluster-new', storyId: s2, summary: 'The one that is new.', sourceIds: ['reuters'] });
+
+    await h.planRepo.insert(
+      makeBriefPlan({
+        id: 'plan-1',
+        topicId: 'topic-1',
+        userId: await firstUserId(h),
+        clusterIds: ['cluster-planned'],
+      }),
+    );
+
+    const body = (await page(h, '/topics/topic-1')).body;
+
+    expect(body).toContain('not yet planned');
+    expect(body).toContain('The one that is new.');
+    // The planned Cluster is still there, as an article.
+    expect(body).toContain('The planned one.');
+  });
+
+  it('says which state the page is in when the Topic has no stored plan', async () => {
+    const storyId = await givenStory(h, { id: 's1', title: 'Acme Corp unveils Foo' });
+    await givenCluster(h, {
+      id: 'cluster-1',
+      storyId,
+      summary: 'Acme Corp unveiled an AI product called Foo.',
+      sourceIds: ['reuters'],
+    });
+
+    const body = (await page(h, '/topics/topic-1')).body;
+
+    expect(body).toContain('No brief has been planned');
+    expect(body).toContain('Acme Corp unveiled an AI product called Foo.');
+  });
+
+  it('does not name a Cluster as not yet planned when a hidden Source removed it', async () => {
+    const s1 = await givenStory(h, { id: 's1', title: 'Planned story' });
+    const s2 = await givenStory(h, { id: 's2', title: 'Reuters only' });
+    await givenCluster(h, { id: 'cluster-planned', storyId: s1, summary: 'The planned one.', sourceIds: ['reuters'] });
+    await givenCluster(h, { id: 'cluster-new', storyId: s2, summary: 'The one that is new.', sourceIds: ['reuters'] });
+
+    await h.planRepo.insert(
+      makeBriefPlan({
+        id: 'plan-1',
+        topicId: 'topic-1',
+        userId: await firstUserId(h),
+        clusterIds: ['cluster-planned'],
+      }),
+    );
+    await submitForm(h.app, h.cookie, '/topics/topic-1/feedback', {
+      clusterId: 'cluster-planned',
+      type: 'hide_source',
+      sourceId: 'reuters',
+      scope: 'this_topic',
+    });
+
+    const body = (await page(h, '/topics/topic-1')).body;
+
+    expect(body).not.toContain('The one that is new.');
+    expect(body).not.toContain('not yet planned');
+  });
+
+  it('does not claim a Cluster is missing when one the plan names has gone', async () => {
+    const s1 = await givenStory(h, { id: 's1', title: 'Planned story' });
+    await givenCluster(h, { id: 'cluster-live', storyId: s1, summary: 'The live one.', sourceIds: ['reuters'] });
+    await givenCluster(h, {
+      id: 'cluster-gone',
+      storyId: s1,
+      summary: 'The gone one.',
+      sourceIds: ['reuters'],
+      state: 'archive',
+    });
+
+    await h.planRepo.insert(
+      makeBriefPlan({
+        id: 'plan-1',
+        topicId: 'topic-1',
+        userId: await firstUserId(h),
+        clusterIds: ['cluster-gone', 'cluster-live'],
+      }),
+    );
+
+    const body = (await page(h, '/topics/topic-1')).body;
+
+    expect(body).toContain('The live one.');
+    expect(body).not.toContain('The gone one.');
+    expect(body).not.toContain('No stories yet');
   });
 });
 

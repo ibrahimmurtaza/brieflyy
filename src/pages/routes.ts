@@ -782,6 +782,13 @@ export async function registerPageRoutes(
           .send(notFoundPage(await shellFor(req), req.requestToken ?? null));
       }
       const clusters = await opts.clusterRepo.listByTopicId(topic.id);
+      // The LivingBrief is the Topic's latest BriefPlan made visible: the
+      // plan's Clusters, in the plan's order, so the app and the last email
+      // tell one story. When no plan has been stored yet the Topic is shown
+      // as it stands, and the page says that is which state it is in.
+      const latestPlan = opts.briefPlanRepo
+        ? await opts.briefPlanRepo.findLatestByTopicId(topic.id)
+        : null;
       // What this User has already said, read once. Every answer the page gives
       // about their signals comes from this one call: which buttons are lit, which
       // Sources to leave out, and how the Clusters are ordered.
@@ -791,8 +798,17 @@ export async function registerPageRoutes(
       // match nothing is a different situation from a Topic with no Clusters at
       // all, and the page has to be able to tell them apart.
       const active = clusters.filter((c) => c.state === 'active');
+      // With a stored plan, the selection and the order are the plan's; without
+      // one, the page falls back to what it has always shown, newest first.
+      const byId = new Map(clusters.map((c) => [c.id as string, c]));
+      const planned = latestPlan
+        ? latestPlan.clusterIds
+            .map((id) => byId.get(id as string))
+            .filter((c): c is Cluster => c !== undefined && c.state === 'active')
+        : active;
+      const plannedIds = new Set((latestPlan?.clusterIds ?? []).map(String));
       const sourceFilter = req.query.source ? String(req.query.source) : null;
-      let activeClusters = active;
+      let activeClusters = planned;
       if (sourceFilter) {
         activeClusters = activeClusters.filter((c) => c.sourceIds.includes(sourceFilter));
       }
@@ -809,21 +825,19 @@ export async function registerPageRoutes(
           .filter((s) => s.length > 0),
       );
       activeClusters = activeClusters.filter((c) => !queryHidden.has(c.id));
-      // What the "show all" link will actually put back on the page: it drops
-      // the Source filter and a `hide=` the User typed, but nothing a User has
-      // hidden through Feedback. Counting from `active` instead would promise
-      // Clusters the link does not bring back.
-      const revealableCount = active.length;
 
       // Hidden Sources are dropped before relevance is measured, not after: an Article
       // the page has removed is not evidence about what the User wants to read
       // next, and ranking on Articles that are then taken away would order the
       // brief by something the User cannot see.
       const hiddenSourceIds = feedback.hiddenSourceIds;
+      // Use `active` as the base for article visibility, relevance and counts so
+      // that named-but-unplanned Clusters cannot slip a claim past the page: what
+      // the page shows and what it counts are measured over the same set.
       const clusterArticles = new Map<string, readonly import('../domain/types.js').Article[]>();
       const relevance = new Map<ClusterId, number>();
       const clustersWithoutArticles = new Set<string>();
-      for (const c of activeClusters) {
+      for (const c of active) {
         const visible = (
           await opts.clusterRepo.listArticlesByClusterId(c.id, topic.sourceIds)
         ).filter((a) => !hiddenSourceIds.has(a.sourceId));
@@ -838,8 +852,40 @@ export async function registerPageRoutes(
       activeClusters = activeClusters.filter((c) => !clustersWithoutArticles.has(c.id));
       // Relevance before recency, so a signal moves a Cluster relative to what the
       // User has already answered for. A User who has given none sees exactly the
-      // recency order this page has always used.
-      activeClusters = [...orderByRelevance(activeClusters, relevance)];
+      // recency order this page has always used. When a plan is stored, the
+      // plan's order is the order the page keeps: the email and the app are one
+      // selection in one order, so Feedback no longer re-shuffles this list.
+      activeClusters = latestPlan
+        ? [...activeClusters]
+        : [...orderByRelevance(activeClusters, relevance)];
+
+      // What the "show all" link will actually put back on the page: the
+      // Clusters the page can render at all, before the Source filter and a
+      // `hide=` the User typed, and nothing a User has hidden through Feedback.
+      // Counting from `active` instead would promise Clusters the link does
+      // not bring back — including Clusters named but never shown, which the
+      // link cannot put on the page.
+      const revealableCount = (latestPlan ? planned : active).filter(
+        (c) => !clustersWithoutArticles.has(c.id),
+      ).length;
+
+      // The Active Clusters that are not in the stored plan: they arrived
+      // after the last brief was planned. They are named rather than folded
+      // in, so the page never pretends the plan knew about them, and they
+      // are held to the same tests the shown list is — a filter, a dismiss,
+      // or Sources the User hid applies to the naming too.
+      let unplannedClusters = latestPlan
+        ? active.filter(
+            (c) => !plannedIds.has(c.id as string) && !clustersWithoutArticles.has(c.id),
+          )
+        : [];
+      if (sourceFilter) {
+        unplannedClusters = unplannedClusters.filter((c) =>
+          c.sourceIds.includes(sourceFilter),
+        );
+      }
+      unplannedClusters = unplannedClusters.filter((c) => !queryHidden.has(c.id));
+
       const sourcesById = new Map(
         (await opts.sourceRepo.list()).map((s) => [s.id, s] as const),
       );
@@ -871,6 +917,8 @@ export async function registerPageRoutes(
           clusterCount: clusters.length,
           activeClusterCount: active.length,
           revealableClusterCount: revealableCount,
+          unplannedClusters,
+          hasStoredPlan: latestPlan !== null,
           hiddenSourceNames: [...hiddenSourceIds]
             .map((sid) => sourcesById.get(sid)?.name ?? sid)
             .sort(),
@@ -1748,6 +1796,17 @@ function topicPage(input: {
   /** Set when the User or this Topic has opted out of the mail. */
   readonly emailsStopped?: boolean;
   readonly requestToken?: string | null;
+  /**
+   * Whether the route found a stored BriefPlan for this Topic. Drives the
+   * state note so a Topic with no plan is described as one, not as empty.
+   */
+  readonly hasStoredPlan?: boolean;
+  /**
+   * Active Clusters that the stored plan does not name: what arrived after
+   * the last brief was planned. Named on the page rather than shown as
+   * articles, so the app and the email stay one selection in one order.
+   */
+  readonly unplannedClusters?: readonly Cluster[];
 }): string {
   const safeTitle = escapeHtml(input.topic.title);
   const action = `/topics/${escapeHtml(input.topicSlug)}/feedback`;
@@ -1819,6 +1878,10 @@ ${signalButtons}
           return `<a href="${escapeHtml(filterHref)}" class="source">${escapeHtml(name)}</a>`;
         })
         .join('\n        ');
+      // The last email quoted this Cluster's own summary and bullets for every
+      // Cluster that did not get a written one, and a written summary is never
+      // carried back onto this page, so what a User reads here is what the last
+      // email said.
       return `      <article class="cluster" id="${escapeHtml(clusterAnchor(c.id))}">
         <h2>${escapeHtml(c.summary || c.title)}</h2>
         <div class="hide-row">${feedbackButtons}${hideLink}</div>
@@ -1835,6 +1898,20 @@ ${signalButtons}
   const sourceFilterBar = sourceFilterBarHtml(input);
   const windowForm = clusterWindowForm(input);
   const briefActions = sendBriefSection(input);
+  // The state of the page, said out loud: a Topic with a stored plan is that
+  // plan's Clusters, in its order; a Topic without one is shown as it stands
+  // and named as such.
+  const planNote = input.hasStoredPlan === false
+    ? `    <p class="muted plan-note">No brief has been planned for this topic yet. What follows is the topic as it stands now; the next brief will choose and order its Clusters.</p>`
+    : input.hasStoredPlan
+      ? `    <p class="muted plan-note">Showing the Clusters of your last brief, in its order.</p>`
+      : '';
+  const unplanned = input.unplannedClusters ?? [];
+  const unplannedNote = unplanned.length > 0
+    ? `    <p class="muted not-yet-planned">Arrived since the last brief, not yet planned: ${unplanned
+        .map((c) => escapeHtml(c.summary || c.title))
+        .join('; ')}</p>`
+    : '';
   // The account's email moved to the header. It used to open the lede on seven
   // pages, where it outranked the reason the page existed.
   const category = input.topic.category === 'unspecified'
@@ -1868,7 +1945,9 @@ ${trendsLink}
 ${settingsLink}
 ${sourceFilterBar}
 ${emptyState}
+${planNote}
 ${rows}
+${unplannedNote}
 ${windowForm}`,
   });
 }

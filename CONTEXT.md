@@ -87,11 +87,11 @@ _Avoid_: brief, digest
 **BriefSnapshot**: An immutable, linkable rendering of a BriefPlan — the form of a brief that is emailed. Once sent, does not change. Retained forever regardless of tier, since it is what was sent.
 _Avoid_: email brief, sent brief
 
-**LivingBrief**: What a Topic looks like in the app: its Clusters, ordered by what the User's Feedback says, read fresh on each visit and so reflecting the Topic as of that moment. It is a rendering, not a stored artefact — there is no LivingBrief table, type or route, and the word names the in-app surface rather than anything the database holds.
-A plan an emailed brief is built from now has an in-app counterpart — `GET /briefs/:id/edit` — but the LivingBrief itself is still read from the Topic's Clusters directly.
+**LivingBrief**: What a Topic looks like in the app: its Clusters, ordered by the Topic's latest BriefPlan when one is stored, and by what the User's Feedback says when it is not. It is a rendering, not a stored artefact — there is no LivingBrief table, type or route, and the word names the in-app surface rather than anything the database holds.
+A plan an emailed brief is built from now has an in-app counterpart — `GET /briefs/:id/edit` — and the LivingBrief itself is derived from a plan: when the Topic has a stored BriefPlan, `/topics/:slug` shows that plan's Clusters in the plan's order, so the app and the last email are one selection in one order. Active Clusters that arrived after the last plan are named on the page as not yet planned rather than folded in. A Topic with no stored plan still renders its current Clusters, and the page says that is the state it is in.
 _Avoid_: feed, topic view
 
-**Brief**: The conceptual product artifact. A specific instance is either a BriefSnapshot (email) or a LivingBrief (in-app). Only the first is produced from a BriefPlan today; the second is read from the Topic's Clusters directly.
+**Brief**: The conceptual product artifact. A specific instance is either a BriefSnapshot (email) or a LivingBrief (in-app). Both are produced from a BriefPlan: the first by rendering it, the second by showing it.
 _Avoid_: digest, summary, newsletter
 
 **EmailDelivery**: A record that a BriefSnapshot was emailed to a User. Carries the per-Topic and global one-click unsubscribe tokens the brief went out with, and is what those tokens are looked up on. Distinct from the BriefSnapshot so a snapshot can be re-linked or unsubscribed from independently of the mail that carried it.
