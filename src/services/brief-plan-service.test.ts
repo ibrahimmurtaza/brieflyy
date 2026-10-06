@@ -167,6 +167,50 @@ describe('BriefPlanService.createPlan', () => {
   });
 });
 
+describe('BriefPlanService.renderSnapshot', () => {
+  it('stores a snapshot it never sent, so a plan can be rendered on its own', async () => {
+    await seedClusters();
+
+    const plan = await harness.service.createPlan(SEND);
+    const { snapshot, rendered } = await harness.service.renderSnapshot(plan);
+
+    expect(snapshot.briefPlanId).toBe(plan.id);
+    expect(snapshot.html).toBe(rendered.html);
+    expect(snapshot.text).toBe(rendered.text);
+    expect((await harness.snapshotRepo.findByIdForUser('user-1', snapshot.id))?.html).toBe(
+      rendered.html,
+    );
+    // Rendering alone is not sending: nothing went down the wire, and no delivery
+    // claims one did.
+    expect(harness.transport.snapshot()).toHaveLength(0);
+    expect(harness.count('email_deliveries')).toBe(0);
+  });
+});
+
+describe('BriefPlanService.sendSnapshot', () => {
+  it('sends a snapshot rendered earlier and records the delivery', async () => {
+    await seedClusters();
+
+    const plan = await harness.service.createPlan(SEND);
+    const { snapshot, rendered } = await harness.service.renderSnapshot(plan);
+    const { delivery, generation } = await harness.service.sendSnapshot({
+      to: SEND.to,
+      snapshot,
+      rendered,
+    });
+
+    const sent = harness.transport.snapshot()[0]!;
+    expect(sent.to).toBe('iris@example.com');
+    expect(sent.html).toBe(snapshot.html);
+    expect(sent.text).toBe(snapshot.text);
+    expect(sent.subject).toBe(rendered.subject);
+    expect(sent.headers).toEqual(rendered.headers);
+    expect(delivery.briefSnapshotId).toBe(snapshot.id);
+    expect(delivery.unsubscribeToken).toBe(snapshot.unsubscribeToken);
+    expect(generation).toEqual(rendered.generation);
+  });
+});
+
 describe('BriefPlanService.sendBrief', () => {
   it('sends the brief through the transport it was given', async () => {
     await seedClusters();
