@@ -130,6 +130,23 @@ export interface TopicRepo {
    */
   remove(id: TopicId, removedAt: Date): Promise<void>;
   /**
+   * Soft delete several of a User's Topics at once.
+   *
+   * One statement rather than several, because the caller is removing a whole group
+   * — the Topics over the cap when a paid plan ends — and six statements can leave
+   * three of them removed. It is the same soft delete as `remove`, with the same
+   * guard against writing a second date onto a row that already has one, and the
+   * same promise: the row stays, so the Topic's brief history is readable and its
+   * slug still belongs to the User.
+   *
+   * Scoped by nothing but the ids, because every id in it was resolved against one
+   * User's own Topics by the caller. That is stated rather than enforced here, and
+   * it is the one obligation on a caller of a batch method — a batch removal that
+   * took a User's argument for authority over whose Topics it was would remove
+   * somebody else's.
+   */
+  removeMany(ids: readonly TopicId[], removedAt: Date): Promise<void>;
+  /**
    * Every slug the user has ever held, including removed ones. The unique
    * index on (user_id, slug) still spans soft-deleted rows, so slug allocation
    * has to see them or re-adding a removed topic raises a constraint error.
@@ -362,6 +379,14 @@ export class DrizzleTopicRepo implements TopicRepo {
       .update(topics)
       .set({ removedAt })
       .where(and(eq(topics.id, id), isNull(topics.removedAt)));
+  }
+
+  async removeMany(ids: readonly TopicId[], removedAt: Date): Promise<void> {
+    if (ids.length === 0) return;
+    await this.db
+      .update(topics)
+      .set({ removedAt })
+      .where(and(inArray(topics.id, [...ids]), isNull(topics.removedAt)));
   }
 
   async listSlugsByUser(userId: UserId): Promise<readonly string[]> {

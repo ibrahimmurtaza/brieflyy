@@ -6,6 +6,7 @@ import {
   isTier,
   resolveTier,
   topicCapFor,
+  topicCapOverflow,
 } from './tier.js';
 import { TIERS } from './types.js';
 
@@ -42,6 +43,23 @@ describe('tier', () => {
         `${tier} tier snapshot retention`,
       ).toBeNull();
     }
+  });
+
+  it('is at or over a free User’s cap for three Topics and not for two', () => {
+    expect(topicCapOverflow('free', 2)).toBeNull();
+    expect(topicCapOverflow('free', 3)).toBeNull();
+  });
+
+  it('says by how many a free User is over the cap, which is the number they are told', () => {
+    expect(topicCapOverflow('free', 9)).toEqual({ cap: 3, held: 9, overBy: 6 });
+  });
+
+  it('is never over a paid User’s cap, however many Topics they hold', () => {
+    // The other way round from the paywall: `held >= cap` is the refusal to add and
+    // `held > cap` is the question about what to do with what they already have,
+    // and a tier with no ceiling answers neither.
+    expect(topicCapOverflow('paid', 3)).toBeNull();
+    expect(topicCapOverflow('paid', 300)).toBeNull();
   });
 
   it('reads the tier off a User rather than a literal', () => {

@@ -335,6 +335,17 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS subscriptions_user_unique ON subscriptions (user_id);
 CREATE INDEX IF NOT EXISTS subscriptions_ref_idx ON subscriptions (subscription_ref);
+
+CREATE TABLE IF NOT EXISTS topic_reductions (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  cap INTEGER NOT NULL,
+  held INTEGER NOT NULL,
+  kept_topic_ids TEXT NOT NULL DEFAULT '[]',
+  stopped_topic_ids TEXT NOT NULL DEFAULT '[]',
+  answered_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS topic_reductions_user_idx ON topic_reductions (user_id);
 `;
 
 /**

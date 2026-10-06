@@ -228,6 +228,29 @@ a date the application worked out itself is an invention printed as though someb
 had said it. A provider that cannot be reached leaves the stored row alone and the
 page says it is showing what was last recorded. See ADR-0024.
 
+### Coming down to the cap
+
+A paid User may hold as many Topics as they like and a free one holds three, so the
+User this paragraph is about is holding nine when their Subscription ends. The tier
+moves and the Topics do not, and nothing is removed — not on the event, not on the
+page, not the next morning. The six over the cap are still six Topics they have,
+still emailed, and the only thing that changes is that they cannot add a tenth.
+
+`/settings/billing` is where the question is asked, because that is the page that
+says what their plan is and therefore what their cap is. It states how many of their
+Topics are over it, names all nine, and ticks the three it suggests keeping — the most
+recently added, which is a suggestion and not a decision. `POST /settings/billing/topics`
+removes what they did not tick and writes the answer to `topic_reductions`, once, with
+both lists by id. See ADR-0025.
+
+Whether a User is over the cap is derived from their tier and their Topics rather than
+stored, which is what makes paying again clear it by itself: nothing had been removed,
+so a User who resubscribes before deciding has all nine and is asked nothing. A User
+who never answers keeps all nine and is refused a new Topic instead — by the topic
+list, both pickers, the DiscoverTab and the page a refused submission lands on — with
+the reason read out of one place, because "you have reached the limit of 3" is not the
+reason when you are holding nine.
+
 ## Secrets
 
 `.env` holds live credentials and is never committed. `pnpm secrets:check` reads
@@ -476,9 +499,10 @@ src/
 │                          # in pages/routes.ts, with the rest of the shell's; its
 │                          # full-text index is in db/archive-index.ts
 ├── billing/               # the PaymentProvider seam (Stripe), the BillingService, the
-│                          # Subscription settings surface and its four routes:
+│                          # Subscription settings surface and its five routes:
 │                          # GET /settings/billing, POST /billing/checkout,
-│                          # POST /settings/billing/cancel, and the public
+│                          # POST /settings/billing/cancel,
+│                          # POST /settings/billing/topics, and the public
 │                          # POST /billing/webhook
 ├── discover/              # the discover layer's view: the DiscoverTab page + routes
 ├── email/                 # EmailTransport seam (Console + Resend)
@@ -551,7 +575,7 @@ purpose, and each is reached by something other than a request:
 `oauth/` and the PaymentProvider are inside the closure but conditional: `oauth/`
 builds a client only when `OAUTH_PROVIDER` names a provider, and where there is none
 the sign-in page offers no Google and the two Google routes refuse rather than throw
-(ADR-0019); `billing/` registers its four routes either way and only builds a
+(ADR-0019); `billing/` registers its five routes either way and only builds a
 PaymentProvider when all three of `STRIPE_SECRET_KEY`,
 `STRIPE_WEBHOOK_SECRET` and `STRIPE_PAID_PRICE_ID` are set, so an instance that takes
 no payments still has a surface the route guard can check and an upgrade page that
@@ -623,7 +647,7 @@ signed-in User at `/admin/ingest` and `/admin/briefs`.
 pnpm test
 ```
 
-The suite is 94 test files across `src/`, one per module, holding 1,504 cases —
+The suite is 96 test files across `src/`, one per module, holding 1,572 cases —
 Vitest prints the live figure at the end of every run. `docs-agreement.test.ts`
 checks the file count and cannot check the case count without running the suite it
 lives in, so that one number is worth reading off a run rather than trusting.
@@ -648,8 +672,9 @@ of the files are guards that fail the build when the shape of the system drifts:
 
 The rest cover the auth and OAuth flows, onboarding, ingest, clustering, brief
 planning and rendering, feedback, trends, discover, archive search, unsubscribe,
-billing, the payment webhook, subscription settings and cancellation, topic settings,
-delivery settings, the repositories, the migration runner, and the rate limiter.
+billing, the payment webhook, subscription settings, cancellation and coming down to
+the topic cap, topic settings, delivery settings, the repositories, the migration
+runner, and the rate limiter.
 
 The suites that drive a state-changing route submit it through `submitForm` in
 `src/testing/forms.ts`, which echoes the request token out of the same cookies the

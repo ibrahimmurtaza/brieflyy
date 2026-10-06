@@ -930,6 +930,55 @@ export type NewCheckoutReferenceRow = typeof checkoutReferences.$inferInsert;
 export type PaymentEventRow = typeof paymentEvents.$inferSelect;
 export type SubscriptionRow = typeof subscriptions.$inferSelect;
 
+/**
+ * One answer a User gave to holding more Topics than their tier allows.
+ *
+ * A User on PaidTier may hold as many Topics as they like, and the FreeTier cap is
+ * three. When a Subscription ends for somebody holding nine, the six over the cap
+ * cannot all keep being emailed, and nothing is taken from them until they have
+ * been told what would be and have said which of them to stop (ADR-0025). This row
+ * is that answer, kept after the fact.
+ *
+ * **Ids, not slugs, and both lists.** A Topic's slug is its address and survives a
+ * removal — re-adding the same subject from the Directory allocates `topic-2`
+ * beside it — so a slug recorded as the answer would name a Topic by something that
+ * is no longer unique to it. The ids say which rows the answer was about, and the
+ * slug each of them had at the time is what the User was shown.
+ *
+ * `cap` and `held` are the numbers the answer was given against rather than
+ * anything read back: the tier may have moved again by the time this row is looked
+ * at, and what it is evidence of is the state the User was looking at when they
+ * decided.
+ *
+ * One row per answer and no uniqueness on the User, because a User who pays again
+ * and then cancels is answering twice and the second answer is not a correction of
+ * the first. A row is never edited: a second answer is a second row.
+ */
+export const topicReductions = sqliteTable(
+  'topic_reductions',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    cap: integer('cap').notNull(),
+    held: integer('held').notNull(),
+    keptTopicIds: text('kept_topic_ids').notNull().default('[]'),
+    stoppedTopicIds: text('stopped_topic_ids').notNull().default('[]'),
+    answeredAt: integer('answered_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    // Every answer one User gave, most recent last. The page asks what a User is
+    // over the cap by rather than what they last answered, so nothing reads this
+    // back on a request; the index is here so an operator asking the question can
+    // find the row without a scan.
+    userIdx: index('topic_reductions_user_idx').on(t.userId),
+  }),
+);
+
+export type TopicReductionRow = typeof topicReductions.$inferSelect;
+export type NewTopicReductionRow = typeof topicReductions.$inferInsert;
+
 export type ArchiveItemRow = typeof archiveItems.$inferSelect;
 export type NewArchiveItemRow = typeof archiveItems.$inferInsert;
 

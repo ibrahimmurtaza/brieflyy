@@ -105,9 +105,9 @@ already dropped is reported as already stopped, never as unreachable.
 **The tier moves on the event and nowhere else.** Not on the page read, and not on
 the cancellation. A page somebody is looking at must not be the thing that takes
 their plan away — and what happens to a User who is over the FreeTier cap when it
-does is a decision, not a side effect of opening a page. That decision is not made
-yet, and nothing is removed in the meantime: the cap is simply the next refusal
-they meet.
+does is a decision, not a side effect of opening a page. That decision is made in
+ADR-0025, and it is made as a question asked of the User: nothing is removed when the
+tier moves, and nothing is removed later either without an answer.
 
 **An ending names the Subscription, not a User.** `customer.subscription.deleted`
 carries no Checkout reference — the Checkout was completed months ago, and the
@@ -142,7 +142,8 @@ also takes a payment.
 more Topics than the FreeTier cap allows. Cancelling does not remove any of them, and
 the page says so in the sentence where the date is. Which Topics stop being emailed
 and which keep working is the product decision, and it belongs where it can be
-stated before anything happens.
+stated before anything happens — which is ADR-0025, and it is asked rather than
+applied.
 
 **The provider's own dashboard.** Brieflyy states what it has been told and offers
 what it can do. It does not attempt to mirror a provider's whole billing surface,

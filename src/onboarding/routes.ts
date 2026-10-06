@@ -2,8 +2,11 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
 import { escapeHtml } from '../domain/html.js';
+import { resolveTier, topicCapOverflow, type TopicCapOverflow } from '../domain/tier.js';
+import type { User } from '../domain/types.js';
+import { BILLING_SETTINGS_PATH } from '../billing/paths.js';
 import { deliveryTimePage } from '../pages/routes.js';
-import { layout, type ShellAccount } from '../pages/layout.js';
+import { layout, overCapCallout, type ShellAccount } from '../pages/layout.js';
 import { shellAccountFor } from '../pages/shell.js';
 import {
   AUTHENTICATED_ROUTE_CONFIG,
@@ -95,7 +98,13 @@ export async function registerOnboardingRoutes(
       return reply
         .code(402)
         .type('text/html')
-        .send(paywallPage(await shellFor(req), req.requestToken ?? null));
+        .send(
+          paywallPage({
+            account: await shellFor(req),
+            overflow: await overflowFor(onboardingService, req.auth.user),
+            requestToken: req.requestToken ?? null,
+          }),
+        );
     }
     return reply
       .code(400)
@@ -142,7 +151,13 @@ export async function registerOnboardingRoutes(
       return reply
         .code(402)
         .type('text/html')
-        .send(paywallPage(await shellFor(req), req.requestToken ?? null));
+        .send(
+          paywallPage({
+            account: await shellFor(req),
+            overflow: await overflowFor(onboardingService, req.auth.user),
+            requestToken: req.requestToken ?? null,
+          }),
+        );
     }
     return reply
       .code(400)
@@ -403,15 +418,49 @@ export function humanTopicSelectionReason(
   }
 }
 
-function paywallPage(account: ShellAccount, requestToken: string | null = null): string {
+/**
+ * The page a refused submission lands on.
+ *
+ * Two shapes for one refusal, because the reason is the whole of it. A User at the
+ * cap can see the fix from where they are, so this is the page that sells it. A
+ * User *past* the cap cannot fix it from here at all — every slot is spoken for and
+ * the decision about which of their Topics stop is not one this form makes — so it
+ * is told how far over it they are, that nothing has been taken, and where the
+ * decision is, in that order.
+ *
+ * The past-the-cap reason is the same sentence on all five surfaces that carry it,
+ * read from `overCapCallout`, rather than a fourth wording of one sentence
+ * (ADR-0025). Its headline is not the at-cap one: "you have reached the limit" is
+ * true of a User at three and not of one holding nine, and this page serves both.
+ */
+function paywallPage(input: {
+  readonly account: ShellAccount;
+  readonly overflow: TopicCapOverflow | null;
+  readonly requestToken: string | null;
+}): string {
   // Reached from a refused submission, so the User is known. Passing the account
-  // puts the same navigation every other signed-in page has around it, instead
-  // of stranding them on a page with two buttons.
+  // puts the same navigation every other signed-in page has around it, instead of
+  // stranding them on a page with two buttons.
+  if (input.overflow !== null) {
+    return layout({
+      title: 'You are over the free-topic cap',
+      width: 'narrow',
+      account: input.account,
+      requestToken: input.requestToken,
+      body: `    <h1>You are over the free-topic cap</h1>
+${overCapCallout(input.overflow)}
+    <p>Nothing is removed until you answer, and your briefs keep arriving for every topic you have until you do.</p>
+    <div class="actions">
+      <a class="button" href="${BILLING_SETTINGS_PATH}">Choose which topics keep working</a>
+      <a class="button secondary" href="/pick-topics">Back to topic selection</a>
+    </div>`,
+    });
+  }
   return layout({
     title: 'Upgrade to add more topics',
     width: 'narrow',
-    account,
-    requestToken,
+    account: input.account,
+    requestToken: input.requestToken,
     body: `    <h1>You have reached the free-topic limit</h1>
     <p>Free Brieflyy supports up to 3 topics. Upgrade to add unlimited topics, indefinite archive retention, and the full trends view.</p>
     <p><strong>$15 / month</strong></p>
@@ -420,6 +469,21 @@ function paywallPage(account: ShellAccount, requestToken: string | null = null):
       <a class="button secondary" href="/pick-topics">Back to topic selection</a>
     </div>`,
   });
+}
+
+/**
+ * What is over the cap for this User, read at the moment a submission is refused.
+ *
+ * Asked of the same helper every page that shows the reason uses, and read from the
+ * Topics rather than remembered from the submission: the refusal has to be about the
+ * state the User is in now, which is the state a refusal sent them here.
+ */
+async function overflowFor(
+  onboardingService: OnboardingService,
+  user: User,
+): Promise<TopicCapOverflow | null> {
+  const held = (await onboardingService.listTopics(user.id)).length;
+  return topicCapOverflow(resolveTier(user), held);
 }
 
 function notFoundHtml(account: ShellAccount, message: string, requestToken: string | null = null): string {

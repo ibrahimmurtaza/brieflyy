@@ -487,6 +487,24 @@ details.change[open] > summary { margin-bottom: var(--space-4); }
 section + section { margin-top: var(--space-6); }
 section > h2 { font-size: var(--text-sm); text-transform: uppercase; letter-spacing: 0.06em; color: var(--color-text-muted); }
 
+/* A list a User answers by ticking: the checkbox and the name on one row, with the
+   whole row as the target. The label rule above stacks a control above its text,
+   which is right for a text field and wrong for a checkbox beside a name, so this
+   is the one place a label is laid out beside its control rather than above it.
+   The picker's Directory cards do the same thing with the .card class; this is the
+   same idea without the card around it, for a list that is nine names rather than a
+   grid of blurbs. */
+.choices { list-style: none; padding: 0; margin: 0 0 var(--space-4); }
+.choices label {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  color: var(--color-text);
+  cursor: pointer;
+}
+.choices > li + li { border-top: 1px solid var(--color-border-subtle); }
+
 /* A selectable Directory card. The whole card is the label, so the checkbox and
    the text are one target. */
 .card {

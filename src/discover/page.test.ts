@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { DiscoverService } from '../services/discover-service.js';
 import type { DiscoverTemplate } from '../domain/types.js';
+import type { TopicCapOverflow } from '../domain/tier.js';
 import type { ShellAccount } from '../pages/layout.js';
 import { discoverPage } from './page.js';
 
@@ -30,10 +31,14 @@ function template(input: {
   };
 }
 
-function render(service: DiscoverService, extra?: { message?: string }): string {
+function render(
+  service: DiscoverService,
+  extra?: { message?: string; overflow?: TopicCapOverflow | null },
+): string {
   return discoverPage({
     account: ACCOUNT,
     discover: service,
+    overflow: extra?.overflow ?? null,
     ...(extra?.message === undefined ? {} : { message: extra.message }),
   });
 }

@@ -24,6 +24,34 @@ export const BILLING_SETTINGS_PATH = '/settings/billing';
 export const BILLING_CANCEL_PATH = '/settings/billing/cancel';
 
 /**
+ * Where a User over the FreeTier cap answers which of their Topics stop, and the
+ * query the page reads the answer back through.
+ *
+ * Beside the cancellation rather than under `/topics`, because the question is
+ * asked by the Subscription ending and this is the surface that says so. A User who
+ * wants to know why their plan is not what it was lands here, and the Topics they
+ * are choosing between are named on the same page.
+ */
+export const BILLING_TOPICS_PATH = '/settings/billing/topics';
+
+/**
+ * The query a topic answer comes back through, and the four answers it can carry.
+ *
+ * The same arrangement as the cancellation beside it, and for the same reason: the
+ * route builds the address and the page reads it, so the two spellings of each
+ * answer cannot drift apart.
+ */
+export const BILLING_TOPICS_QUERY = 'topics';
+
+export const BILLING_TOPICS_ANSWERS = [
+  'reduced',
+  'nothing-kept',
+  'too-many-kept',
+  'not-over-cap',
+] as const;
+export type BillingTopicsAnswer = (typeof BILLING_TOPICS_ANSWERS)[number];
+
+/**
  * The one query the billing page reads after a cancellation submission, and the
  * five answers it can carry.
  *

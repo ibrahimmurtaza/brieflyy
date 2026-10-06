@@ -1,5 +1,6 @@
 import { escapeHtml } from '../domain/html.js';
 import type { DeliverySlot } from '../domain/delivery-slot.js';
+import type { TopicCapOverflow } from '../domain/tier.js';
 import type { Tier } from '../domain/types.js';
 import { requestTokenInput } from '../http/request-token.js';
 import { EMAIL_BRIEFS_PATH } from '../services/unsubscribe-links.js';
@@ -227,6 +228,41 @@ export function planLine(input: {
     ? `${input.heldCount} of ${input.cap} topics`
     : `${input.heldCount} topics`;
   return `${escapeHtml(TIER_LABELS[input.tier])} &middot; ${count}`;
+}
+
+/**
+ * Why a User cannot add a Topic when they already hold more of them than their plan
+ * allows.
+ *
+ * One place, because five surfaces carry this reason — the topic list, both pickers,
+ * the DiscoverTab, and the page a refused submission lands on — and a User holding
+ * nine is told "you have reached the limit of 3" by all of them. That number is not
+ * their problem: they are over the cap, not at it, and the cap is not what is going
+ * to change.
+ *
+ * So the sentence carries three things: how many of their Topics are over it, that
+ * nothing has been taken from them, and the one page where the decision is theirs to
+ * make. Not a link to the upgrade page, and that is the one thing worth arguing
+ * about: somebody over the cap has already been offered the paid plan, and buying it
+ * again is what they have just stopped doing.
+ *
+ * `capCallout` below is what a page calls; this is what it renders.
+ */
+export function overCapCallout(overflow: TopicCapOverflow): string {
+  return `    <div class="callout callout--paywall">You hold ${overflow.held} topics and the free plan holds ${overflow.cap}. ${overflow.overBy} of them are over the cap. Nothing has been removed. <a href="${BILLING_SETTINGS_PATH}">Decide which of them keep working</a>.</div>`;
+}
+
+/**
+ * The cap refusal a page shows, and the rule for which of the two it is.
+ *
+ * Past the cap wins over at it, in one place, because the two are different problems
+ * with different answers and a page that got the order wrong would tell a User
+ * holding nine that they have run out of room. The at-cap sentence is the caller's
+ * because each page has always had its own wording for it and none of them says the
+ * same thing twice.
+ */
+export function capCallout(overflow: TopicCapOverflow | null, atCap: string): string {
+  return overflow === null ? atCap : overCapCallout(overflow);
 }
 
 /**

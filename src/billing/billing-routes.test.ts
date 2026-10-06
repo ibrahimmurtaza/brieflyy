@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 
 import { createApp } from '../app.js';
+import { escapeHtml } from '../domain/html.js';
 import { ConsoleEmailTransport } from '../email/console-transport.js';
 import { PUBLIC_ROUTES, WRITE_GUARD_EXEMPTIONS } from '../http/access.js';
 import { createTestDb } from '../testing/test-db.js';
@@ -26,6 +27,7 @@ import { StripePaymentProvider } from './stripe-payment-provider.js';
 import {
   BILLING_CANCEL_PATH,
   BILLING_SETTINGS_PATH,
+  BILLING_TOPICS_PATH,
   BILLING_WEBHOOK_PATH,
   CHECKOUT_PATH,
 } from './paths.js';
@@ -61,24 +63,22 @@ interface StubbedResponse {
 }
 
 /**
- * Whether a request the application made is the provider saying a subscription has
- * ended.
+ * Whether a request the application made is the provider saying one thing or
+ * another.
  *
  * Looked for in the body rather than tracked separately, so the double's state
  * follows from what the provider was actually sent rather than from a flag a test
  * set. Parsed here and nowhere else in the file: nothing but the double's own
  * bookkeeping needs to know the provider's event names.
  */
-function deliveryIsADeletion(body: string): boolean {
+function deliveryEventType(body: string): string | null {
   try {
     const parsed: unknown = JSON.parse(body);
-    return (
-      typeof parsed === 'object' &&
-      parsed !== null &&
-      (parsed as { type?: unknown }).type === 'customer.subscription.deleted'
-    );
+    return typeof parsed === 'object' && parsed !== null
+      ? ((parsed as { type?: unknown }).type as string | undefined) ?? null
+      : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -91,6 +91,31 @@ interface Harness {
   readonly providerCalls: { readonly url: string; readonly body: string }[];
   /** Tell the stubbed provider that it has stopped charging for the subscription. */
   theProviderHasStoppedCharging(): void;
+  /**
+   * Tell the stubbed provider that a new Checkout has started it charging again.
+   *
+   * The other half of `theProviderHasStoppedCharging`, and needed for the same
+   * reason: a provider that had dropped a Subscription and then took a payment for
+   * another one is holding the new one, so a read afterwards has something to
+   * answer with. A double that stayed at "no such Subscription" would make every
+   * page that reads the Subscription after a resubscribe claim it had ended.
+   */
+  theProviderHasStartedChargingAgain(): void;
+  /**
+   * Move the injected clock forward.
+   *
+   * Held because Topics are ordered by when they were created and a fixed clock
+   * gives nine of them the same instant — at which point "which of these did the
+   * User add most recently" is a question the fixtures cannot answer and a test
+   * would be asserting on the tie-break instead.
+   */
+  advanceClock(ms: number): void;
+  /**
+   * The injected clock in seconds, which is what a provider signature is stamped
+   * with: the provider checks a delivery against the clock it was built with, so a
+   * test that has moved that clock has to sign with the new reading.
+   */
+  nowSeconds(): number;
 }
 
 /**
@@ -116,18 +141,20 @@ async function buildHarness(
   resetDeterministic();
   const { db, driver } = createTestDb();
   const transport = new ConsoleEmailTransport({ logger: () => {} });
-  const clock = makeTestClock(NOW).clock;
+  const testClock = makeTestClock(NOW);
+  const clock = testClock.clock;
   const providerCalls: { url: string; body: string }[] = [];
   // What the stubbed provider currently holds, so a test can drive it through the
   // whole flow rather than by reaching past the application into the double. Null
   // once the provider has said the subscription is gone, which is what every read
   // afterwards answers with.
-  let current: ProviderSubscriptionShape | null = {
+  const charging: ProviderSubscriptionShape = {
     customer: 'cus_test_1',
     status: 'active',
     cancel_at_period_end: false,
     current_period_end: RENEWAL_SECONDS,
   };
+  let current: ProviderSubscriptionShape | null = { ...charging };
 
   vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
     const call = { url: String(url), body: String(init.body ?? '') };
@@ -198,17 +225,28 @@ async function buildHarness(
     cookie: cookies,
     driver,
     providerCalls,
+    advanceClock: (ms: number) => {
+      testClock.advance(ms);
+    },
+    nowSeconds: () => Math.floor(testClock.clock.now().getTime() / 1000),
     theProviderHasStoppedCharging: () => {
       current = null;
+    },
+    theProviderHasStartedChargingAgain: () => {
+      current = { ...charging };
     },
   };
 }
 
-/** The first `count` Directory template ids, which is what the picker posts. */
-async function templateIds(app: FastifyInstance, count: number): Promise<readonly string[]> {
+/** `count` Directory template ids from `offset`, which is what the picker posts. */
+async function templateIds(
+  app: FastifyInstance,
+  count: number,
+  offset = 0,
+): Promise<readonly string[]> {
   const resp = await app.inject({ method: 'GET', url: '/api/onboarding/templates' });
   return (resp.json() as { templates: { id: string }[] }).templates
-    .slice(0, count)
+    .slice(offset, offset + count)
     .map((t) => t.id);
 }
 
@@ -235,11 +273,14 @@ async function startCheckout(h: Harness): Promise<string> {
 
 /** Post a signed request to the webhook the way the provider would. */
 function postWebhook(h: Harness, signed: { readonly body: string; readonly signature: string }) {
-  // The provider is the one that acts on its own event, so a delivery saying a
-  // subscription has gone makes the stubbed one stop holding it. Watching for it
-  // here rather than in the fetch double is because the provider does not reach the
-  // application over HTTP — it is the other way round.
-  if (deliveryIsADeletion(signed.body)) h.theProviderHasStoppedCharging();
+  // The provider acts on its own event, so a delivery saying a Subscription has
+  // gone makes the stubbed one stop holding it, and a delivery saying a Checkout
+  // completed makes it start holding the new one. Watching for it here rather than
+  // in the fetch double is because the provider does not reach the application over
+  // HTTP — it is the other way round.
+  const type = deliveryEventType(signed.body);
+  if (type === 'customer.subscription.deleted') h.theProviderHasStoppedCharging();
+  if (type === 'checkout.session.completed') h.theProviderHasStartedChargingAgain();
   return h.app.inject({
     method: 'POST',
     url: BILLING_WEBHOOK_PATH,
@@ -882,6 +923,319 @@ describe('HTTP: a subscription ending', () => {
     expect(resp.body).toBe('Ignored.');
     expect((await h.app.inject({ method: 'GET', url: '/topics', headers: { cookie: h.cookie } }))
       .body).toMatch(/Paid plan/);
+  });
+});
+
+describe('a paid User who is holding more Topics than the free cap allows', () => {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  let h: Harness;
+
+  beforeEach(async () => {
+    h = await buildHarness();
+  });
+
+  afterEach(async () => {
+    await h.app.close();
+    vi.unstubAllGlobals();
+  });
+
+  const get = (url: string) =>
+    h.app.inject({ method: 'GET', url, headers: { cookie: h.cookie } });
+
+  /**
+   * Pay, hold nine Topics, cancel, and let the period they paid for run out.
+   *
+   * The whole journey through the doors a real one comes through, because the state
+   * this ticket is about cannot be reached any other way: it is a User whose cap
+   * dropped while their Topics did not, and only a Subscription ending does that.
+   * The clock is moved between the two batches so the Topics have distinct creation
+   * times and "the ones added most recently" is a fact rather than a tie-break.
+   */
+  async function paidWithNineTopics(): Promise<void> {
+    const reference = await startCheckout(h);
+    await postWebhook(
+      h,
+      signedCheckoutCompleted({ eventId: 'evt_1', reference, timestamp: NOW_SECONDS }),
+    );
+
+    const first = await templateIds(h.app, 5);
+    const added = await submitForm(h.app, h.cookie, '/pick-topics', { templateIds: first });
+    if (added.statusCode !== 302) {
+      throw new Error(`the first batch answered ${added.statusCode}: ${added.body}`);
+    }
+    h.advanceClock(DAY_MS);
+    const second = await templateIds(h.app, 4, 5);
+    const rest = await submitForm(h.app, h.cookie, '/pick-topics', { templateIds: second });
+    if (rest.statusCode !== 302) {
+      throw new Error(`the second batch answered ${rest.statusCode}: ${rest.body}`);
+    }
+  }
+
+  /**
+   * The subscription ending: the provider's own event, and the tier moving down.
+   *
+   * The event id is the argument because one provider event is one grant and the
+   * second delivery of the same id is refused as a replay (ADR-0023) — so a User who
+   * stops paying twice needs two events, and a test that reused one would be
+   * asserting that the replay path moved a tier.
+   */
+  async function theSubscriptionEnds(eventId = 'evt_2'): Promise<void> {
+    await submitForm(h.app, h.cookie, BILLING_CANCEL_PATH);
+    const resp = await postWebhook(
+      h,
+      signedSubscriptionDeleted({ eventId, timestamp: h.nowSeconds() }),
+    );
+    expect(resp.statusCode, resp.body).toBe(200);
+  }
+
+  /** The Topics they still hold, oldest first, as the pages list them. */
+  function heldTopics(): readonly { readonly title: string; readonly slug: string }[] {
+    return h.driver
+      .prepare(
+        'SELECT title, slug FROM topics WHERE removed_at IS NULL ORDER BY created_at, id',
+      )
+      .all() as { title: string; slug: string }[];
+  }
+
+  /** The same, as the titles the pages name them with. */
+  const topicsTheyHold = (): readonly string[] => heldTopics().map((t) => t.title);
+
+  it('is over the cap, which is what puts them on the free tier with nine Topics', async () => {
+    await paidWithNineTopics();
+    await theSubscriptionEnds();
+
+    // The premise, checked rather than assumed: the cap moved and the Topics did not.
+    expect(
+      h.driver.prepare('SELECT tier FROM users LIMIT 1').get(),
+    ).toEqual({ tier: 'free' });
+    expect(await topicsTheyHold()).toHaveLength(9);
+  });
+
+  it('is told how many of their Topics are over the cap, before anything is removed', async () => {
+    await paidWithNineTopics();
+    await theSubscriptionEnds();
+
+    const page = await get(BILLING_SETTINGS_PATH);
+
+    // Checked on the page rather than in a log because this is the claim to a
+    // person: 6 of 9 are past a cap of 3, and the page says so in numbers before it
+    // asks anything.
+    expect(page.body).toMatch(/hold 9 topics and the free plan holds 3/);
+    expect(page.body).toMatch(/6 of them are over the cap/);
+    expect(await topicsTheyHold()).toHaveLength(9);
+  });
+
+  it('is shown which Topics keep working and which stop, and offered the choice', async () => {
+    await paidWithNineTopics();
+    await theSubscriptionEnds();
+
+    const page = await get(BILLING_SETTINGS_PATH);
+
+    // Every one of the nine is named, so the split is between two things the User
+    // can read rather than between a number and a rule. Escaped because that is how
+    // a page renders a title, and one of the Directory's own is "Labour & jobs".
+    const titles = heldTopics().map((topic) => topic.title);
+    expect(titles).toHaveLength(9);
+    for (const title of titles) expect(page.body).toContain(escapeHtml(title));
+    // Three ticked: the ones added last. The other six are named in the same list,
+    // unticked, which is what "stops being emailed" means on this page.
+    expect(
+      [...page.body.matchAll(/name="keep" value="[^"]+" checked/g)],
+    ).toHaveLength(3);
+    expect(page.body).toMatch(/every topic you leave unticked stops being emailed/i);
+  });
+
+  it('offers the answer as a submission the guard can check, not a link', async () => {
+    await paidWithNineTopics();
+    await theSubscriptionEnds();
+
+    const page = await get(BILLING_SETTINGS_PATH);
+
+    expect(page.body).toMatch(
+      new RegExp(`<form method="post" action="${BILLING_TOPICS_PATH}"`),
+    );
+    expect(page.body).toMatch(/name="requestToken"/);
+  });
+
+  it('keeps every Topic when they do nothing, and refuses a new one with the reason', async () => {
+    await paidWithNineTopics();
+    await theSubscriptionEnds();
+
+    // Doing nothing: pages read, no submission made.
+    await get(BILLING_SETTINGS_PATH);
+    await get('/topics');
+    expect(await topicsTheyHold()).toHaveLength(9);
+
+    // And the refusal says why, rather than the cap number as though that were the
+    // problem. Six are past it, none of them has been touched, and the decision is
+    // one page away.
+    const refused = await submitForm(h.app, h.cookie, '/pick-topics', {
+      templateIds: await templateIds(h.app, 2, 40),
+    });
+    expect(refused.statusCode).toBe(402);
+    expect(refused.body).toMatch(/6 of them are over the cap/);
+    expect(refused.body).toMatch(/Nothing has been removed/);
+    expect(refused.body).toContain(`href="${BILLING_SETTINGS_PATH}"`);
+    expect(await topicsTheyHold()).toHaveLength(9);
+  });
+
+  it('is refused a new Topic on the surfaces that warn about it too', async () => {
+    await paidWithNineTopics();
+    await theSubscriptionEnds();
+
+    for (const url of ['/topics', '/pick-topics', '/discover']) {
+      const page = await get(url);
+      // The reason, on each of the three that carry it before a refusal rather than
+      // after one.
+      expect(page.body, `${url} does not say why`).toMatch(/6 of them are over the cap/);
+      expect(page.body, `${url} does not point at the decision`).toContain(
+        `href="${BILLING_SETTINGS_PATH}"`,
+      );
+      // And the upgrade page is not offered as the answer: somebody over the cap has
+      // already been offered the paid plan and taken it once. Checked against the
+      // callout rather than against a phrase, so rewording the at-cap sentence below
+      // it cannot make this pass vacuously.
+      const paywalls = page.body.match(/<div class="callout callout--paywall">[\s\S]*?(?=<div class="callout|<h2|<ul|<form|$)/g) ?? [];
+      expect(paywalls.length, `${url} shows no cap refusal`).toBeGreaterThan(0);
+      for (const callout of paywalls) {
+        expect(callout, `${url} still offers the upgrade page`).not.toMatch(
+          `href="/upgrade"`,
+        );
+      }
+    }
+  });
+
+  it('removes exactly the Topics they did not keep, and records the answer', async () => {
+    await paidWithNineTopics();
+    await theSubscriptionEnds();
+
+    const before = heldTopics();
+    const page = await get(BILLING_SETTINGS_PATH);
+    const kept = [...page.body.matchAll(/name="keep" value="([^"]+)" checked/g)].map(
+      (m) => m[1]!,
+    );
+    expect(kept).toHaveLength(3);
+
+    const answered = await submitForm(h.app, h.cookie, BILLING_TOPICS_PATH, { keep: kept });
+    expect(answered.statusCode).toBe(302);
+
+    // The three ticked survive and the six do not, and nothing else moved.
+    expect(topicsTheyHold()).toEqual(
+      before.filter((topic) => kept.includes(topic.slug)).map((topic) => topic.title),
+    );
+
+    // Recorded, with both halves of the answer, so the decision is a fact afterwards
+    // rather than something only the state implies.
+    const recorded = h.driver
+      .prepare('SELECT cap, held, kept_topic_ids, stopped_topic_ids FROM topic_reductions')
+      .all() as { cap: number; held: number; kept_topic_ids: string; stopped_topic_ids: string }[];
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]?.cap).toBe(3);
+    expect(recorded[0]?.held).toBe(9);
+    expect(JSON.parse(recorded[0]?.kept_topic_ids ?? '[]')).toHaveLength(3);
+    expect(JSON.parse(recorded[0]?.stopped_topic_ids ?? '[]')).toHaveLength(6);
+  });
+
+  it('says what it did, and is asked nothing more', async () => {
+    await paidWithNineTopics();
+    await theSubscriptionEnds();
+    const page = await get(BILLING_SETTINGS_PATH);
+    const kept = [...page.body.matchAll(/name="keep" value="([^"]+)" checked/g)].map(
+      (m) => m[1]!,
+    );
+
+    const answered = await submitForm(h.app, h.cookie, BILLING_TOPICS_PATH, { keep: kept });
+    const after = await get(answered.headers.location as string);
+
+    expect(after.body).toMatch(/answer has been applied/i);
+    expect(after.body).toMatch(/slots in the free plan are free/i);
+    // No second question: they are within the cap, so the block is gone.
+    expect(after.body).not.toMatch(/name="keep"/);
+  });
+
+  it('honours an answer that disagrees with what the page suggested', async () => {
+    await paidWithNineTopics();
+    await theSubscriptionEnds();
+
+    const before = heldTopics();
+
+    // The three oldest, which is the opposite of what the ticked boxes proposed.
+    await submitForm(h.app, h.cookie, BILLING_TOPICS_PATH, {
+      keep: before.slice(0, 3).map((topic) => topic.slug),
+    });
+
+    expect(topicsTheyHold()).toEqual(before.slice(0, 3).map((topic) => topic.title));
+  });
+
+  it('changes nothing when the answer ticked nothing at all', async () => {
+    await paidWithNineTopics();
+    await theSubscriptionEnds();
+
+    const answered = await submitForm(h.app, h.cookie, BILLING_TOPICS_PATH, {});
+
+    // A submission whose boxes all arrived empty is not an instruction to remove
+    // every Topic the User has, and the page says so rather than showing an error.
+    expect(answered.statusCode).toBe(302);
+    expect(await topicsTheyHold()).toHaveLength(9);
+    const after = await get(answered.headers.location as string);
+    expect(after.body).toMatch(/nothing was changed/i);
+    expect(after.body).toMatch(/name="keep"/);
+  });
+
+  it('changes nothing when the answer ticked more than the free plan holds', async () => {
+    await paidWithNineTopics();
+    await theSubscriptionEnds();
+
+    const before = heldTopics();
+    const answered = await submitForm(h.app, h.cookie, BILLING_TOPICS_PATH, {
+      keep: before.slice(0, 4).map((topic) => topic.slug),
+    });
+
+    // Dropping one of the four to fit would be this application making the decision
+    // the User was asked for.
+    expect(await topicsTheyHold()).toHaveLength(9);
+    const after = await get(answered.headers.location as string);
+    expect(after.body).toMatch(/more topics than the free plan holds/);
+    expect(after.body).toMatch(/nothing has been removed/i);
+  });
+
+  it('gives every Topic back to one who pays again before answering', async () => {
+    await paidWithNineTopics();
+    await theSubscriptionEnds();
+    expect(await topicsTheyHold()).toHaveLength(9);
+
+    const reference = await startCheckout(h);
+    await postWebhook(
+      h,
+      signedCheckoutCompleted({ eventId: 'evt_3', reference, timestamp: h.nowSeconds() }),
+    );
+
+    // All nine, still working: nothing was ever removed, so there was nothing to get
+    // back, and a plan with no cap asks no question.
+    expect(await topicsTheyHold()).toHaveLength(9);
+    const page = await get(BILLING_SETTINGS_PATH);
+    expect(page.body).toMatch(/You are on the paid plan/);
+    expect(page.body).not.toMatch(/name="keep"/);
+    // And no answer was recorded for a question they never answered.
+    expect(countRows(h.driver, 'topic_reductions')).toBe(0);
+  });
+
+  it('asks again of one who pays, stops paying a second time, and never answered', async () => {
+    await paidWithNineTopics();
+    await theSubscriptionEnds();
+    const reference = await startCheckout(h);
+    await postWebhook(
+      h,
+      signedCheckoutCompleted({ eventId: 'evt_3', reference, timestamp: h.nowSeconds() }),
+    );
+    await theSubscriptionEnds('evt_4');
+
+    // The same nine Topics and the same question, asked fresh from the state rather
+    // than replayed from anything stored the first time.
+    const page = await get(BILLING_SETTINGS_PATH);
+    expect(page.body).toMatch(/hold 9 topics and the free plan holds 3/);
+    expect([...page.body.matchAll(/name="keep" value="[^"]+" checked/g)]).toHaveLength(3);
+    expect(await topicsTheyHold()).toHaveLength(9);
   });
 });
 

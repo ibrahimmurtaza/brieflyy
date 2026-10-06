@@ -6,6 +6,7 @@ import type {
   CancellationOutcome,
   CheckoutRefusal,
   PaymentEventOutcome,
+  TopicReductionOutcome,
 } from './billing-service.js';
 import {
   AUTHENTICATED_ROUTE_CONFIG,
@@ -21,9 +22,13 @@ import {
   BILLING_SETTINGS_PATH,
   BILLING_STOPPED_ANSWERS,
   BILLING_STOPPED_QUERY,
+  BILLING_TOPICS_ANSWERS,
+  BILLING_TOPICS_PATH,
+  BILLING_TOPICS_QUERY,
   BILLING_WEBHOOK_PATH,
   CHECKOUT_PATH,
   type BillingStoppedAnswer,
+  type BillingTopicsAnswer,
 } from './paths.js';
 import { subscriptionSettingsPage } from './subscription-settings.js';
 
@@ -72,8 +77,10 @@ export async function registerBillingRoutes(
     AUTHENTICATED_ROUTE_CONFIG,
     async (req, reply) => {
       if (!requireAuthPage(req, reply)) return reply;
-      const [state, delivery] = await Promise.all([
+      const [state, overflow, answered, delivery] = await Promise.all([
         billingService.subscriptionStateFor(req.auth.user),
+        billingService.topicOverflowFor(req.auth.user),
+        billingService.hasAnsweredTopicReduction(req.auth.user),
         onboardingService.getDeliveryTime(req.auth.user.id),
       ]);
       return reply
@@ -82,7 +89,10 @@ export async function registerBillingRoutes(
           subscriptionSettingsPage({
             account: await resolveShellAccount(req.auth, onboardingService),
             state,
-            stopped: stoppedAnswerOf(req.query),
+            stopped: queryAnswerOf(req.query, BILLING_STOPPED_QUERY, BILLING_STOPPED_ANSWERS),
+            reduced: queryAnswerOf(req.query, BILLING_TOPICS_QUERY, BILLING_TOPICS_ANSWERS),
+            reducedAnswered: answered,
+            overflow,
             paymentsAvailable: billingService.checkoutAvailable(),
             // The User's own zone, falling back to UTC for one who has not set a
             // delivery time, which says nothing about where they are rather than
@@ -117,25 +127,79 @@ export async function registerBillingRoutes(
     },
   );
 
+  /**
+   * Answer the question a User was asked about the Topics over their cap.
+   *
+   * A redirect back to the page rather than a status, for the reason the
+   * cancellation beside it redirects: the User pressed a button on a page that
+   * stated a problem, and what they need to read next is that page again with the
+   * question answered on it. The answer travels as one of four known values, and
+   * the page announces the one that matches the state it has just read.
+   *
+   * Every outcome is a redirect, refusals included. A refusal with a bare 400 would
+   * leave a User whose Topics are untouched looking at an error, and the two refusals
+   * this has are both about a form the browser submitted for them.
+   */
+  fastify.post<{ Body: Record<string, unknown> }>(
+    BILLING_TOPICS_PATH,
+    AUTHENTICATED_WRITE_ROUTE_CONFIG,
+    async (req, reply) => {
+      if (!requireAuthPage(req, reply)) return reply;
+      const outcome = await billingService.reduceTopics(req.auth.user, {
+        keptSlugs: readListField(req.body, 'keep'),
+      });
+      return reply
+        .code(302)
+        .header(
+          'location',
+          `${BILLING_SETTINGS_PATH}?${BILLING_TOPICS_QUERY}=${topicsAnswerOf(outcome)}`,
+        )
+        .send();
+    },
+  );
+
   await registerWebhookRoute(fastify, billingService);
 }
 
 /**
- * The query the page reads, as one of the five answers it knows.
+ * One of the answers a query may carry, or null for anything else.
  *
- * Null for anything else rather than a refusal: the address is a User's own, and a
- * link with something unexpected in it is not something to answer an error page
- * over. An unrecognised value simply says nothing, which is what a User who never
+ * Two queries on this page carry an answer, so this is one reader for both rather
+ * than the second being a copy of the first with a different key: the page cannot
+ * announce what the route cannot send and the route cannot send what the page would
+ * not recognise, and that holds whatever the list of answers grows to. Null for
+ * anything unrecognised rather than a refusal, because the address is a User's own —
+ * a link with something unexpected in it says nothing, which is what a User who never
  * pressed the button sees.
  */
-function stoppedAnswerOf(query: unknown): BillingStoppedAnswer | null {
+function queryAnswerOf<A extends string>(
+  query: unknown,
+  key: string,
+  answers: readonly A[],
+): A | null {
   const value =
     typeof query === 'object' && query !== null
-      ? (query as Record<string, unknown>)[BILLING_STOPPED_QUERY]
+      ? (query as Record<string, unknown>)[key]
       : undefined;
-  return typeof value === 'string' && (BILLING_STOPPED_ANSWERS as readonly string[]).includes(value)
-    ? (value as BillingStoppedAnswer)
+  return typeof value === 'string' && (answers as readonly string[]).includes(value)
+    ? (value as A)
     : null;
+}
+
+/**
+ * The topics a submission ticked, as slugs.
+ *
+ * A string or a list of them, because a checkbox form submits one field per ticked
+ * box and a browser that sent the field with a single value would otherwise be read
+ * as having ticked nothing — which the service refuses rather than obeying, so the
+ * failure would be a refusal the User cannot see the cause of.
+ */
+function readListField(body: unknown, name: string): readonly string[] {
+  if (body === null || typeof body !== 'object') return [];
+  const value = (body as Record<string, unknown>)[name];
+  if (typeof value === 'string') return value.length === 0 ? [] : [value];
+  if (!Array.isArray(value)) return [];
+  return value.filter((one): one is string => typeof one === 'string' && one.length > 0);
 }
 
 /**
@@ -158,6 +222,25 @@ function answerOf(outcome: CancellationOutcome): BillingStoppedAnswer {
       return 'not-configured';
     case 'unavailable':
       return 'unavailable';
+  }
+}
+
+/**
+ * The query value for what a topic answer came to.
+ *
+ * Every outcome named rather than caught by a `default`, and the parameter is the
+ * service's own union, so a fifth outcome would not compile here — the same argument
+ * as `answerOf`, and the reason the route cannot redirect to something the page
+ * cannot announce.
+ */
+function topicsAnswerOf(outcome: TopicReductionOutcome): BillingTopicsAnswer {
+  switch (outcome.status) {
+    case 'reduced':
+      return 'reduced';
+    case 'not_over_cap':
+      return 'not-over-cap';
+    case 'refused':
+      return outcome.reason === 'too_many_kept' ? 'too-many-kept' : 'nothing-kept';
   }
 }
 

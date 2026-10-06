@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import type { Subscription } from '../domain/types.js';
-import type { BillingState } from './billing-service.js';
-import { BILLING_CANCEL_PATH } from './paths.js';
+import { planTopicReduction } from '../domain/topic-reduction.js';
+import type { Subscription, Topic } from '../domain/types.js';
+import type { BillingState, TopicOverflow } from './billing-service.js';
+import { BILLING_CANCEL_PATH, BILLING_TOPICS_PATH } from './paths.js';
 import { subscriptionSettingsPage } from './subscription-settings.js';
+import { makeTopic } from '../testing/fixtures.js';
 
 const STARTED = new Date('2026-03-01T12:00:00Z');
 const ASKED = new Date('2026-03-20T08:30:00Z');
@@ -33,16 +35,43 @@ function aSubscription(overrides: Partial<Subscription> = {}): Subscription {
 function thePage(input: {
   readonly state: BillingState;
   readonly stopped?: Parameters<typeof subscriptionSettingsPage>[0]['stopped'];
+  readonly reduced?: Parameters<typeof subscriptionSettingsPage>[0]['reduced'];
+  readonly answered?: boolean;
+  readonly overflow?: TopicOverflow;
   readonly paymentsAvailable?: boolean;
 }): string {
   return subscriptionSettingsPage({
     account: ACCOUNT,
     state: input.state,
     stopped: input.stopped ?? null,
+    reduced: input.reduced ?? null,
+    reducedAnswered: input.answered ?? true,
+    overflow: input.overflow ?? { kind: 'within_cap' },
     paymentsAvailable: input.paymentsAvailable ?? true,
     timezone: 'UTC',
     requestToken: 'tok_1',
   });
+}
+
+/** Nine Topics a User is holding, oldest first, as `listByUser` returns them. */
+function nineTopics(): readonly Topic[] {
+  return Array.from({ length: 9 }, (_unused, index) =>
+    makeTopic({
+      id: `topic-${index}`,
+      slug: `topic-${index}`,
+      title: `Topic ${index}`,
+      userId: 'user-iris',
+      createdAt: new Date(`2026-01-0${index + 1}T00:00:00Z`),
+    }),
+  );
+}
+
+/** What the service hands the page for a User holding nine on the free tier. */
+function overCapBySix(): TopicOverflow {
+  const topics = nineTopics();
+  const kept = planTopicReduction(topics, 3);
+  if (kept === null) throw new Error('nine topics on a cap of three is over it');
+  return { kind: 'over_cap', cap: 3, held: 9, overBy: 6, topics, kept };
 }
 
 /** The inside of the page, so the header's sign-out form is never mistaken for one. */
@@ -216,6 +245,142 @@ describe('an instance with no payment provider', () => {
     expect(inside(page)).toMatch(/no payment provider set up/i);
     expect(inside(page)).toMatch(/no button to press/i);
     expect(inside(page)).not.toMatch(/<form/);
+  });
+});
+
+describe('a User over the free-topic cap', () => {
+  const state = { kind: 'none' } as const;
+
+  it('is told how many of their Topics are over the cap, before anything is removed', () => {
+    const page = thePage({ state, overflow: overCapBySix() });
+
+    expect(inside(page)).toMatch(/9 topics and the free plan holds 3/);
+    expect(inside(page)).toMatch(/6 of them are over the cap/);
+    expect(inside(page)).toMatch(/Nothing has been removed/);
+  });
+
+  it('says nothing about why they are over it, because nothing here knows', () => {
+    // A User can be over the cap because their Subscription ended and because the
+    // development switch moved them, and this page has read neither. The billing
+    // block above states the Subscription; this block states the cap.
+    const page = thePage({ state, overflow: overCapBySix() });
+
+    expect(inside(page)).not.toMatch(/paid plan has ended/);
+  });
+
+  it('names every Topic, and ticks the ones this application says should keep working', () => {
+    const page = thePage({ state, overflow: overCapBySix() });
+
+    for (const topic of nineTopics()) {
+      expect(inside(page)).toMatch(new RegExp(`>\\s*${topic.title}</label>`));
+    }
+    const ticked = [...inside(page).matchAll(/name="keep" value="([^"]+)" checked/g)].map(
+      (m) => m[1],
+    );
+    // The proposal, stated as a proposal: a ticked box is a suggestion the User can
+    // untick, not a decision this application has taken.
+    expect(ticked).toEqual(['topic-6', 'topic-7', 'topic-8']);
+  });
+
+  it('says what happens to the ones left unticked, in the sentence that offers the choice', () => {
+    const page = thePage({ state, overflow: overCapBySix() });
+
+    expect(inside(page)).toMatch(/every topic you leave unticked stops being emailed/i);
+    // And what "stops" means, because a Topic that is removed is more than one that
+    // is quiet: its slot goes somewhere else.
+    expect(inside(page)).toMatch(/removed from this account/);
+    expect(inside(page)).toMatch(/past briefs are kept/i);
+  });
+
+  it('offers the answer as a Brieflyy submission, carrying the request token', () => {
+    const page = thePage({ state, overflow: overCapBySix() });
+
+    expect(inside(page)).toMatch(
+      new RegExp(`<form method="post" action="${BILLING_TOPICS_PATH}"`),
+    );
+    expect(inside(page)).toMatch(/name="requestToken"/);
+    expect(inside(page)).toMatch(/value="tok_1"/);
+  });
+
+  it('is asked nothing at all while they are within the cap', () => {
+    const page = thePage({ state });
+
+    expect(inside(page)).not.toMatch(/free plan holds/);
+    expect(inside(page)).not.toMatch(/name="keep"/);
+  });
+});
+
+describe('what the last topic answer said', () => {
+  const state = { kind: 'none' } as const;
+
+  it('announces an answer that was applied, once they are within the cap again', () => {
+    const page = thePage({ state, reduced: 'reduced' });
+
+    expect(inside(page)).toMatch(/answer has been applied/);
+    expect(inside(page)).toMatch(/stopped being emailed/i);
+    // The consequence said where a User would act on it: the slots are free.
+    expect(inside(page)).toMatch(/slots in the free plan are free/i);
+  });
+
+  it('does not announce an answer a User over the cap never gave', () => {
+    // The address is a User's own, so `?topics=reduced` can be typed. Over a User who
+    // is still over the cap it would claim six Topics were removed while the page
+    // below asks them which six.
+    const forged = thePage({ state, overflow: overCapBySix(), reduced: 'reduced' });
+
+    expect(inside(forged)).not.toMatch(/answer has been applied/);
+    expect(inside(forged)).toMatch(/free plan holds 3/);
+  });
+
+  it('does not announce an answer to somebody who has no record of answering one', () => {
+    // The state cannot tell this apart from a real answer: a User within their cap
+    // and a User who has answered are both within their cap. A free User with two
+    // Topics who types the address must not be told their Topics were removed.
+    const forged = thePage({ state, reduced: 'reduced', answered: false });
+
+    expect(inside(forged)).not.toMatch(/answer has been applied/);
+    // Their own state is still stated, rather than the page being emptied out because
+    // somebody guessed a query value.
+    expect(inside(forged)).toMatch(/You are on the free plan/);
+  });
+
+  it('says exactly what did not happen when nothing was ticked', () => {
+    const page = thePage({ state, overflow: overCapBySix(), reduced: 'nothing-kept' });
+
+    expect(inside(page)).toMatch(/nothing has been removed/i);
+    // And the question is still there to answer, because it was not answered.
+    expect(inside(page)).toMatch(/name="keep"/);
+  });
+
+  it('says what was wrong when too many were ticked, without naming a number it cannot know', () => {
+    const page = thePage({ state, overflow: overCapBySix(), reduced: 'too-many-kept' });
+
+    // No cap written into the sentence. The cap is a number the application reads
+    // rather than one the page carries, and a page carrying it would print "at most
+    // Infinity" for a User on a tier that has no limit at all.
+    expect(inside(page)).toMatch(/more topics than the free plan holds/);
+    expect(inside(page)).toMatch(/nothing has been removed/i);
+  });
+
+  it('says there was nothing to decide rather than claiming Topics stopped', () => {
+    const page = thePage({ state, reduced: 'not-over-cap' });
+
+    expect(inside(page)).toMatch(/nothing to decide/);
+    expect(inside(page)).not.toMatch(/answer has been applied/);
+  });
+
+  it('says nothing about there being nothing to decide over somebody who is over the cap', () => {
+    // Typed over a User holding nine, "you are not holding more topics than the free
+    // plan allows" is the state claim in reverse — the same failure as the success
+    // message being said over one who never answered.
+    const forged = thePage({ state, overflow: overCapBySix(), reduced: 'not-over-cap' });
+
+    expect(inside(forged)).not.toMatch(/nothing to decide/);
+    expect(inside(forged)).toMatch(/free plan holds 3/);
+  });
+
+  it('says nothing when nobody has answered anything', () => {
+    expect(inside(thePage({ state }))).not.toMatch(/callout/);
   });
 });
 

@@ -81,6 +81,38 @@ describe('DrizzleTopicRepo soft delete', () => {
 
     expect(await rawRemovedAt('topic-1')).toEqual(first);
   });
+
+  it('removes a group of Topics at once, leaving the ones not named', async () => {
+    await topicRepo.removeMany(['topic-1', 'topic-2'], new Date('2026-02-01T00:00:00Z'));
+
+    expect(await topicRepo.listByUser('user-1')).toEqual([]);
+    expect((await topicRepo.listByUser('user-2')).map((t) => t.id)).toEqual(['topic-3']);
+  });
+
+  it('keeps every row of a group removal, and stamps them all with the same moment', async () => {
+    // The same soft delete as the single one, so a batch cannot quietly become the
+    // hard delete six removals would otherwise be.
+    const removedAt = new Date('2026-02-01T00:00:00Z');
+    await topicRepo.removeMany(['topic-1', 'topic-2'], removedAt);
+
+    expect(await rawRemovedAt('topic-1')).toEqual(removedAt);
+    expect(await rawRemovedAt('topic-2')).toEqual(removedAt);
+  });
+
+  it('removes nothing when asked to remove nothing', async () => {
+    await topicRepo.removeMany([], new Date('2026-02-01T00:00:00Z'));
+
+    expect(await rawRemovedAt('topic-1')).toBeNull();
+  });
+
+  it('does not move the removal time of one already removed', async () => {
+    const first = new Date('2026-02-01T00:00:00Z');
+    await topicRepo.remove('topic-1', first);
+    await topicRepo.removeMany(['topic-1', 'topic-2'], new Date('2026-03-01T00:00:00Z'));
+
+    expect(await rawRemovedAt('topic-1')).toEqual(first);
+    expect(await rawRemovedAt('topic-2')).toEqual(new Date('2026-03-01T00:00:00Z'));
+  });
 });
 
 describe('DrizzleTopicRepo a Topic that is created as a batch', () => {

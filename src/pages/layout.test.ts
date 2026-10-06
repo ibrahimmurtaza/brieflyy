@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { PRIMARY_NAV, layout, type ShellAccount } from './layout.js';
+import {
+  PRIMARY_NAV,
+  capCallout,
+  layout,
+  overCapCallout,
+  type ShellAccount,
+} from './layout.js';
 
 /** A signed-in account with the next brief scheduled, which is the usual shape. */
 function signedIn(overrides: Partial<ShellAccount> = {}): ShellAccount {
@@ -135,5 +141,38 @@ describe('the document shell', () => {
     );
     expect(html).not.toContain('<script>alert(1)</script>');
     expect(html).toContain('&lt;script&gt;');
+  });
+});
+
+describe('the reason a User cannot add a Topic', () => {
+  const pastCap = { cap: 3, held: 9, overBy: 6 };
+
+  it('says how far over the cap they are, and that nothing was taken', () => {
+    const html = overCapCallout(pastCap);
+
+    expect(html).toMatch(/hold 9 topics and the free plan holds 3/);
+    expect(html).toMatch(/6 of them are over the cap/);
+    // The promise, in the one place every refusal is written: whatever is past the
+    // cap is still theirs until they answer.
+    expect(html).toMatch(/Nothing has been removed/);
+  });
+
+  it('points at the page where the decision is made, rather than at the upgrade', () => {
+    const html = overCapCallout(pastCap);
+
+    // Not `/upgrade`: a User over the cap has been offered the paid plan and taken it
+    // once, and the thing in front of them now is which of their Topics should stop
+    // working.
+    expect(html).toMatch(/href="\/settings\/billing"/);
+    expect(html).not.toMatch(/href="\/upgrade"/);
+  });
+
+  it('says the past-the-cap reason rather than the at-the-cap one, whichever the caller offers', () => {
+    // The precedence is the whole of the helper: a User holding nine who was told
+    // "you have reached the limit of 3" has been told a number that is not their
+    // problem, and the at-cap sentence is offered by every page that carries it.
+    expect(capCallout(pastCap, '<at the cap>')).toBe(overCapCallout(pastCap));
+    expect(capCallout(null, '<at the cap>')).toBe('<at the cap>');
+    expect(capCallout(null, '')).toBe('');
   });
 });
