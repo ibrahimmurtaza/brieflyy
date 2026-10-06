@@ -647,7 +647,7 @@ signed-in User at `/admin/ingest` and `/admin/briefs`.
 pnpm test
 ```
 
-The suite is 96 test files across `src/`, one per module, holding 1,572 cases —
+The suite is 97 test files across `src/`, one per module, holding 1,587 cases —
 Vitest prints the live figure at the end of every run. `docs-agreement.test.ts`
 checks the file count and cannot check the case count without running the suite it
 lives in, so that one number is worth reading off a run rather than trusting.

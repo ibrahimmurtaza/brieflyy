@@ -27,6 +27,7 @@ import {
   type HiddenSource,
 } from '../domain/feedback.js';
 import type { ClusterId, FeedbackScope, FeedbackType, SourceId } from '../domain/types.js';
+import type { BriefPlanRepo } from '../repos/brief-plan-repo.js';
 import type { BriefSnapshotRepo } from '../repos/brief-snapshot-repo.js';
 import {
   archiveOffset,
@@ -35,6 +36,7 @@ import {
 import { archiveSearchPage } from '../archive/page.js';
 import { parseArchiveQuery } from '../domain/archive-query.js';
 import type { BriefPlanService } from '../services/brief-plan-service.js';
+import { BriefPlanRefusedError } from '../services/brief-plan-service.js';
 import type { TrendsService } from '../services/trends-service.js';
 import {
   isEmailStopped,
@@ -109,6 +111,7 @@ export interface PageRoutesOptions {
    */
   readonly briefPlanService?: BriefPlanService;
   readonly briefSnapshotRepo?: BriefSnapshotRepo;
+  readonly briefPlanRepo?: BriefPlanRepo;
   /**
    * What the brief's unsubscribe links changed, and the way back. Optional for
    * the same reason `briefPlanService` is: a caller that mounts the pages
@@ -651,6 +654,115 @@ export async function registerPageRoutes(
       // different brief from the one the User received — and the one the call to
       // action in the email points at.
       return reply.type('text/html').send(snapshot.html);
+    },
+  );
+
+  fastify.get<{ Params: { id: string }; Querystring: { ids?: string | string[] } }>(
+    '/briefs/:id/edit',
+    AUTHENTICATED_ROUTE_CONFIG,
+    async (req, reply) => {
+      if (
+        !opts.briefSnapshotRepo ||
+        !opts.briefPlanRepo ||
+        !opts.briefPlanService ||
+        !opts.clusterRepo ||
+        !requireAuthPage(req, reply)
+      ) {
+        return reply;
+      }
+      const snapshot = await opts.briefSnapshotRepo.findByIdForUser(
+        req.auth.user.id,
+        req.params.id,
+      );
+      if (!snapshot) {
+        return reply
+          .code(404)
+          .type('text/html')
+          .send(notFoundPage(await shellFor(req), req.requestToken ?? null, 'That brief'));
+      }
+      const topic = await opts.topicRepo.getById(snapshot.topicId);
+      const plan = await opts.briefPlanService.planForSnapshot(
+        req.auth.user.id,
+        snapshot.id,
+      );
+      const clusters = plan
+        ? await opts.clusterRepo.listByTopicId(plan.topicId)
+        : [];
+      // The ordering under edit: what an Up/Down link last set, or the plan
+      // the snapshot was rendered from when the User first opened it.
+      const currentIds =
+        req.query.ids === undefined
+          ? (plan?.clusterIds ?? [])
+          : splitIds(req.query.ids);
+      // The stored plan can be one this Topic no longer supports — a Cluster
+      // in it has gone — and the page says so rather than presenting it as
+      // usable. The new plan gets refused the same way at submit time.
+      const refusal = plan ? await opts.briefPlanService.checkPlan(plan) : null;
+      return reply.type('text/html').send(
+        editBriefPage({
+          account: await shellFor(req),
+          snapshotId: snapshot.id,
+          topicTitle: topic?.title ?? 'Topic',
+          topicSlug: topic?.slug ?? null,
+          sentPlanIds: plan?.clusterIds ?? [],
+          currentIds,
+          clusters,
+          storedPlanRefusal: refusal?.reason ?? null,
+          requestToken: req.requestToken ?? null,
+        }),
+      );
+    },
+  );
+
+  fastify.post<{ Params: { id: string }; Body: { ids?: string | string[] } }>(
+    '/briefs/:id/regenerate',
+    AUTHENTICATED_WRITE_ROUTE_CONFIG,
+    async (req, reply) => {
+      if (!opts.briefPlanService || !opts.briefSnapshotRepo || !requireAuthPage(req, reply)) {
+        return reply;
+      }
+      const snapshot = await opts.briefSnapshotRepo.findByIdForUser(
+        req.auth.user.id,
+        req.params.id,
+      );
+      if (!snapshot) {
+        return reply
+          .code(404)
+          .type('text/html')
+          .send(notFoundPage(await shellFor(req), req.requestToken ?? null, 'That brief'));
+      }
+      const ids = splitIds(req.body?.ids);
+      try {
+        const result = await opts.briefPlanService.regenerateBrief({
+          userId: req.auth.user.id,
+          briefSnapshotId: snapshot.id,
+          clusterIds: ids,
+          to: req.auth.account.email,
+        });
+        const topic = await opts.topicRepo.getById(result.snapshot.topicId);
+        return reply
+          .code(302)
+          .header(
+            'location',
+            topic ? `/topics/${encodeURIComponent(topic.slug)}?brief=sent` : '/topics',
+          )
+          .send();
+      } catch (err) {
+        if (err instanceof BriefPlanRefusedError) {
+          return reply
+            .code(200)
+            .type('text/html')
+            .send(
+              regenerateRefusedPage({
+                account: await shellFor(req),
+                reason: err.message,
+                snapshotId: snapshot.id,
+                requestToken: req.requestToken ?? null,
+              }),
+            );
+        }
+        throw err;
+      }
     },
   );
 
@@ -1855,6 +1967,140 @@ function newestFirst(
   return [...snapshots].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 }
 
+function splitIds(value: unknown): readonly ClusterId[] {
+  if (value === undefined || value === null) return [];
+  const parts = Array.isArray(value) ? value : [value];
+  return parts
+    .filter((v): v is string => typeof v === 'string')
+    .flatMap((p) => p.split(','))
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0) as ClusterId[];
+}
+
+/**
+ * The plan a brief was built from, made editable: the selection and the order,
+ * both changeable, so the User gets a new, immutable brief from their own
+ * choices without the pipeline re-deciding what they have already decided.
+ *
+ * The ordering under edit arrives through `?ids=` (from the Up/Down links) or
+ * defaults to the plan the snapshot was rendered from. A User who has not
+ * touched Up/Down submits the sent plan's own order; checkboxes take on
+ * whichever order the rows are in, because a row list that is selected-first
+ * and in order serialises its boxes in that same order.
+ */
+function editBriefPage(input: {
+  readonly account: ShellAccount | null;
+  readonly snapshotId: string;
+  readonly topicTitle: string;
+  readonly topicSlug: string | null;
+  readonly sentPlanIds: readonly ClusterId[];
+  readonly currentIds: readonly ClusterId[];
+  readonly clusters: readonly Cluster[];
+  readonly storedPlanRefusal: string | null;
+  readonly requestToken?: string | null;
+}): string {
+  const byId = new Map(input.clusters.map((c) => [c.id as string, c] as const));
+  // The Clusters of the plan as sent, in that order: what made the brief that
+  // reached the User's inbox. Gone ones are named rather than silently dropped,
+  // because their absence is exactly why the plan can no longer be used.
+  const asSent = input.sentPlanIds.map((id) => {
+    const cluster = byId.get(id as string);
+    return cluster
+      ? `        <li>${escapeHtml(cluster.title)}</li>`
+      : `        <li><s>${escapeHtml(id)}</s> — no longer in this Topic</li>`;
+  });
+  const asSentList = asSent.length > 0
+    ? `    <h2>This brief was built from, in the order it was sent</h2>
+    <ol>
+${asSent.join('\n')}
+    </ol>`
+    : '';
+  const refusalCallout = input.storedPlanRefusal
+    ? `    <div class="callout callout--warn" role="alert">
+      <p>${escapeHtml(input.storedPlanRefusal)}</p>
+    </div>`
+    : '';
+  // Selected first, in the order under edit, then the rest of the Topic's
+  // Clusters. The checkboxes are the POST's fields and the rows are rendered
+  // in this order, so what is on the page is what the POST will send: the
+  // checked rows, in row order.
+  const selected = input.currentIds
+    .map((id) => byId.get(id as string))
+    .filter((c): c is Cluster => c !== undefined);
+  const rest = input.clusters.filter(
+    (c) => !input.currentIds.some((id) => id === c.id),
+  );
+  const row = (cluster: Cluster, index: number, inSelection: boolean): string => {
+    const up =
+      inSelection && index > 0
+        ? ` <a href="/briefs/${encodeURIComponent(input.snapshotId)}/edit?ids=${encodeURIComponent(
+            move(input.currentIds, index, index - 1).join(','),
+          )}">Up</a>`
+        : '';
+    const down =
+      inSelection && index < selected.length - 1
+        ? ` <a href="/briefs/${encodeURIComponent(input.snapshotId)}/edit?ids=${encodeURIComponent(
+            move(input.currentIds, index, index + 1).join(','),
+          )}">Down</a>`
+        : '';
+    return `        <li><label><input type="checkbox" name="ids" value="${escapeHtml(
+      cluster.id,
+    )}"${inSelection ? ' checked' : ''}> ${escapeHtml(cluster.title)}</label>${up}${down}</li>`;
+  };
+  const rows = [
+    ...selected.map((c, i) => row(c, i, true)),
+    ...rest.map((c) => row(c, -1, false)),
+  ].join('\n');
+  return layout({
+    title: 'Adjust this brief',
+    account: input.account,
+    requestToken: input.requestToken ?? null,
+    body: `    <h1>Adjust this brief</h1>
+    <p>Built from the brief you were sent on ${escapeHtml(input.topicTitle)}. Change what is in it, and the order it is in, and get a new brief by email. The one you were sent stays as it was.</p>
+${asSentList}
+${refusalCallout}
+    <h2>Choose and order</h2>
+    <form method="POST" action="/briefs/${encodeURIComponent(input.snapshotId)}/regenerate">
+      ${input.requestToken ? requestTokenInput(input.requestToken) : ''}
+      <ul>
+${rows}
+      </ul>
+      <button type="submit">Email me this brief</button>
+    </form>`,
+  });
+}
+
+function move(
+  ids: readonly ClusterId[],
+  from: number,
+  to: number,
+): readonly ClusterId[] {
+  const copy = [...ids];
+  const [item] = copy.splice(from, 1);
+  if (item === undefined) return copy;
+  copy.splice(to, 0, item);
+  return copy;
+}
+
+/** A submission the plan could not support: say why, and keep the way back. */
+function regenerateRefusedPage(input: {
+  readonly account: ShellAccount | null;
+  readonly reason: string;
+  readonly snapshotId: string;
+  readonly requestToken?: string | null;
+}): string {
+  return layout({
+    title: 'That plan cannot be used',
+    account: input.account,
+    requestToken: input.requestToken ?? null,
+    body: `    <h1>That plan cannot be used</h1>
+    <div class="error-summary" role="alert">
+      <p>${escapeHtml(input.reason)}</p>
+    </div>
+    <p class="actions"><a class="button" href="/briefs/${encodeURIComponent(input.snapshotId)}/edit">Back to the brief</a></p>`,
+  });
+}
+
 /**
  * Asking for a brief now, and the BriefSnapshots already emailed.
  *
@@ -1879,7 +2125,7 @@ function sendBriefSection(input: {
   // timezone to show it in, and a bare clock time is a claim without a frame.
   const sent = (input.snapshots ?? []).map(
     (b) =>
-      `      <li><a href="/briefs/${encodeURIComponent(b.id)}">${escapeHtml(formatHumanTime(b.createdAt, 'UTC'))} UTC</a></li>`,
+      `      <li><a href="/briefs/${encodeURIComponent(b.id)}">${escapeHtml(formatHumanTime(b.createdAt, 'UTC'))} UTC</a> · <a href="/briefs/${encodeURIComponent(b.id)}/edit">plan and adjust</a></li>`,
   );
   const list = sent.length > 0
     ? `    <section>
