@@ -3,10 +3,12 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { escapeHtml } from '../domain/html.js';
 import type {
   BillingService,
+  CancellationOutcome,
   CheckoutRefusal,
   PaymentEventOutcome,
 } from './billing-service.js';
 import {
+  AUTHENTICATED_ROUTE_CONFIG,
   AUTHENTICATED_WRITE_ROUTE_CONFIG,
   PUBLIC_ROUTE_CONFIG,
   requireAuthPage,
@@ -14,7 +16,16 @@ import {
 import { layout, type ShellAccount } from '../pages/layout.js';
 import { resolveShellAccount } from '../pages/shell.js';
 import type { OnboardingService } from '../onboarding/onboarding-service.js';
-import { BILLING_WEBHOOK_PATH, CHECKOUT_PATH } from './paths.js';
+import {
+  BILLING_CANCEL_PATH,
+  BILLING_SETTINGS_PATH,
+  BILLING_STOPPED_ANSWERS,
+  BILLING_STOPPED_QUERY,
+  BILLING_WEBHOOK_PATH,
+  CHECKOUT_PATH,
+  type BillingStoppedAnswer,
+} from './paths.js';
+import { subscriptionSettingsPage } from './subscription-settings.js';
 
 export interface BillingRoutesOptions {
   readonly billingService: BillingService;
@@ -23,13 +34,14 @@ export interface BillingRoutesOptions {
 }
 
 /**
- * The two billing routes, which have almost nothing in common and are registered
- * together for one reason: they are the whole public-ish surface of the layer, and
- * a second file would be a second place to look for what it can reach.
+ * The billing routes: a page, two writes, and a provider's.
  *
- * One is a page's write and lives behind the session and the cross-site guard.
- * The other is nobody's write but the provider's, and is public for the same
- * reason the magic link is.
+ * They are registered together for one reason — they are the whole surface of the
+ * layer, and a second file would be a second place to look for what it can reach.
+ *
+ * The page and the two writes live behind the session and the cross-site guard. The
+ * webhook is nobody's write but the provider's, and is public for the same reason
+ * the magic link is.
  */
 export async function registerBillingRoutes(
   fastify: FastifyInstance,
@@ -51,7 +63,102 @@ export async function registerBillingRoutes(
     );
   });
 
+  // The one page that says what a User is on. The subscription is read here rather
+  // than on every page because naming a renewal date is the only thing in the
+  // application that has to ask the provider — and asking it on the topic list would
+  // put somebody else's API between a User and their own topics.
+  fastify.get(
+    BILLING_SETTINGS_PATH,
+    AUTHENTICATED_ROUTE_CONFIG,
+    async (req, reply) => {
+      if (!requireAuthPage(req, reply)) return reply;
+      const [state, delivery] = await Promise.all([
+        billingService.subscriptionStateFor(req.auth.user),
+        onboardingService.getDeliveryTime(req.auth.user.id),
+      ]);
+      return reply
+        .type('text/html')
+        .send(
+          subscriptionSettingsPage({
+            account: await resolveShellAccount(req.auth, onboardingService),
+            state,
+            stopped: stoppedAnswerOf(req.query),
+            paymentsAvailable: billingService.checkoutAvailable(),
+            // The User's own zone, falling back to UTC for one who has not set a
+            // delivery time, which says nothing about where they are rather than
+            // guessing — the same reading every other dated page makes.
+            timezone: delivery?.timezone ?? 'UTC',
+            requestToken: req.requestToken ?? null,
+          }),
+        );
+    },
+  );
+
+  /**
+   * Stop the next charge.
+   *
+   * Every answer is a redirect back to the page rather than a status, because the
+   * page is where the plan is stated and a cancellation is a statement about the
+   * plan: sending the User to a bare `200` or an error page after they pressed the
+   * button would leave them to work out what happened. The answer travels in the
+   * query as one of five known values, so the page can announce what was done
+   * without the two spellings drifting apart.
+   */
+  fastify.post(
+    BILLING_CANCEL_PATH,
+    AUTHENTICATED_WRITE_ROUTE_CONFIG,
+    async (req, reply) => {
+      if (!requireAuthPage(req, reply)) return reply;
+      const outcome = await billingService.cancelSubscription(req.auth.user);
+      return reply
+        .code(302)
+        .header('location', `${BILLING_SETTINGS_PATH}?${BILLING_STOPPED_QUERY}=${answerOf(outcome)}`)
+        .send();
+    },
+  );
+
   await registerWebhookRoute(fastify, billingService);
+}
+
+/**
+ * The query the page reads, as one of the five answers it knows.
+ *
+ * Null for anything else rather than a refusal: the address is a User's own, and a
+ * link with something unexpected in it is not something to answer an error page
+ * over. An unrecognised value simply says nothing, which is what a User who never
+ * pressed the button sees.
+ */
+function stoppedAnswerOf(query: unknown): BillingStoppedAnswer | null {
+  const value =
+    typeof query === 'object' && query !== null
+      ? (query as Record<string, unknown>)[BILLING_STOPPED_QUERY]
+      : undefined;
+  return typeof value === 'string' && (BILLING_STOPPED_ANSWERS as readonly string[]).includes(value)
+    ? (value as BillingStoppedAnswer)
+    : null;
+}
+
+/**
+ * The query value for what a cancellation submission came back with.
+ *
+ * Every outcome is named rather than caught by a `default`, and the parameter is the
+ * service's own union rather than a bare string, so a sixth outcome would not
+ * compile here: a route cannot redirect to an answer the page cannot announce. The
+ * one place the mapping is written is the one place it has to be.
+ */
+function answerOf(outcome: CancellationOutcome): BillingStoppedAnswer {
+  switch (outcome.status) {
+    case 'stopping':
+      return 'stopped';
+    case 'already_stopped':
+      return 'already-stopped';
+    case 'nothing_to_stop':
+      return 'nothing-to-stop';
+    case 'not_configured':
+      return 'not-configured';
+    case 'unavailable':
+      return 'unavailable';
+  }
 }
 
 /**
@@ -135,7 +242,12 @@ function answerWebhook(
 ): FastifyReply {
   switch (outcome.status) {
     case 'accepted':
-      req.log.info({ userId: outcome.userId }, 'checkout completed; the user is on the paid tier');
+      req.log.info(
+        { userId: outcome.userId },
+        outcome.kind === 'subscription_ended'
+          ? 'a subscription ended; the user is back on the free tier'
+          : 'checkout completed; the user is on the paid tier',
+      );
       return reply.code(200).type('text/plain; charset=utf-8').send('Paid.');
     case 'replayed':
       req.log.info({ eventId: outcome.eventId }, 'payment event already applied');
@@ -145,8 +257,8 @@ function answerWebhook(
       return reply.code(400).type('text/plain; charset=utf-8').send('Signature mismatch.');
     case 'unrecognised':
       // The signature held, so this genuinely came from the provider — it is about
-      // something other than a completed Checkout. Acknowledged so the provider
-      // stops delivering it; a 5xx here would have it retry for days.
+      // something other than a Checkout Brieflyy can act on. Acknowledged so the
+      // provider stops delivering it; a 5xx here would have it retry for days.
       req.log.info('a payment event arrived for something this application does not act on');
       return reply.code(200).type('text/plain; charset=utf-8').send('Ignored.');
     case 'unknown_checkout':
@@ -157,6 +269,16 @@ function answerWebhook(
       req.log.warn(
         { reference: outcome.reference },
         'a payment event named a checkout reference this application never issued',
+      );
+      return reply.code(200).type('text/plain; charset=utf-8').send('Ignored.');
+    case 'unknown_subscription':
+      // The same shape as the reference Brieflyy never issued, one step later: a
+      // subscription this application holds no row for. Either a Payment for
+      // somebody else's account, or one a User has since replaced with a newer
+      // Checkout, and neither of which may move a tier.
+      req.log.warn(
+        { subscriptionRef: outcome.subscriptionRef },
+        'a payment event named a subscription this application does not hold',
       );
       return reply.code(200).type('text/plain; charset=utf-8').send('Ignored.');
     case 'not_configured':

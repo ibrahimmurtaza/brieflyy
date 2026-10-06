@@ -186,7 +186,42 @@ key and not another reading of it: it is the signing secret of the endpoint, is
 never presented to anybody, and only answers whether a request came from Stripe.
 Conflating them would ship the ability to forge a tier change to anyone who read
 the API key out of a log. Point a Stripe webhook at `APP_BASE_URL` plus
-`/billing/webhook` for `checkout.session.completed`. See ADR-0023.
+`/billing/webhook` for `checkout.session.completed` and for
+`customer.subscription.deleted`. See ADR-0023 and ADR-0024.
+
+### Stopping a payment
+
+Buying is only half of it, so `/settings/billing` is where a User reads what they
+are on: the plan, the renewal date, its status, and a button that stops the next
+charge. It is in the navigation beside "Delivery time" rather than behind a paywall,
+because a User who wants to stop paying should not have to go looking for a way to be
+charged first. A User with no Subscription is answered with what they have rather
+than shown an error, and an instance with no PaymentProvider is offered no control
+at all — the same rule the checkout and the Google button follow (ADR-0019).
+
+A cancellation reaches the provider, and the row is written only once the provider
+has said yes: recorded the other way round, a Subscription would read as stopped
+while the provider went on charging it, which is the one failure a User cannot see.
+It stops the *next* charge rather than the current period — `cancel_at_period_end`,
+not a deletion — so `users.tier` does not move when the User presses the button, the
+Subscription goes to `cancelling`, and the page says what they keep and until when.
+The period ends when `customer.subscription.deleted` arrives, and that event moves
+the tier. It is the same public webhook, on the same signature check as the payment
+itself, because a route that can take a plan away has to be held to the same bar as
+the one that gives it.
+
+Naming a renewal date is the only thing in the application that has to ask the
+provider, so it is the one page that does — and it asks only when it cannot already
+answer. A stored renewal date is the end of the period paid for, so while it is still
+in the future it *is* the next charge; once it has passed, the period has rolled over
+and only the provider knows where it moved to. So the provider is reached at most
+once per period per User rather than once per visit, which is what keeps "a later
+read does not depend on asking the provider again" true of this layer. What it is
+told is written to `subscriptions`, which is what makes that row a record rather than
+a cache. The date is read rather than derived: a month is not always thirty days, and
+a date the application worked out itself is an invention printed as though somebody
+had said it. A provider that cannot be reached leaves the stored row alone and the
+page says it is showing what was last recorded. See ADR-0024.
 
 ## Secrets
 
@@ -311,18 +346,22 @@ than only recording that somebody asked. See ADR-0012.
 
 `POST /billing/webhook` is public for the same reason, and it is the one route
 in the application whose caller cannot be signed in even in principle. It
-authorises by an HMAC over the exact bytes Stripe sent, checked before a byte of
-the payload is read, and the User it moves comes from a Checkout reference
-Brieflyy minted and stored — never from anything in the body. It reads the raw
-body because a parsed one can be re-serialised into something equal as JSON and
-different as a message, so it is registered in its own encapsulated scope with a
-JSON parser that yields a string; the application's own JSON surface keeps
-parsing into objects. A signature that does not hold is a 400 and writes nothing
-at all. A replayed event, an event of a kind Brieflyy does not act on, and an
-event naming a reference it never issued are each a 200 with no write — they are
-not failures, and a 5xx would have Stripe retrying for days something no retry
-can fix. One event is one grant because the provider's event id is the primary
-key of `payment_events`. See ADR-0023.
+authorises by an HMAC over the exact bytes Stripe sent, checked before a byte of the
+payload is read. It reads the raw body because a parsed one can be re-serialised into
+something equal as JSON and different as a message, so it is registered in its own
+encapsulated scope with a JSON parser that yields a string; the application's own
+JSON surface keeps parsing into objects. A signature that does not hold is a 400 and
+writes nothing at all. A replayed event, an event of a kind Brieflyy does not act on,
+and an event naming a Checkout reference or a Subscription it never issued are each a
+200 with no write — they are not failures, and a 5xx would have Stripe retrying for
+days something no retry can fix. One event is one grant because the provider's event
+id is the primary key of `payment_events`. See ADR-0023 and ADR-0024.
+
+The User never comes from the body. A completed Checkout names one by a **Checkout
+reference** Brieflyy minted and stored before it asked the provider for anything; an
+ending names one by the provider's own name for the Subscription, which is stored
+for exactly that. Both are values this application issued or recorded, so a validly
+signed event about somebody else's payment resolves to nothing it holds.
 
 ## Changing the database schema
 
@@ -428,9 +467,10 @@ src/
 ├── archive/               # the Archive view: the search results page. Its route is
 │                          # in pages/routes.ts, with the rest of the shell's; its
 │                          # full-text index is in db/archive-index.ts
-├── billing/               # the PaymentProvider seam (Stripe), the BillingService, and
-│                          # the two routes: POST /billing/checkout and the public
-│                          # POST /billing/webhook
+├── billing/               # the PaymentProvider seam (Stripe), the BillingService, the
+│                          # Subscription settings surface and its two routes:
+│                          # POST /billing/checkout, POST /settings/billing/cancel,
+│                          # and the public POST /billing/webhook
 ├── discover/              # the discover layer's view: the DiscoverTab page + routes
 ├── email/                 # EmailTransport seam (Console + Resend)
 ├── oauth/                 # OAuthClient seam (Google) + the PKCE exchange
@@ -502,7 +542,7 @@ purpose, and each is reached by something other than a request:
 `oauth/` and the PaymentProvider are inside the closure but conditional: `oauth/`
 builds a client only when `OAUTH_PROVIDER` names a provider, and where there is none
 the sign-in page offers no Google and the two Google routes refuse rather than throw
-(ADR-0019); `billing/` registers its two routes either way and only builds a
+(ADR-0019); `billing/` registers its three routes either way and only builds a
 PaymentProvider when all three of `STRIPE_SECRET_KEY`,
 `STRIPE_WEBHOOK_SECRET` and `STRIPE_PAID_PRICE_ID` are set, so an instance that takes
 no payments still has a surface the route guard can check and an upgrade page that
@@ -574,7 +614,7 @@ signed-in User at `/admin/ingest` and `/admin/briefs`.
 pnpm test
 ```
 
-The suite is 93 test files across `src/`, one per module, holding 1,440 cases —
+The suite is 94 test files across `src/`, one per module, holding 1,504 cases —
 Vitest prints the live figure at the end of every run. `docs-agreement.test.ts`
 checks the file count and cannot check the case count without running the suite it
 lives in, so that one number is worth reading off a run rather than trusting.
@@ -599,8 +639,8 @@ of the files are guards that fail the build when the shape of the system drifts:
 
 The rest cover the auth and OAuth flows, onboarding, ingest, clustering, brief
 planning and rendering, feedback, trends, discover, archive search, unsubscribe,
-billing and the payment webhook, topic settings, delivery settings, the
-repositories, the migration runner, and the rate limiter.
+billing, the payment webhook, subscription settings and cancellation, topic settings,
+delivery settings, the repositories, the migration runner, and the rate limiter.
 
 The suites that drive a state-changing route submit it through `submitForm` in
 `src/testing/forms.ts`, which echoes the request token out of the same cookies the

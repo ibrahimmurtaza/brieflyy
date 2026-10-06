@@ -32,6 +32,9 @@ function rowToSubscription(row: SubscriptionRow): Subscription {
     subscriptionRef: row.subscriptionRef,
     customerRef: row.customerRef,
     startedAt: row.startedAt,
+    status: row.status,
+    renewsAt: row.renewsAt,
+    cancelledAt: row.cancelledAt,
   };
 }
 
@@ -63,11 +66,26 @@ export interface BillingRepo {
    *
    * An upsert because a second Checkout completes for a User who is already
    * subscribed, and the second event is the newer answer rather than a second
-   * subscription.
+   * subscription. It replaces the whole row rather than merging into it, so what
+   * comes back describes what they are paying for *now*: a User who cancels and
+   * then checks out again is paying, not cancelling.
    */
   saveSubscription(subscription: Subscription): Promise<void>;
   /** What a User is paying for, or null while they are paying for nothing. */
   findSubscriptionForUser(userId: UserId): Promise<Subscription | null>;
+  /**
+   * The Subscription a provider event names, or null when this application holds
+   * no such row.
+   *
+   * The lookup a `subscription_ended` is resolved through, and it is by the
+   * provider's own name for the subscription rather than by the User, because such
+   * an event carries no Checkout reference and nothing else in it names a User.
+   *
+   * Null is also the answer for a Subscription that has since been replaced by a
+   * newer Checkout, and it has to be: an old subscription ending must not move a
+   * User down who has paid again since.
+   */
+  findSubscriptionByProviderRef(subscriptionRef: string): Promise<Subscription | null>;
 }
 
 /**
@@ -131,6 +149,9 @@ export class DrizzleBillingRepo implements BillingRepo {
       subscriptionRef: subscription.subscriptionRef,
       customerRef: subscription.customerRef,
       startedAt: subscription.startedAt,
+      status: subscription.status,
+      renewsAt: subscription.renewsAt,
+      cancelledAt: subscription.cancelledAt,
     };
     // An update that returns the row it changed, so "was there one" is answered by
     // the same statement rather than by a read that a concurrent write could slip
@@ -149,6 +170,16 @@ export class DrizzleBillingRepo implements BillingRepo {
       .select()
       .from(subscriptions)
       .where(eq(subscriptions.userId, userId))) as readonly SubscriptionRow[];
+    return rows[0] ? rowToSubscription(rows[0]) : null;
+  }
+
+  async findSubscriptionByProviderRef(
+    subscriptionRef: string,
+  ): Promise<Subscription | null> {
+    const rows = (await this.db
+      .select()
+      .from(subscriptions)
+      .where(eq(subscriptions.subscriptionRef, subscriptionRef))) as readonly SubscriptionRow[];
     return rows[0] ? rowToSubscription(rows[0]) : null;
   }
 }

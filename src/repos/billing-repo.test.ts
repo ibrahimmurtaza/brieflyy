@@ -32,6 +32,9 @@ function aSubscription(userId = 'user-1', subscriptionRef = 'sub_1'): Subscripti
     subscriptionRef,
     customerRef: 'cus_1',
     startedAt: NOW,
+    status: 'active',
+    renewsAt: null,
+    cancelledAt: null,
   };
 }
 
@@ -133,7 +136,61 @@ describe('subscriptions', () => {
         subscriptionRef: 'sub_2',
         customerRef: 'cus_2',
         startedAt: NOW,
+        status: 'active',
+        renewsAt: null,
+        cancelledAt: null,
       }),
     ).rejects.toThrow();
+  });
+
+  it('reads back the period a Subscription is in and the dates around it', async () => {
+    // The whole point of the row: "paying", "told to stop" and "stopped" have to
+    // survive a round trip, or the page that states them states nothing.
+    await repo.saveSubscription({
+      ...aSubscription(),
+      status: 'cancelling',
+      renewsAt: new Date('2026-06-04T10:00:00Z'),
+      cancelledAt: new Date('2026-05-20T08:00:00Z'),
+    });
+
+    expect(await repo.findSubscriptionForUser('user-1')).toMatchObject({
+      status: 'cancelling',
+      renewsAt: new Date('2026-06-04T10:00:00Z'),
+      cancelledAt: new Date('2026-05-20T08:00:00Z'),
+    });
+  });
+
+  it('reads the row back as the newer subscription when a second Checkout lands', async () => {
+    // The row is what this User is paying for now, not a history of what they have
+    // paid for: a User who cancels and then checks out again is paying, so the row
+    // says paying. The cancellation they asked for belongs to the subscription that
+    // was replaced, and it is recorded on the event that asked for it.
+    await repo.saveSubscription({
+      ...aSubscription(),
+      status: 'cancelling',
+      renewsAt: new Date('2026-06-04T10:00:00Z'),
+      cancelledAt: new Date('2026-05-20T08:00:00Z'),
+    });
+    await repo.saveSubscription({ ...aSubscription('user-1', 'sub_2'), id: 'subscription-2' });
+
+    expect(await repo.findSubscriptionForUser('user-1')).toMatchObject({
+      subscriptionRef: 'sub_2',
+      status: 'active',
+      cancelledAt: null,
+    });
+  });
+
+  it('finds a Subscription by the name the provider gives it', async () => {
+    // The only way a `subscription_ended` finds its User: such an event names no
+    // Checkout reference, because the Checkout was months ago.
+    await repo.saveSubscription(aSubscription('user-1', 'sub_iris'));
+
+    expect(await repo.findSubscriptionByProviderRef('sub_iris')).toEqual(aSubscription('user-1', 'sub_iris'));
+  });
+
+  it('has nothing for a Subscription the provider names but this application never recorded', async () => {
+    await repo.saveSubscription(aSubscription('user-1', 'sub_iris'));
+
+    expect(await repo.findSubscriptionByProviderRef('sub_somebody_else')).toBeNull();
   });
 });

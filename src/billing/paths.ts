@@ -11,7 +11,39 @@
 export const CHECKOUT_PATH = '/billing/checkout';
 export const BILLING_WEBHOOK_PATH = '/billing/webhook';
 
-/** The two values the hosted checkout's return address can carry, as the page reads them. */
+/**
+ * Where a User reads what they are paying for, and where they stop it.
+ *
+ * Two addresses rather than one because they are two different things: a page a
+ * User reads and a write they submit. They live under `/settings` beside the
+ * delivery time because that is where the shell already sends somebody who wants to
+ * change something about their account, and a billing page under `/billing` would
+ * be the one settings screen the navigation had to special-case.
+ */
+export const BILLING_SETTINGS_PATH = '/settings/billing';
+export const BILLING_CANCEL_PATH = '/settings/billing/cancel';
+
+/**
+ * The one query the billing page reads after a cancellation submission, and the
+ * five answers it can carry.
+ *
+ * As a value rather than five constants because the route builds the address and
+ * the page reads it, and two spellings of the same answer is one more thing for a
+ * reader to reconcile: the route cannot redirect to something the page would not
+ * recognise, and the page cannot announce something the route never sends.
+ */
+export const BILLING_STOPPED_QUERY = 'stopped';
+
+export const BILLING_STOPPED_ANSWERS = [
+  'stopped',
+  'already-stopped',
+  'nothing-to-stop',
+  'unavailable',
+  'not-configured',
+] as const;
+export type BillingStoppedAnswer = (typeof BILLING_STOPPED_ANSWERS)[number];
+
+/** The values the hosted checkout's return address can carry, as the page reads them. */
 export const CHECKOUT_RETURNED_VALUE = 'complete';
 export const CHECKOUT_CANCELLED_VALUE = 'cancelled';
 
