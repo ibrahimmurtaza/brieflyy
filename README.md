@@ -579,10 +579,11 @@ the sign-in page offers no Google and the two Google routes refuse rather than t
 PaymentProvider when all three of `STRIPE_SECRET_KEY`,
 `STRIPE_WEBHOOK_SECRET` and `STRIPE_PAID_PRICE_ID` are set, so an instance that takes
 no payments still has a surface the route guard can check and an upgrade page that
-says why it has nothing to offer. One thing the glossary asks for and no module
-provides is a LivingBrief derived from a BriefPlan; the in-app surface is a rendering
-of the Topic's Clusters instead. `CONTEXT.md` says so on the entry rather than leaving
-it to be found.
+says why it has nothing to offer. The in-app surface is a rendering of a BriefPlan: the LivingBrief shows the
+Topic's latest stored plan, in its order, and names Clusters that arrived since
+as not yet planned. A Topic with no stored plan shows its Clusters as they
+stand and says so. `CONTEXT.md` says so on the entry rather than leaving it to
+be found.
 
 ### Seams
 
