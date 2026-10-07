@@ -11,6 +11,7 @@ import { DrizzleFeedbackRepo } from '../repos/feedback-repo.js';
 import { DrizzleTopicRepo } from '../repos/topic-repo.js';
 import { DrizzleUserRepo } from '../repos/user-repo.js';
 import { deterministicRandom, makeTestClock } from '../testing/test-clocks.js';
+import { NO_BACKOFF } from '../domain/types.js';
 import type { Article, ClusterId, SourceId, StoryId } from '../domain/types.js';
 import { FeedbackService, type FeedbackServiceDeps } from './feedback-service.js';
 
@@ -42,6 +43,7 @@ async function harness(): Promise<Harness> {
       feedUrl: null,
       lastPolledAt: null,
       lastSuccessAt: null,
+      backoff: NO_BACKOFF,
     });
   }
   for (const topicId of [TOPIC, OTHER_TOPIC]) {

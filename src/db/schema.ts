@@ -148,6 +148,11 @@ export const sources = sqliteTable(
     feedUrl: text('feed_url'),
     lastPolledAt: integer('last_polled_at', { mode: 'timestamp_ms' }),
     lastSuccessAt: integer('last_success_at', { mode: 'timestamp_ms' }),
+    // The failure backoff, held on the row so it outlasts the process running
+    // the scheduler. See SourceBackoff in domain/types.ts.
+    consecutiveFailures: integer('consecutive_failures').notNull().default(0),
+    nextAttemptAt: integer('next_attempt_at', { mode: 'timestamp_ms' }),
+    lastError: text('last_error'),
   },
   (t) => ({
     slugUnique: uniqueIndex('sources_slug_unique').on(t.slug),

@@ -1,5 +1,10 @@
 import type { Clock } from '../domain/clock.js';
-import type { Source, SourceId } from '../domain/types.js';
+import {
+  NO_BACKOFF,
+  type Source,
+  type SourceBackoff,
+  type SourceId,
+} from '../domain/types.js';
 import type { SourceRepo } from '../repos/source-repo.js';
 import { IntervalLoop } from '../scheduling/interval-loop.js';
 import type { RegistryIngestCycleReport, RegistryIngestService } from './registry-ingest-service.js';
@@ -9,8 +14,25 @@ export interface IngestSourceStatus {
   readonly lastPolledAt: Date | null;
   readonly lastSuccessAt: Date | null;
   readonly consecutiveFailures: number;
-  readonly nextAttemptAt: Date;
+  /**
+   * When this Source is next polled, or null when nothing is holding it back and
+   * no cadence has started for it — which is a Source that has never run. A
+   * Source serving a backoff has one; a Source that has never been polled and a
+   * Source that has recovered do not, and the two are told apart by the failures
+   * rather than by the date.
+   */
+  readonly nextAttemptAt: Date | null;
   readonly lastError: string | null;
+  /**
+   * Whether a backoff is what is holding this Source back right now.
+   *
+   * Not the same question as when it is next polled: every Source waiting out its
+   * normal interval has a next attempt, and saying all of them are backing off
+   * would be a reading with nothing behind it. This one is the state an operator
+   * acts on, and it is derived from the same backoff the cycle is given, so the
+   * page cannot report a Source as serving a backoff while the cycle polls it.
+   */
+  readonly servingBackoff: boolean;
 }
 
 export interface IngestSchedulerStatus {
@@ -49,10 +71,31 @@ export interface IngestSchedulerDeps {
   readonly afterCycle?: (report: RegistryIngestCycleReport) => Promise<void>;
 }
 
-interface SourceBackoff {
-  consecutiveFailures: number;
-  lastError: string | null;
-  nextAttemptAt: Date;
+/**
+ * Whether a Source's next attempt is still in the future, which is what is
+ * holding the cycle off reaching out to it.
+ *
+ * This is the one definition of "is being left alone", so the decision a cycle
+ * makes and the reading the dashboard cannot drift apart. It covers the cadence
+ * as well as the backoff, because a Source with no failures still has a next
+ * attempt: one interval on from its last poll.
+ */
+function isHeldUntil(backoff: SourceBackoff, now: Date): boolean {
+  return (
+    backoff.nextAttemptAt !== null && backoff.nextAttemptAt.getTime() > now.getTime()
+  );
+}
+
+/**
+ * Whether a Source is being held back by a backoff rather than by its cadence.
+ *
+ * A Source waiting out its normal interval is not in trouble, and reporting it
+ * as backing off would say nearly every Source is in backoff nearly all of the
+ * time — which is the reading the column exists to replace with something an
+ * operator can act on.
+ */
+function isServingBackoff(backoff: SourceBackoff, now: Date): boolean {
+  return backoff.consecutiveFailures > 0 && isHeldUntil(backoff, now);
 }
 
 export class IngestScheduler {
@@ -68,7 +111,17 @@ export class IngestScheduler {
    */
   private readonly loop: IntervalLoop;
 
-  private readonly backoffs = new Map<SourceId, SourceBackoff>();
+  /**
+   * The backoff every Source is serving, read off its row at the top of every
+   * cycle and written back at the end of it.
+   *
+   * A cache of what the database already says rather than a record of it. The
+   * whole reason the backoff exists is to outlast the process running it, so
+   * nothing here is load-bearing once the process is gone — which is why it is
+   * loaded before each cycle rather than kept, and why a Source whose row says
+   * nothing is polled immediately however long this map has known about it.
+   */
+  private backoffs = new Map<SourceId, SourceBackoff>();
   private lastCycleAt: Date | null = null;
   private lastCycleId: string | null = null;
   private nextDueAt: Date | null = null;
@@ -105,13 +158,19 @@ export class IngestScheduler {
   }
 
   async tick(): Promise<RegistryIngestCycleReport> {
+    // Read before the cycle rather than after it, because the answer this
+    // process gives has to be the answer the last one left on the rows. A
+    // scheduler that started up with nothing in memory must leave a Source
+    // serving a backoff alone on its very first cycle, or a deploy is a way of
+    // putting every broken feed back into the next cycle's path.
+    await this.loadBackoffs();
     const now = this.clock.now();
     // The scheduler owns the backoff state, so it is the one that decides which
     // Sources this cycle is allowed to reach out to.
     const report = await this.registry.ingestOnce({
       isDue: (sourceId, at) => this.isSourceDue(sourceId, at),
     });
-    this.applyReportBackoff(report, now);
+    await this.applyReportBackoff(report, now);
     // After the backoff state, so the cycle is finished as far as the registry
     // and the scheduler are concerned before anything downstream reads what it
     // wrote.
@@ -143,12 +202,13 @@ export class IngestScheduler {
 
   /**
    * Whether a Source is due to be polled now. This is what the registry asks
-   * before it reaches out, so a Source serving out a backoff is left alone
-   * rather than being polled on every cycle regardless.
+   * before it reaches out, so a Source waiting out a backoff is left alone
+   * rather than being polled on every cycle regardless — and so is one whose
+   * interval has not gone, which is what keeps an early wake-up for a broken
+   * feed from becoming a poll of every other feed too.
    */
   isSourceDue(sourceId: SourceId, now: Date): boolean {
-    const backoff = this.backoffs.get(sourceId);
-    return backoff === undefined || backoff.nextAttemptAt.getTime() <= now.getTime();
+    return !isHeldUntil(this.backoffs.get(sourceId) ?? NO_BACKOFF, now);
   }
 
   runForever(): Promise<void> {
@@ -159,17 +219,18 @@ export class IngestScheduler {
   }
 
   status(): IngestSchedulerStatus {
-    const sources: IngestSourceStatus[] = [];
-    for (const [sourceId, backoff] of this.backoffs.entries()) {
-      sources.push({
+    const now = this.clock.now();
+    const sources: IngestSourceStatus[] = [...this.backoffs.entries()].map(
+      ([sourceId, backoff]) => ({
         sourceId,
         lastPolledAt: null,
         lastSuccessAt: null,
         consecutiveFailures: backoff.consecutiveFailures,
         nextAttemptAt: backoff.nextAttemptAt,
         lastError: backoff.lastError,
-      });
-    }
+        servingBackoff: isServingBackoff(backoff, now),
+      }),
+    );
     return {
       running: this.loop.isRunning(),
       lastCycleAt: this.lastCycleAt,
@@ -180,26 +241,21 @@ export class IngestScheduler {
   }
 
   async statusHydrated(): Promise<IngestSchedulerStatus> {
+    const now = this.clock.now();
     const sources = await this.sourceRepo.list();
     const baseStatus = this.status();
-    const backoffBySource = new Map(
-      baseStatus.sources.map((s) => [s.sourceId, s] as const),
-    );
-    const hydrated: IngestSourceStatus[] = sources.map(
-      (s): IngestSourceStatus => {
-        const backoff = backoffBySource.get(s.id);
-        return {
-          sourceId: s.id,
-          lastPolledAt: s.lastPolledAt,
-          lastSuccessAt: s.lastSuccessAt,
-          consecutiveFailures: backoff?.consecutiveFailures ?? 0,
-          nextAttemptAt:
-            backoff?.nextAttemptAt ??
-            this.computeNextAttemptAtForSource(s, this.clock.now()),
-          lastError: backoff?.lastError ?? null,
-        };
-      },
-    );
+    const hydrated: IngestSourceStatus[] = sources.map((s) => {
+      const backoff = this.backoffOf(s);
+      return {
+        sourceId: s.id,
+        lastPolledAt: s.lastPolledAt,
+        lastSuccessAt: s.lastSuccessAt,
+        consecutiveFailures: backoff.consecutiveFailures,
+        nextAttemptAt: this.nextAttemptAtForSource(s),
+        lastError: backoff.lastError,
+        servingBackoff: isServingBackoff(backoff, now),
+      };
+    });
     return {
       running: baseStatus.running,
       lastCycleAt: baseStatus.lastCycleAt,
@@ -209,44 +265,58 @@ export class IngestScheduler {
     };
   }
 
-  private applyReportBackoff(
+  private async loadBackoffs(): Promise<void> {
+    const sources = await this.sourceRepo.list();
+    this.backoffs = new Map(sources.map((s) => [s.id, s.backoff] as const));
+  }
+
+  /**
+   * The backoff one Source is serving.
+   *
+   * What the current cycle read wins, because that is what the cycle is acting
+   * on. Failing that the row, which is right before the first cycle of a process
+   * has run: the status an operator opens straight after a deploy is a reading
+   * of the database, not of a map that has not been filled in yet.
+   */
+  private backoffOf(source: Source): SourceBackoff {
+    return this.backoffs.get(source.id) ?? source.backoff;
+  }
+
+  private async applyReportBackoff(
     report: RegistryIngestCycleReport,
     cycleFinishedAt: Date,
-  ): void {
+  ): Promise<void> {
     for (const r of report.sources) {
-      const existing = this.backoffs.get(r.sourceId) ?? {
-        consecutiveFailures: 0,
-        lastError: null,
-        nextAttemptAt: cycleFinishedAt,
-      };
       // A Source that was left alone this cycle keeps whatever it was already
       // serving out. Counting the skip as a success would clear the backoff
       // without ever having retried the Source.
-      if (r.skipped) {
-        this.backoffs.set(r.sourceId, existing);
-        continue;
-      }
+      if (r.skipped) continue;
       if (r.success) {
-        existing.consecutiveFailures = 0;
-        existing.lastError = null;
-        existing.nextAttemptAt = new Date(
+        // The streak and the error go, and the next attempt goes on the normal
+        // cadence rather than to null. Clearing the date as well would leave a
+        // healthy Source with nothing holding it back, and the loop wakes early
+        // for whichever Source is serving a short backoff — so that Source would
+        // be polled on every one of those wake-ups, which is the crowding the
+        // cadence exists to prevent.
+        const nextAttemptAt = new Date(
           cycleFinishedAt.getTime() + this.intervalMs(),
         );
-      } else {
-        existing.consecutiveFailures += 1;
-        existing.lastError = r.error ?? 'unknown_error';
-        const delay = this.computeBackoffDelay(existing.consecutiveFailures);
-        existing.nextAttemptAt = new Date(
-          cycleFinishedAt.getTime() + delay,
-        );
+        await this.sourceRepo.recordRecovered(r.sourceId, nextAttemptAt);
+        this.backoffs.set(r.sourceId, { ...NO_BACKOFF, nextAttemptAt });
+        continue;
       }
-      this.backoffs.set(r.sourceId, existing);
-    }
-    const seen = new Set(report.sources.map((s) => s.sourceId));
-    for (const id of this.backoffs.keys()) {
-      if (!seen.has(id)) {
-        this.backoffs.delete(id);
-      }
+      const consecutiveFailures =
+        (this.backoffs.get(r.sourceId) ?? NO_BACKOFF).consecutiveFailures + 1;
+      const backoff: SourceBackoff = {
+        consecutiveFailures,
+        lastError: r.error ?? 'unknown_error',
+        nextAttemptAt: new Date(
+          cycleFinishedAt.getTime() +
+            this.computeBackoffDelay(consecutiveFailures),
+        ),
+      };
+      await this.sourceRepo.recordBackoff(r.sourceId, backoff);
+      this.backoffs.set(r.sourceId, backoff);
     }
   }
 
@@ -257,19 +327,26 @@ export class IngestScheduler {
     return Math.min(delay, this.config.backoffMaxMs);
   }
 
-  private computeNextAttemptAtForSource(source: Source, now: Date): Date {
-    const backoff = this.backoffs.get(source.id);
-    if (backoff) return backoff.nextAttemptAt;
-    const interval = this.intervalMs();
-    if (source.lastPolledAt) {
-      return new Date(source.lastPolledAt.getTime() + interval);
-    }
-    return now;
+  /**
+   * When this Source is next polled, and null when there is no answer to give.
+   *
+   * The stored next attempt says so outright. A Source written before the backoff
+   * columns existed has none of its own, so it falls back to one cadence after
+   * its last poll — and a Source that has never been polled is given no date at
+   * all rather than "now", which on the dashboard reads as a Source late for a
+   * slot it never had.
+   */
+  private nextAttemptAtForSource(source: Source): Date | null {
+    const stored = this.backoffOf(source).nextAttemptAt;
+    if (stored !== null) return stored;
+    if (source.lastPolledAt === null) return null;
+    return new Date(source.lastPolledAt.getTime() + this.intervalMs());
   }
 
   private computeNextDueAt(now: Date): Date {
     let earliest = new Date(now.getTime() + this.intervalMs());
     for (const backoff of this.backoffs.values()) {
+      if (backoff.nextAttemptAt === null) continue;
       if (backoff.nextAttemptAt.getTime() < earliest.getTime()) {
         earliest = backoff.nextAttemptAt;
       }

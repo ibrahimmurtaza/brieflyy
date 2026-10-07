@@ -5,6 +5,7 @@ import { DrizzleSourceRepo } from './source-repo.js';
 import { DrizzleArticleRepo } from './article-repo.js';
 import { DrizzleStoryRepo } from './story-repo.js';
 import { EMPTY_SIGNATURE, isSameStory } from '../domain/story-signature.js';
+import { NO_BACKOFF } from '../domain/types.js';
 import type { Article, ArticleId, Source, StoryId } from '../domain/types.js';
 import { WIRE_COPIES, signatureOf } from '../testing/story-fixtures.js';
 
@@ -24,6 +25,7 @@ async function setupSource(): Promise<{
     feedUrl: 'https://example.com/feed',
     lastPolledAt: null,
     lastSuccessAt: null,
+    backoff: NO_BACKOFF,
   };
   await sourceRepo.insert(source);
   return { source, db };
@@ -43,6 +45,7 @@ async function addSource(
     feedUrl: `https://${id}.example.com/feed`,
     lastPolledAt: null,
     lastSuccessAt: null,
+    backoff: NO_BACKOFF,
   });
 }
 

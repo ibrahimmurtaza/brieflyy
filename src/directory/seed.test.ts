@@ -50,25 +50,43 @@ describe('applying the seed to a database that already has one', () => {
     expect(row.name).toBe('CNBC');
   });
 
-  it('leaves poll history alone, because the seed knows nothing about it', async () => {
-    // last_polled_at and last_success_at are what the backoff is computed from.
-    // Resetting them on every boot would reset every Source's backoff to zero,
-    // which is the opposite of what backoff is for.
+  it('leaves the poll history and the failure backoff alone, because the seed knows nothing about either', async () => {
+    // The backoff is the streak that keeps a broken feed out of every cycle, and
+    // it lives on the row now (ADR-0026). Resetting it on every boot would clear
+    // every Source's streak each time the process that started it went away,
+    // which is the opposite of what a backoff is for.
     const { db, driver } = createTestDb();
     driver
       .prepare(
-        `INSERT INTO sources (id, slug, name, homepage_url, feed_url, last_polled_at, last_success_at)
-         VALUES ('cnbc', 'cnbc', 'CNBC', 'https://www.cnbc.com', 'https://www.cnbc.com/rss', 1000, 2000)`,
+        `INSERT INTO sources (
+           id, slug, name, homepage_url, feed_url,
+           last_polled_at, last_success_at,
+           consecutive_failures, next_attempt_at, last_error
+         )
+         VALUES ('cnbc', 'cnbc', 'CNBC', 'https://www.cnbc.com', 'https://www.cnbc.com/rss',
+                 1000, 2000, 3, 9000, 'upstream 503')`,
       )
       .run();
 
     await applyDirectorySeed(db);
 
     const row = driver
-      .prepare(`SELECT last_polled_at, last_success_at FROM sources WHERE id = 'cnbc'`)
-      .get() as { last_polled_at: number; last_success_at: number };
+      .prepare(
+        `SELECT last_polled_at, last_success_at, consecutive_failures, next_attempt_at, last_error
+         FROM sources WHERE id = 'cnbc'`,
+      )
+      .get() as {
+      last_polled_at: number;
+      last_success_at: number;
+      consecutive_failures: number;
+      next_attempt_at: number;
+      last_error: string;
+    };
     expect(row.last_polled_at).toBe(1000);
     expect(row.last_success_at).toBe(2000);
+    expect(row.consecutive_failures).toBe(3);
+    expect(row.next_attempt_at).toBe(9000);
+    expect(row.last_error).toBe('upstream 503');
   });
 
   it('removes a Source the registry no longer lists, along with its links', async () => {

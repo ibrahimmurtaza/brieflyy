@@ -7,6 +7,7 @@ import { DrizzleEntityRepo } from './entity-repo.js';
 import { extractSignature } from '../domain/extract.js';
 import { canonicalEntityKey } from '../domain/entity-extraction.js';
 import { normalizeSignature } from '../domain/story-signature.js';
+import { NO_BACKOFF } from '../domain/types.js';
 import type { Article, ArticleId, Source } from '../domain/types.js';
 import { WIRE_COPIES } from '../testing/story-fixtures.js';
 
@@ -24,6 +25,7 @@ async function setupSource(): Promise<{
     feedUrl: 'https://example.com/feed',
     lastPolledAt: null,
     lastSuccessAt: null,
+    backoff: NO_BACKOFF,
   };
   await sourceRepo.insert(source);
   return { source, db };

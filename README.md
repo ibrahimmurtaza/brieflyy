@@ -634,7 +634,10 @@ the verifier cannot agree on the same mistake.
 ### Background jobs
 
 Three loops run for the life of the process and all three stop on it. `IngestScheduler`
-polls every Source a Topic names (ADR-0003); `ScheduledBriefService` answers each of a
+polls every Source a Topic names (ADR-0003), leaving a Source whose feed is failing alone
+for a Backoff that grows with each failure and is held on the Source row, so a restart
+does not put every broken feed back into the next cycle (ADR-0026);
+`ScheduledBriefService` answers each of a
 User's Topics for the DeliverySlot its own Cadence puts it on (ADR-0011), except any
 the User or the Topic has unsubscribed from (ADR-0012); `TrendsService`
 recomputes every Topic's trends from stored Articles on an hourly cadence, so a page
@@ -650,7 +653,7 @@ signed-in User at `/admin/ingest` and `/admin/briefs`.
 pnpm test
 ```
 
-The suite is 97 test files across `src/`, one per module, holding 1,587 cases —
+The suite is 97 test files across `src/`, one per module, holding 1,612 cases —
 Vitest prints the live figure at the end of every run. `docs-agreement.test.ts`
 checks the file count and cannot check the case count without running the suite it
 lives in, so that one number is worth reading off a run rather than trusting.

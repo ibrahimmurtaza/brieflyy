@@ -9,6 +9,7 @@ import { DrizzleSourceRepo } from './source-repo.js';
 import { DrizzleTopicRepo } from './topic-repo.js';
 import { DrizzleUserRepo } from './user-repo.js';
 import { EMPTY_SIGNATURE } from '../domain/story-signature.js';
+import { NO_BACKOFF } from '../domain/types.js';
 import type {
   Source,
   StoryId,
@@ -72,6 +73,7 @@ describe('DrizzleClusterRepo', () => {
       feedUrl: 'https://example.com/feed',
       lastPolledAt: null,
       lastSuccessAt: null,
+      backoff: NO_BACKOFF,
     });
   });
 
@@ -84,6 +86,7 @@ describe('DrizzleClusterRepo', () => {
       feedUrl: 'https://example.com/feed',
       lastPolledAt: null,
       lastSuccessAt: null,
+      backoff: NO_BACKOFF,
     };
     await sourceRepo.insert(source);
 
@@ -158,6 +161,7 @@ describe('DrizzleClusterRepo', () => {
       feedUrl: 'https://example.com/feed',
       lastPolledAt: null,
       lastSuccessAt: null,
+      backoff: NO_BACKOFF,
     };
     await sourceRepo.insert(source);
 
