@@ -5,7 +5,6 @@ import { DEFAULT_WEEKLY_DAY, type Topic } from '../domain/types.js';
 import type {
   BriefGeneration,
   BriefJobRun,
-  BriefRun,
   DeliverySettings,
   TopicId,
   UserId,
@@ -23,7 +22,10 @@ import type { UserRepo } from '../repos/user-repo.js';
 import { IntervalLoop } from '../scheduling/interval-loop.js';
 import { deliveryTimeOf } from '../domain/timezone.js';
 import type { DeliverySlot } from '../domain/delivery-slot.js';
-import type { BriefPlanService } from './brief-plan-service.js';
+import {
+  BriefNotSentError,
+  type BriefPlanService,
+} from './brief-plan-service.js';
 
 /** How often the job looks for a DeliveryTime that has arrived. */
 export const DEFAULT_BRIEF_INTERVAL_MS = 60 * 1000;
@@ -33,7 +35,10 @@ export interface ScheduledBriefServiceDeps {
    * The one path a brief goes out by. Held rather than the renderer and the
    * transport separately, because a scheduled brief is not a second kind of
    * brief: it is planned, rendered, stored and sent exactly as one a User asked
-   * for by hand, and only the trigger differs.
+   * for by hand, and only the trigger differs. Driven as its three steps rather
+   * than through `sendBrief` because this pass has one thing to do the hand-sent
+   * path has no place for — claim the DeliverySlot between the render and the
+   * send — and `sendIfOwed` is where the order that matters is written down.
    */
   readonly briefPlanService: BriefPlanService;
   readonly briefRunRepo: BriefRunRepo;
@@ -177,6 +182,16 @@ export class ScheduledBriefService {
           generation.discardedBullets += sent.discardedBullets;
         } catch (err) {
           failureCount += 1;
+          // A brief that was rendered and then failed to leave still cost what
+          // writing it cost, and the write calls were spent whether or not the
+          // message did. Read off the error rather than left out, because the
+          // whole point of the report is telling a spent call from an unspent one
+          // — and a refusal dropped from it reads as a brief nobody looked at.
+          if (err instanceof BriefNotSentError) {
+            generation.writtenClusters += err.generation.writtenClusters;
+            generation.calls += err.generation.calls;
+            generation.discardedBullets += err.generation.discardedBullets;
+          }
           console.error(
             `[ScheduledBriefService] brief for ${topic.id} failed:`,
             err,
@@ -205,14 +220,27 @@ export class ScheduledBriefService {
 
   /**
    * Answer one Topic's DeliverySlot, if it is still owed, and say what writing
-   * that brief cost. Null when it was already answered, which is the ordinary case
+   * that brief cost. Null when it was already claimed, which is the ordinary case
    * for every pass after the one that sent it.
+   *
+   * The three steps are driven here rather than through `sendBrief` because the
+   * claim on the DeliverySlot has to be taken *between* the render and the send,
+   * and that is the only place it can go. Written after the send it is a receipt,
+   * and a receipt cannot stop anything: a pass that dies between the transport
+   * taking the message and the row being written leaves an email in an inbox with
+   * nothing behind it, and the next pass — seeing no run — offers the same reading
+   * a second time. Taken before, the worst a death can cost is one DeliverySlot
+   * whose outcome nobody recorded, which is the one thing the application cannot
+   * resolve either way.
    */
   private async sendIfOwed(
     settings: DeliverySettings,
     topic: Topic,
     slot: DeliverySlot,
   ): Promise<BriefGeneration | null> {
+    // Read before the work rather than only claiming after it: every pass after
+    // the one that answered a slot would otherwise plan and render a brief — and
+    // spend the write calls on it — before finding out there was nothing to send.
     const already = await this.deps.briefRunRepo.findBySlot(
       settings.userId,
       topic.id,
@@ -229,25 +257,60 @@ export class ScheduledBriefService {
       throw new Error(`no account for user ${settings.userId}`);
     }
 
-    const { snapshot, generation } = await this.deps.briefPlanService.sendBrief({
+    const plan = await this.deps.briefPlanService.createPlan({
       topicId: topic.id,
       userId: settings.userId,
-      to: account.email,
     });
+    const { snapshot, rendered } = await this.deps.briefPlanService.renderSnapshot(plan);
 
-    // Written after the send, for the same reason the EmailDelivery is: this row
-    // is the claim that the period was dealt with, so one written for a send that
-    // failed would be a period nobody is owed anything for.
-    const run: BriefRun = {
+    const claimed = await this.deps.briefRunRepo.claim({
       id: this.deps.random.uuid(),
       userId: settings.userId,
       topicId: topic.id,
       scheduledFor: slot,
-      sentAt: this.deps.clock.now(),
       briefSnapshotId: snapshot.id,
-    };
-    await this.deps.briefRunRepo.insert(run);
-    return generation;
+    });
+    // Another pass reached the slot between the read and here. Its claim stands
+    // and this one sends nothing, so the count below is not a pass that skipped a
+    // User and not one that tried and failed.
+    if (claimed === null) return null;
+
+    try {
+      const { generation } = await this.deps.briefPlanService.sendSnapshot({
+        to: account.email,
+        snapshot,
+        rendered,
+      });
+      try {
+        await this.deps.briefRunRepo.markSent(claimed.id, this.deps.clock.now());
+      } catch (err) {
+        // The brief went out and the claim stays unsettled, which is exactly the
+        // window this pass cannot survive: the message may be in an inbox and
+        // nothing on this side of it will say so. Wrapped rather than rethrown
+        // raw so the pass still adds up what writing it cost — those calls were
+        // made and billed, and reporting them nowhere would leave the pass looking
+        // like one where nobody looked at anything.
+        throw new BriefNotSentError(
+          err instanceof Error ? err.message : String(err),
+          'unknown',
+          generation,
+          null,
+          { cause: err },
+        );
+      }
+      return generation;
+    } catch (err) {
+      // Only a refusal Brieflyy *watched* gives the slot back. Every other failure
+      // — the provider timed out after accepting, a 5xx, a delivery row that would
+      // not write, the process on its way down — leaves the claim standing, because
+      // the message may well be in an inbox and a second brief is worse than a
+      // silence. `BriefNotSentError` is what separates the two, and it separates
+      // them on the transport's word rather than on the shape of the message.
+      if (err instanceof BriefNotSentError && err.outcome === 'refused') {
+        await this.deps.briefRunRepo.release(claimed.id);
+      }
+      throw err;
+    }
   }
 
   /**

@@ -42,6 +42,12 @@ interface Harness {
   afterRestart(): UnsubscribeService;
   unsubscribedAtOf(userId: string): Date | null;
   topicUnsubscribedAt(topicId: string): Date | null;
+  /**
+   * Say that the delivery every test here spends a token out of did not reach its
+   * reader. The row exists and the tokens are on it either way; only the outcome
+   * says whether the message behind them went anywhere.
+   */
+  markDeliveryOutcome(outcome: 'refused' | 'unknown'): void;
 }
 
 let harness: Harness;
@@ -105,6 +111,9 @@ beforeEach(async () => {
     briefSnapshotId: 'snapshot-1',
     topicId: 'topic-1' as TopicId,
     sentAt: SENT_AT,
+    // The token in a brief is only ever in an inbox if the transport took the
+    // message, so every delivery these tests spend a link out of was sent.
+    outcome: 'sent',
     unsubscribeToken: TOPIC_TOKEN,
     globalUnsubscribeToken: GLOBAL_TOKEN,
     generation: NO_GENERATION,
@@ -121,6 +130,11 @@ beforeEach(async () => {
     afterRestart: serviceWith,
     unsubscribedAtOf: (userId: string): Date | null => userOptOutAt(driver, userId),
     topicUnsubscribedAt: (topicId: string): Date | null => topicOptOutAt(driver, topicId),
+    markDeliveryOutcome: (outcome: 'refused' | 'unknown'): void => {
+      driver
+        .prepare(`UPDATE email_deliveries SET outcome = ? WHERE id = ?`)
+        .run(outcome, 'delivery-1');
+    },
   };
 });
 
@@ -209,6 +223,34 @@ describe('UnsubscribeService, a token that cannot be spent', () => {
       reason: 'unknown_token',
     });
     expect(harness.unsubscribedAtOf('user-1')).toBeNull();
+  });
+
+  it('refuses a token out of a brief that never reached its reader', async () => {
+    // A delivery is recorded for every attempt now, including one the transport
+    // refused or never confirmed. Its tokens were minted for a document that went
+    // nowhere, so honouring one would let whoever guessed it stop a User's mail
+    // over a message that was never sent — and the row's own outcome is what says
+    // so, rather than an assumption that nobody could have the token.
+    harness.markDeliveryOutcome('refused');
+
+    expect(await harness.service.unsubscribeFromTopic(TOPIC_TOKEN)).toEqual({
+      status: 'invalid',
+      reason: 'unknown_token',
+    });
+    expect(harness.topicUnsubscribedAt('topic-1')).toBeNull();
+    expect(harness.count('unsubscribes')).toBe(0);
+  });
+
+  it('honours one out of a brief whose fate Brieflyy never found out', async () => {
+    // A send that timed out or hit a 5xx is `unknown`, and the link may be in a
+    // real reader's inbox. Refusing it would conclude the message never arrived —
+    // the one thing an unknown outcome says nothing about — and the reader who
+    // most needs to stop the mail is exactly the one whose send did not answer.
+    // This is what `unknown` records, so it is worth holding onto.
+    harness.markDeliveryOutcome('unknown');
+
+    expect((await harness.service.unsubscribeFromAll(GLOBAL_TOKEN)).status).toBe('ok');
+    expect(harness.unsubscribedAtOf('user-1')).toEqual(SENT_AT);
   });
 
   it('refuses a token from a brief older than the window', async () => {
@@ -394,6 +436,7 @@ async function seedBrief(driver: SqliteDriver): Promise<void> {
     briefSnapshotId: 'snapshot-1',
     topicId: 'topic-1' as TopicId,
     sentAt: SENT_AT,
+    outcome: 'sent',
     unsubscribeToken: TOPIC_TOKEN,
     globalUnsubscribeToken: GLOBAL_TOKEN,
     generation: NO_GENERATION,

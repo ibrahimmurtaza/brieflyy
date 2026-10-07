@@ -134,6 +134,22 @@ export class UnsubscribeService {
       : await this.deps.emailDeliveryRepo.findByGlobalUnsubscribeToken(token);
     if (delivery === null) return { status: 'invalid', reason: 'unknown_token' };
 
+    // Only a brief the provider turned down has tokens that are worth nothing.
+    // Nobody was given them, so honouring one would let whoever guessed it stop a
+    // User's mail over a message that was never sent. Refused as an unknown token
+    // rather than as a reason of its own, because from outside a token that does
+    // not resolve is a token that does not resolve, and a fourth reason would tell
+    // a reader only what they cannot act on.
+    //
+    // `unknown` is deliberately NOT refused. Brieflyy never heard whether that
+    // message arrived, so the link may be sitting in a real reader's inbox — and
+    // the one reader who most needs this to work is the one whose send timed out.
+    // Refusing them would conclude the message did not arrive, which is the one
+    // thing an unknown outcome says nothing about.
+    if (delivery.outcome === 'refused') {
+      return { status: 'invalid', reason: 'unknown_token' };
+    }
+
     // Measured from when the brief was sent rather than from now, so the window
     // is how long the link in that particular email has been live.
     if (

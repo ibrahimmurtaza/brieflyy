@@ -269,6 +269,7 @@ CREATE TABLE IF NOT EXISTS email_deliveries (
   sent_at INTEGER NOT NULL,
   unsubscribe_token TEXT NOT NULL,
   global_unsubscribe_token TEXT NOT NULL,
+  outcome TEXT NOT NULL DEFAULT 'sent',
   written_clusters INTEGER NOT NULL DEFAULT 0,
   generation_calls INTEGER NOT NULL DEFAULT 0,
   discarded_bullets INTEGER NOT NULL DEFAULT 0
@@ -294,7 +295,7 @@ CREATE TABLE IF NOT EXISTS brief_runs (
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
   scheduled_for INTEGER NOT NULL,
-  sent_at INTEGER NOT NULL,
+  sent_at INTEGER,
   brief_snapshot_id TEXT NOT NULL REFERENCES brief_snapshots(id) ON DELETE CASCADE
 );
 CREATE UNIQUE INDEX IF NOT EXISTS brief_runs_user_topic_slot_idx ON brief_runs (user_id, topic_id, scheduled_for);
@@ -372,6 +373,14 @@ interface TableRebuild {
    */
   readonly notNull?: readonly string[];
   /**
+   * Columns the current shape requires to be *nullable*, for the same reason and
+   * in the other direction: SQLite cannot drop a `NOT NULL` from a live table
+   * either, so a table that still declares one of these as `NOT NULL` is rebuilt.
+   * `brief_runs.sent_at` is the case that needed it — a claim on a DeliverySlot is
+   * written before the transport has answered, and there is no moment to put there.
+   */
+  readonly nullable?: readonly string[];
+  /**
    * Declared SQL type per column, for the columns whose type changed after the
    * table shipped. SQLite cannot alter a column's type in place either, so a
    * table that has one of these as the wrong type is rebuilt even when its
@@ -431,6 +440,9 @@ function rebuildTable(driver: SqliteDriver, rebuild: TableRebuild): void {
   const missingNotNull = (rebuild.notNull ?? []).some(
     (column) => !presentNotNull.has(column),
   );
+  const overNotNull = (rebuild.nullable ?? []).some((column) =>
+    presentNotNull.has(column),
+  );
   // SQLite reports the declared type uppercased, and a column the old table does
   // not have at all is left to `createSql` failing rather than compared here.
   const presentTypes = columnTypes(driver, rebuild.table);
@@ -438,7 +450,7 @@ function rebuildTable(driver: SqliteDriver, rebuild: TableRebuild): void {
     ([column, type]) =>
       presentTypes.has(column) && presentTypes.get(column) !== type,
   );
-  if (!missingForeignKey && !missingNotNull && !wrongType) return;
+  if (!missingForeignKey && !missingNotNull && !overNotNull && !wrongType) return;
 
   const temp = `${rebuild.table}__rebuild`;
   const existing = columnNames(driver, rebuild.table);
@@ -628,7 +640,7 @@ const TABLE_REBUILDS: readonly TableRebuild[] = [
       'expires_at',
       'consumed_at',
     ],
-    createSql: `CREATE TABLE IF NOT EXISTS magic_links (
+createSql: `CREATE TABLE IF NOT EXISTS magic_links (
   id TEXT PRIMARY KEY NOT NULL,
   account_id TEXT REFERENCES accounts(id) ON DELETE CASCADE,
   email TEXT NOT NULL,
@@ -636,6 +648,38 @@ const TABLE_REBUILDS: readonly TableRebuild[] = [
   created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
   expires_at INTEGER NOT NULL,
   consumed_at INTEGER
+)`,
+  },
+  {
+    // A BriefRun used to be the receipt for a brief that had gone out, so
+    // `sent_at` was NOT NULL and the row was written after the transport had
+    // answered. It is now the claim on the DeliverySlot, written before, because a
+    // row written afterwards stops the second record of a brief and not the second
+    // email. SQLite cannot drop a NOT NULL from a live table, so the table is
+    // rebuilt — and every run in it keeps the moment it was sent, which is the
+    // truth about all of them.
+    table: 'brief_runs',
+    foreignKeys: [
+      { column: 'user_id', table: 'users' },
+      { column: 'topic_id', table: 'topics' },
+      { column: 'brief_snapshot_id', table: 'brief_snapshots' },
+    ],
+    nullable: ['sent_at'],
+    columns: [
+      'id',
+      'user_id',
+      'topic_id',
+      'scheduled_for',
+      'sent_at',
+      'brief_snapshot_id',
+    ],
+    createSql: `CREATE TABLE IF NOT EXISTS brief_runs (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+  scheduled_for INTEGER NOT NULL,
+  sent_at INTEGER,
+  brief_snapshot_id TEXT NOT NULL REFERENCES brief_snapshots(id) ON DELETE CASCADE
 )`,
   },
 ];
@@ -781,6 +825,15 @@ const COLUMN_MIGRATIONS: readonly ColumnMigration[] = [
     table: 'email_deliveries',
     column: 'discarded_bullets',
     ddl: `ALTER TABLE email_deliveries ADD COLUMN discarded_bullets INTEGER NOT NULL DEFAULT 0`,
+  },
+  {
+    // What the transport did with the message. `sent` is the honest reading of
+    // every row written before this existed: a delivery was only ever recorded
+    // once the transport had taken the message, so none of them were refusals and
+    // none of them need to be read as though they might have been.
+    table: 'email_deliveries',
+    column: 'outcome',
+    ddl: `ALTER TABLE email_deliveries ADD COLUMN outcome TEXT NOT NULL DEFAULT 'sent'`,
   },
   {
     // What writing a pass's briefs cost. Zero for every pass recorded before this

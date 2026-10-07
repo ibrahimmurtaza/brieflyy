@@ -9,6 +9,7 @@ import { DrizzleAccountRepo } from '../repos/account-repo.js';
 import { DrizzleBriefJobRunRepo } from '../repos/brief-job-run-repo.js';
 import { DrizzleBriefPlanRepo } from '../repos/brief-plan-repo.js';
 import { DrizzleBriefRunRepo } from '../repos/brief-run-repo.js';
+import type { BriefRunRepo } from '../repos/brief-run-repo.js';
 import { DrizzleBriefSnapshotRepo } from '../repos/brief-snapshot-repo.js';
 import { DrizzleClusterRepo } from '../repos/cluster-repo.js';
 import { DrizzleDeliverySettingsRepo } from '../repos/delivery-settings-repo.js';
@@ -16,7 +17,7 @@ import { DrizzleEmailDeliveryRepo } from '../repos/email-delivery-repo.js';
 import { DrizzleTopicRepo } from '../repos/topic-repo.js';
 import { DrizzleUserRepo } from '../repos/user-repo.js';
 import { ConsoleEmailTransport } from '../email/console-transport.js';
-import type { EmailTransport } from '../email/transport.js';
+import { EmailRefusedError, type EmailTransport } from '../email/transport.js';
 import { createTestDb } from '../testing/test-db.js';
 import { countRows } from '../testing/db.js';
 import {
@@ -57,7 +58,12 @@ interface Harness {
   /** The same job with different options, for the paths they open up. */
   schedulerWith(transport: EmailTransport, overrides?: { retainedRuns?: number }): ScheduledBriefService;
   /** The same job with a summary client, which is what a deployment with one has. */
-  schedulerWritingWith(client: LLMSummaryClient): ScheduledBriefService;
+  schedulerWritingWith(
+    client: LLMSummaryClient,
+    transport?: EmailTransport,
+  ): ScheduledBriefService;
+  /** The same job over a repository of the caller's, which is how a pass is made to die. */
+  schedulerWithRepo(briefRunRepo: BriefRunRepo, transport?: EmailTransport): ScheduledBriefService;
 }
 
 let harness: Harness;
@@ -78,7 +84,10 @@ beforeEach(() => {
   const schedulerOver = (
     over: EmailTransport,
     client: LLMSummaryClient | undefined,
-    overrides: { retainedRuns?: number } = {},
+    overrides: {
+      retainedRuns?: number;
+      briefRunRepo?: BriefRunRepo;
+    } = {},
   ): ScheduledBriefService =>
     new ScheduledBriefService({
       briefPlanService: new BriefPlanService({
@@ -97,7 +106,7 @@ beforeEach(() => {
         clock: clock.clock,
         random: deterministicRandom,
       }),
-      briefRunRepo,
+      briefRunRepo: overrides.briefRunRepo ?? briefRunRepo,
       briefJobRunRepo,
       deliverySettingsRepo: settingsRepo,
       topicRepo,
@@ -107,7 +116,7 @@ beforeEach(() => {
       clock: clock.clock,
       random: deterministicRandom,
       intervalMs: 60_000,
-      ...overrides,
+      ...(overrides.retainedRuns === undefined ? {} : { retainedRuns: overrides.retainedRuns }),
     });
 
   const schedulerWith = (
@@ -115,8 +124,15 @@ beforeEach(() => {
     overrides: { retainedRuns?: number } = {},
   ): ScheduledBriefService => schedulerOver(over, undefined, overrides);
 
-  const schedulerWritingWith = (client: LLMSummaryClient): ScheduledBriefService =>
-    schedulerOver(transport, client);
+  const schedulerWritingWith = (
+    client: LLMSummaryClient,
+    over: EmailTransport = transport,
+  ): ScheduledBriefService => schedulerOver(over, client);
+
+  const schedulerWithRepo = (
+    repo: BriefRunRepo,
+    over: EmailTransport = transport,
+  ): ScheduledBriefService => schedulerOver(over, undefined, { briefRunRepo: repo });
 
   harness = {
     scheduler: schedulerWith(transport),
@@ -132,8 +148,28 @@ beforeEach(() => {
     firstRow: <T,>(sql: string): T | undefined => driver.prepare(sql).get() as T | undefined,
     schedulerWith,
     schedulerWritingWith,
+    schedulerWithRepo,
   };
 });
+
+/**
+ * A BriefRunRepo that cannot record that a send went out, and delegates the rest
+ * of itself. What a deploy between the transport's answer and the next write
+ * looks like from inside the pass: everything the pass wanted to write after the
+ * email went out is lost, and the only thing that can survive it is what was
+ * written before.
+ */
+function dyingBeforeItRecordsASend(repo: BriefRunRepo): BriefRunRepo {
+  return {
+    claim: (run) => repo.claim(run),
+    markSent: async () => {
+      throw new Error('the process went away mid-pass');
+    },
+    release: (id) => repo.release(id),
+    findBySlot: (userId, topicId, slot) => repo.findBySlot(userId, topicId, slot),
+    listByUser: (userId) => repo.listByUser(userId),
+  };
+}
 
 interface SeedUserInput {
   readonly id: string;
@@ -226,6 +262,27 @@ function recipients(): readonly string[] {
   return harness.transport.snapshot().map((message) => message.to);
 }
 
+/** Let the loop's awaits settle, so a test does not race the microtask queue. */
+function settle(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+/** A door a test can hold a call open in, and open again to let it through. */
+function parked(): { wait(): Promise<void>; open(): void } {
+  let opened: (() => void) | null = null;
+  return {
+    wait: () =>
+      new Promise<void>((resolve) => {
+        opened = resolve;
+      }),
+    open: () => {
+      const resolve = opened;
+      opened = null;
+      resolve?.();
+    },
+  };
+}
+
 describe('ScheduledBriefService, an unsubscribed reader', () => {
   it('sends nothing at all to a User who unsubscribed from every brief', async () => {
     // The unsubscribe link in a brief has to stop the mail, and the only thing
@@ -282,6 +339,24 @@ describe('ScheduledBriefService, an unsubscribed reader', () => {
     expect((await harness.scheduler.run()).sentCount).toBe(1);
   });
 });
+
+/**
+ * A BriefRunRepo that reports every slot as unclaimed, over a real one.
+ *
+ * The stale read two processes on one database produce: this pass asked before
+ * the other had claimed, and is now claiming what the other already has. Only the
+ * unique index can settle it, so the rest of the repository is the real one and
+ * the claim really does fail against a row that exists.
+ */
+function notReadingClaimsItWillLose(repo: BriefRunRepo): BriefRunRepo {
+  return {
+    claim: (claim) => repo.claim(claim),
+    markSent: (id, sentAt) => repo.markSent(id, sentAt),
+    release: (id) => repo.release(id),
+    findBySlot: async () => null,
+    listByUser: (userId) => repo.listByUser(userId),
+  };
+}
 
 describe('ScheduledBriefService.run', () => {
   it('sends a brief to a User whose DeliveryTime has arrived in their timezone', async () => {
@@ -720,7 +795,7 @@ await seedUser({
     const refusing: EmailTransport = {
       providerName: 'refusing',
       send: async (message) => {
-        if (message.to === 'iris@example.com') throw new Error('provider down');
+        if (message.to === 'iris@example.com') throw new EmailRefusedError('provider down');
         sent.push(message.to);
         return { id: 'refusing-1', provider: 'refusing' };
       },
@@ -728,11 +803,175 @@ await seedUser({
 
     const run = await harness.schedulerWith(refusing).run();
 
-    // One User's provider refusing is not the day's work stopping.
+    // One User's provider refusing is not the day's work stopping. One brief is
+    // counted as a send and one as a failure — never both, never neither — so
+    // the two numbers say what the pass did rather than how often it reached a
+    // transport.
     expect(run.sentCount).toBe(1);
     expect(run.failureCount).toBe(1);
     expect(sent).toEqual(['omar@example.com']);
-    expect(harness.count('email_deliveries')).toBe(1);
+    // Both attempts on record, the refusal as a refusal rather than as nothing.
+    expect(harness.count('email_deliveries')).toBe(2);
+  });
+
+  it('records a refused brief as a refusal rather than as nothing at all', async () => {
+    // A refused send used to leave a rendered snapshot and no delivery, which
+    // reads exactly like a brief nobody asked for. The row is the only place that
+    // says this brief was attempted and turned down.
+    await seedUser({ id: 'iris', email: 'iris@example.com' });
+    await seedTopic('iris', 'topic-one');
+    const refusing: EmailTransport = {
+      providerName: 'refusing',
+      send: async () => {
+        throw new EmailRefusedError('provider down');
+      },
+    };
+
+    await harness.schedulerWith(refusing).run();
+
+    const recorded = harness.firstRow<{ outcome: string }>(
+      'SELECT outcome FROM email_deliveries LIMIT 1',
+    );
+    expect(recorded).toEqual({ outcome: 'refused' });
+    // The snapshot is still there: it is what was rendered, and there is nothing
+    // to be gained by throwing it away over a provider that was briefly down.
+    expect(harness.count('brief_snapshots')).toBe(1);
+  });
+
+  it('keeps the claim when the send failed in a way it cannot vouch for', async () => {
+    // A timeout after the provider accepted, a 5xx, a socket that died: in each of
+    // these the message may be in the User's inbox. Releasing the slot would make
+    // the next pass send the same reading to somebody who already has it, which is
+    // the exact harm the claim exists to prevent — a silence costs one brief, a
+    // duplicate costs the User theirs.
+    await seedUser({ id: 'iris', email: 'iris@example.com' });
+    await seedTopic('iris', 'topic-one');
+    const timingOut: EmailTransport = {
+      providerName: 'timing-out',
+      send: async () => {
+        throw new Error('socket hang up');
+      },
+    };
+    const scheduler = harness.schedulerWith(timingOut);
+
+    expect((await scheduler.run()).failureCount).toBe(1);
+    // Recorded as an attempt whose outcome is unknown, not as a refusal — the two
+    // read the same to an operator and mean opposite things to the next pass.
+    expect(harness.firstRow<{ outcome: string }>('SELECT outcome FROM email_deliveries LIMIT 1'))
+      .toEqual({ outcome: 'unknown' });
+    // And the claim stands, so the next pass offers nothing.
+    expect(harness.count('brief_runs')).toBe(1);
+
+    harness.clock.advance(60_000);
+    const second = await scheduler.run();
+
+    expect(second.sentCount).toBe(0);
+    expect(second.failureCount).toBe(0);
+    expect(recipients()).toHaveLength(0);
+  });
+
+  it('takes the DeliverySlot before it asks the transport for anything', async () => {
+    // The whole of the fix in one assertion, and read from the database rather
+    // than from anything this test holds: at the moment the message is handed
+    // over, the claim on the slot is already on disk. Written afterwards it is a
+    // record of a send a pass may have died in the middle of, which is the window
+    // that lets the next pass offer the same reading a second time.
+    await seedUser({ id: 'iris', email: 'iris@example.com' });
+    await seedTopic('iris', 'topic-one');
+    let claimedWhileSending = 0;
+    let sentAtWhileSending: number | null = null;
+    const watching: EmailTransport = {
+      providerName: 'watching',
+      send: async () => {
+        claimedWhileSending = harness.count('brief_runs');
+        sentAtWhileSending =
+          harness.firstRow<{ sent_at: number | null }>(
+            'SELECT sent_at FROM brief_runs LIMIT 1',
+          )?.sent_at ?? null;
+        return { id: 'watching-1', provider: 'watching' };
+      },
+    };
+
+    expect((await harness.schedulerWith(watching).run()).sentCount).toBe(1);
+
+    expect(claimedWhileSending).toBe(1);
+    // Claimed, not settled: the transport has not answered yet, so there is no
+    // moment to record and nothing here is pretending there is.
+    expect(sentAtWhileSending).toBeNull();
+  });
+
+  it('does not offer the slot again after a pass died between the send and the record', async () => {
+    // The pass this is about. The email is out, the row that stops the next pass
+    // offering the same reading is not written, and the next pass has no way to
+    // tell that from a slot nobody has reached yet — so it sends the same brief
+    // again and the User has it twice.
+    await seedUser({ id: 'iris', email: 'iris@example.com' });
+    await seedTopic('iris', 'topic-one');
+    const dying = harness.schedulerWithRepo(dyingBeforeItRecordsASend(harness.briefRunRepo));
+
+    const first = await dying.run();
+
+    // It went out, and the pass could not record that it did, which is a failure
+    // the pass knows about rather than a send it can take credit for.
+    expect(recipients()).toHaveLength(1);
+    expect(first.sentCount).toBe(0);
+    expect(first.failureCount).toBe(1);
+
+    // The next pass finds the claim the dead one left and sends nothing.
+    const second = await harness.scheduler.run();
+
+    expect(second.sentCount).toBe(0);
+    expect(second.failureCount).toBe(0);
+    expect(recipients()).toHaveLength(1);
+    expect(harness.count('brief_snapshots')).toBe(1);
+    expect(harness.count('brief_runs')).toBe(1);
+  });
+
+  it('settles the claim once the transport has taken the brief', async () => {
+    // The other end of the claim: a slot that was taken and then sent is a run
+    // with a send time on it, which is what tells a settled claim from one a
+    // pass walked away from.
+    await seedUser({ id: 'iris', email: 'iris@example.com' });
+    await seedTopic('iris', 'topic-one');
+    harness.clock.advance(5_000);
+
+    await harness.scheduler.run();
+
+    const [served] = await harness.briefRunRepo.listByUser('iris');
+    expect(served?.sentAt).toEqual(harness.clock.clock.now());
+  });
+
+  it('counts a slot another pass claimed first as neither a send nor a failure', async () => {
+    // Two processes on one database both read the slot as unanswered, both render,
+    // and then both try to claim it. The unique index settles it at the write, and
+    // the loser has to read its lost claim as "nothing owed here" rather than as a
+    // send it did not make or a failure it did not have.
+    //
+    // The read is made to miss deliberately — a repo that answers "not claimed"
+    // for a slot another process has already claimed is exactly the stale read two
+    // processes produce, and it is what puts the pass all the way through to the
+    // claim where the index has to do its work.
+    await seedUser({ id: 'iris', email: 'iris@example.com' });
+    await seedTopic('iris', 'topic-one');
+    const first = harness.scheduler.run();
+    await settle();
+    // A minute later, so the two plans are not competing on the same timestamp
+    // and the race is the one under test rather than an unrelated constraint.
+    harness.clock.advance(60_000);
+    const raced = harness.schedulerWithRepo(
+      notReadingClaimsItWillLose(harness.briefRunRepo),
+    );
+
+    const second = await raced.run();
+    await first;
+
+    // One brief went out, once. The racing pass read the slot as owed, planned and
+    // rendered for it, and then reported neither a send nor a failure — because it
+    // sent nothing and nothing went wrong with it.
+    expect(second.sentCount).toBe(0);
+    expect(second.failureCount).toBe(0);
+    expect(recipients()).toHaveLength(1);
+    expect(harness.count('brief_runs')).toBe(1);
   });
 
   it('leaves a failed send owed, so the next pass retries it', async () => {
@@ -742,13 +981,17 @@ await seedUser({
     const flaky: EmailTransport = {
       providerName: 'flaky',
       send: async (message) => {
-        if (refuse) throw new Error('provider down');
+        if (refuse) throw new EmailRefusedError('provider down');
         return { id: 'flaky-1', provider: 'flaky' };
       },
     };
 const scheduler = harness.schedulerWith(flaky);
 
     expect((await scheduler.run()).failureCount).toBe(1);
+    // The claim is released rather than left standing. The transport said no, so
+    // nothing reached the User and the slot is still owed; a claim a refusal left
+    // behind would turn a provider having a bad minute into a User quietly losing
+    // the morning's brief.
     expect(harness.count('brief_runs')).toBe(0);
 
     // A retry is the next pass, so it is a minute later rather than the same
@@ -759,6 +1002,44 @@ const scheduler = harness.schedulerWith(flaky);
 
     expect(retried.sentCount).toBe(1);
     expect(harness.count('brief_runs')).toBe(1);
+    // Two attempts on record with two different answers, rather than one row
+    // rewritten by whichever outcome was written last.
+    const refused = harness.firstRow<{ refused: number }>(
+      `SELECT COUNT(*) AS refused FROM email_deliveries WHERE outcome = 'refused'`,
+    );
+    expect(refused).toEqual({ refused: 1 });
+  });
+
+  it('adds up what a refused brief cost to write, even though it never left', async () => {
+    // The write calls were made and billed whatever the provider went on to do.
+    // A pass that sent one brief and had one refused has spent real tokens, and
+    // dropping its report would make that pass indistinguishable from one where
+    // nothing was ever looked at — which is the whole reason the report is there.
+    await seedUser({ id: 'iris', email: 'iris@example.com' });
+    await seedTopic('iris', 'topic-one');
+    const client = new RecordingSummaryClient(() => ({
+      summary: 'A written line.',
+      bulletPoints: [{ text: 'A point.', articleUrl: 'https://example.com/a-1' }],
+      discardedBullets: 3,
+    }));
+    const refusing: EmailTransport = {
+      providerName: 'refusing',
+      send: async () => {
+        throw new EmailRefusedError('provider down');
+      },
+    };
+
+    const run = await harness.schedulerWritingWith(client, refusing).run();
+
+    expect(run.sentCount).toBe(0);
+    expect(run.failureCount).toBe(1);
+    // One Cluster, so one written and one call, with the bullets that did not cite
+    // a Cluster discarded on the way out.
+    expect(run.generation).toEqual({
+      writtenClusters: 1,
+      calls: 1,
+      discardedBullets: 3,
+    });
   });
 
   it('counts a User it cannot find an address for as a failure, not a send', async () => {
@@ -911,7 +1192,7 @@ await seedUser({ id: 'iris' });
     const refusing: EmailTransport = {
       providerName: 'refusing',
       send: async (message) => {
-        if (message.to === 'omar@example.com') throw new Error('provider down');
+        if (message.to === 'omar@example.com') throw new EmailRefusedError('provider down');
         return { id: 'ok-1', provider: 'refusing' };
       },
     };
@@ -925,11 +1206,6 @@ await seedUser({ id: 'iris' });
 });
 
 describe('ScheduledBriefService as a loop', () => {
-  /** Let the loop's awaits settle, so a test does not race the microtask queue. */
-  function settle(): Promise<void> {
-    return new Promise((resolve) => setImmediate(resolve));
-  }
-
   function park(): {
     readonly delays: number[];
     sleep(ms: number): Promise<void>;

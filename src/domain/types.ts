@@ -408,12 +408,50 @@ export interface BriefSnapshot {
   readonly globalUnsubscribeToken: string;
 }
 
+/**
+ * What Brieflyy knows about where a message handed to the transport got to.
+ *
+ * Three answers, not two, because a transport has three and they are not
+ * interchangeable:
+ *
+ * - **`sent`** — the provider took the message.
+ * - **`refused`** — the provider answered, and the answer was no. Nothing reached
+ *   the User, so a DeliverySlot this brief was claiming is owed again.
+ * - **`unknown`** — Brieflyy asked and never found out: a timeout, a thrown call,
+ *   a 5xx, a database that would not record the attempt. The message may be in an
+ *   inbox, so nothing may be concluded from it — least of all that the User is
+ *   still owed the period.
+ *
+ * Stated on the EmailDelivery rather than inferred from a row being absent,
+ * because a brief nobody asked to be sent and a brief that was asked for and never
+ * arrived are the same empty table.
+ */
+export type DeliveryOutcome = 'sent' | 'refused' | 'unknown';
+
 export interface EmailDelivery {
   readonly id: string;
   readonly userId: UserId;
   readonly briefSnapshotId: string;
   readonly topicId: TopicId;
+  /**
+   * When Brieflyy handed this brief to the transport, which for a delivery that
+   * did not go out is when it was asked for.
+   *
+   * Not when the mail arrived, which is the provider's business to decide and is
+   * not recorded anywhere. It is the anchor the unsubscribe window is measured
+   * from, so it has to be the moment the message left this application.
+   */
   readonly sentAt: Date;
+  /**
+   * What Brieflyy knows about where the message got to.
+   *
+   * The middle value is the one that makes the other two usable. A single
+   * sent-or-not flag would force `refused` to mean "we did not hear back", and
+   * everything downstream of that — whether a DeliverySlot is owed again, whether
+   * a token in this delivery is worth anything — is a different answer for the two
+   * cases.
+   */
+  readonly outcome: DeliveryOutcome;
   readonly unsubscribeToken: string;
   readonly globalUnsubscribeToken: string;
   /**
@@ -454,13 +492,24 @@ export interface Unsubscribe {
 }
 
 /**
- * One Topic of one User, answered for one DeliverySlot.
+ * One Topic of one User, answered — or being answered — for one DeliverySlot.
  *
- * Written when a brief has actually gone out, so it is the record of the period
- * being dealt with rather than the intention to deal with it: a User the job
- * failed to send to has no BriefRun, so the DeliverySlot is still owed and the next
- * pass tries again. Its existence is also what stops two passes answering the same
- * DeliverySlot twice.
+ * Written *before* the transport is asked for anything, because it is the claim on
+ * the slot rather than the receipt for a send: a pass that dies between handing a
+ * message over and recording that it went leaves the email in a User's inbox and
+ * nothing behind it, and the next pass, seeing no run, offers the same reading a
+ * second time. A run with no `sentAt` is a claim nobody has settled — the pass is
+ * still in the middle of the send, or died in it — and the slot is not owed again
+ * either way, because the one thing nobody can tell from here is whether the
+ * message arrived.
+ *
+ * A refusal is not that. A transport that declined the message is a fact this
+ * process witnessed, so the claim is released and the DeliverySlot is owed again;
+ * what the attempt cost is recorded on the EmailDelivery instead, which is why the
+ * release does not lose the evidence.
+ *
+ * Its existence is also what stops two passes answering the same DeliverySlot
+ * twice, and the unique index is what settles it when they both try.
  */
 export interface BriefRun {
   readonly id: string;
@@ -468,7 +517,8 @@ export interface BriefRun {
   readonly topicId: TopicId;
   /** The DeliverySlot this brief answers. */
   readonly scheduledFor: DeliverySlot;
-  readonly sentAt: Date;
+  /** When the transport took it. Null while the claim is still unsettled. */
+  readonly sentAt: Date | null;
   /** The BriefSnapshot that was sent, so a run points at the brief it produced. */
   readonly briefSnapshotId: string;
 }

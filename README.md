@@ -424,6 +424,11 @@ shape change needs one of:
   - A column the current shape makes `NOT NULL` but the old table has as
     nullable also triggers the rebuild, via the entry's `notNull` list. SQLite
     cannot relax a constraint, so there is no other way.
+  - And in the other direction, a column the current shape makes nullable but
+    the old table has as `NOT NULL`, via the entry's `nullable` list — SQLite
+    cannot drop a `NOT NULL` from a live table either. `brief_runs.sent_at` is
+    the case that needed it, when a run became a claim on a DeliverySlot taken
+    before the send rather than a receipt for one.
   - A column whose declared type changed goes in the entry's `types` map, for
     the same reason: SQLite cannot alter a column in place. `clusters.velocity`
     is the case that needed it — velocity became a Stories-per-day rate, and an
@@ -598,6 +603,7 @@ double in `src/testing/`, a lambda a test supplies, or a test of its own.
 | Persistence | `Db` (Drizzle) | `createDatabase()` over a `better-sqlite3` driver, in-memory in tests. There is no Postgres driver: `Db` is a `better-sqlite3` type and `createDatabase` is the function that builds one |
 | Repositories | `UserRepo`, `TopicRepo`, `ClusterRepo`, `TrendsRepo`, … — domain-shaped methods | `Drizzle*Repo`, one per file in `repos/` |
 | `EmailTransport` | `send(message)` | `ConsoleEmailTransport`, `ResendEmailTransport` |
+| `EmailTransport` | `send(message)`, raising `EmailRefusedError` only where the provider itself answered no — a thrown call is not a refusal (ADR-0027) | `ConsoleEmailTransport`, `ResendEmailTransport` |
 | `LLMSummaryClient` | `generateSummary(clusterTitle, clusterSummary, articles)` | `OpenAILLMSummaryService`, `RecordingSummaryClient`, or none at all |
 | `Clock` | `now()` | `systemClock`, `makeTestClock` (a `set`/`advance` pair) |
 | `RandomSource` | `bytes()`, `uuid()` | `nodeRandom`, `deterministicRandom` |
@@ -639,7 +645,14 @@ for a Backoff that grows with each failure and is held on the Source row, so a r
 does not put every broken feed back into the next cycle (ADR-0026);
 `ScheduledBriefService` answers each of a
 User's Topics for the DeliverySlot its own Cadence puts it on (ADR-0011), except any
-the User or the Topic has unsubscribed from (ADR-0012); `TrendsService`
+the User or the Topic has unsubscribed from (ADR-0012). It claims each DeliverySlot
+*before* it asks the transport for anything and settles the claim afterwards, so a
+pass that dies mid-send leaves the slot claimed rather than offering the same
+reading to the same User a second time. Every attempt is recorded on the
+EmailDelivery with the outcome Brieflyy knows — `sent`, `refused` or `unknown` —
+and only a witnessed refusal releases the claim, because a refusal means nothing
+reached the User while a timeout means the message may already have (ADR-0027).
+`TrendsService`
 recomputes every Topic's trends from stored Articles on an hourly cadence, so a page
 that shows a trend is reading a row rather than measuring one (ADR-0015). All three
 ride on `IntervalLoop`, so closing the application wakes them out of their wait and

@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { BriefPlanService, type BriefPlanServiceDeps } from './brief-plan-service.js';
+import {
+  BriefPlanService,
+  BriefNotSentError,
+  type BriefPlanServiceDeps,
+} from './brief-plan-service.js';
 import { BriefSnapshotRenderer } from './brief-snapshot-renderer.js';
 import { DrizzleBriefPlanRepo } from '../repos/brief-plan-repo.js';
 import { DrizzleBriefSnapshotRepo } from '../repos/brief-snapshot-repo.js';
@@ -9,7 +13,7 @@ import { DrizzleEmailDeliveryRepo } from '../repos/email-delivery-repo.js';
 import { DrizzleTopicRepo } from '../repos/topic-repo.js';
 import { DrizzleUserRepo } from '../repos/user-repo.js';
 import { ConsoleEmailTransport } from '../email/console-transport.js';
-import type { EmailTransport } from '../email/transport.js';
+import { EmailRefusedError, type EmailTransport } from '../email/transport.js';
 import { createTestDb } from '../testing/test-db.js';
 import { countRows } from '../testing/db.js';
 import { makeCluster, makeTopic, makeUser } from '../testing/fixtures.js';
@@ -84,6 +88,33 @@ beforeEach(() => {
     serviceWith,
   };
 });
+
+/**
+ * A transport that watched the provider decline the message, which is the one
+ * failure a caller may conclude nothing arrived from.
+ */
+function refusingTransport(): EmailTransport {
+  return {
+    providerName: 'refusing',
+    send: async () => {
+      throw new EmailRefusedError('provider down');
+    },
+  };
+}
+
+/** What the delivery rows on this Topic say, in write order. */
+async function storedOutcomes(): Promise<readonly string[]> {
+  const [snapshot] = await harness.snapshotRepo.listByTopicAndUser('user-1', 'topic-1');
+  return (await harness.deliveryRepo.findBySnapshotId(snapshot!.id)).map((d) => d.outcome);
+}
+
+/** The error a call rejected with, or null if it resolved. */
+async function thrownFrom(promise: Promise<unknown>): Promise<unknown> {
+  return promise.then(
+    () => null,
+    (err: unknown) => err,
+  );
+}
 
 /** Seed a Topic's Clusters directly, since forming them is another test's job. */
 async function seedClusters(): Promise<void> {
@@ -328,27 +359,99 @@ describe('BriefPlanService.sendBrief', () => {
     );
   });
 
-  it('writes no delivery when the transport refuses the message', async () => {
+  it('records a refusal as a refusal, rather than leaving nothing at all', async () => {
     await seedClusters();
-    const refusing: EmailTransport = {
-      providerName: 'refusing',
+
+    await expect(
+      harness.serviceWith({ emailTransport: refusingTransport() }).sendBrief(SEND),
+    ).rejects.toThrow(BriefNotSentError);
+
+    // The delivery is the record of the attempt, so it is written either way and
+    // says which of the three happened. Writing nothing left a rendered snapshot
+    // and no delivery, which reads exactly like a brief nobody asked for; and
+    // writing a *sent* delivery would report a message that never left.
+    expect(await storedOutcomes()).toEqual(['refused']);
+    expect(harness.count('brief_snapshots')).toBe(1);
+  });
+
+  it('records a send it never heard back about as unknown, not as refused', async () => {
+    await seedClusters();
+    // The case that must not be called a refusal: the call threw, so the message
+    // may already be on its way. Brieflyy knows it asked; it does not know the
+    // message arrived, and collapsing the two is what would make a timeout
+    // re-send a brief somebody is already holding.
+    const timingOut: EmailTransport = {
+      providerName: 'timing-out',
       send: async () => {
-        throw new Error('provider down');
+        throw new Error('socket hang up');
       },
     };
 
-    await expect(harness.serviceWith({ emailTransport: refusing }).sendBrief(SEND)).rejects.toThrow(
-      'provider down',
+    const thrown = await thrownFrom(
+      harness.serviceWith({ emailTransport: timingOut }).sendBrief(SEND),
     );
 
+    expect(thrown).toBeInstanceOf(BriefNotSentError);
+    expect((thrown as BriefNotSentError).outcome).toBe('unknown');
+    expect(await storedOutcomes()).toEqual(['unknown']);
+  });
 
-    // A delivery is the record that a brief reached a User. Writing one for a
-    // send that failed would report a delivery that never happened, and the
-    // unsubscribe state on it would be state about nothing. The snapshot
-    // survives, because it is what was rendered and there is no point throwing
-    // a rendered brief away over a provider that was briefly down.
-    expect(harness.count('email_deliveries')).toBe(0);
-    expect(harness.count('brief_snapshots')).toBe(1);
+  it('names what the provider said, so the refusal is readable', async () => {
+    await seedClusters();
+
+    // The pass that sent it releases the claim it took on the DeliverySlot only
+    // for a refusal, so the error has to carry the provider's own words rather
+    // than one of Brieflyy's.
+    const thrown = await thrownFrom(
+      harness.serviceWith({ emailTransport: refusingTransport() }).sendBrief(SEND),
+    );
+
+    expect(thrown).toBeInstanceOf(BriefNotSentError);
+    expect((thrown as BriefNotSentError).message).toContain('provider down');
+    expect((thrown as BriefNotSentError).delivery?.outcome).toBe('refused');
+  });
+
+  it('keeps what writing the brief cost on the record of a refusal', async () => {
+    // The brief was written, so the calls were made and billed whatever the
+    // provider went on to do. Dropping the report because the message did not
+    // leave would make a spent call indistinguishable from a call never made.
+    await seedClusters();
+    const client = new RecordingSummaryClient(() => ({
+      summary: 'A written line.',
+      bulletPoints: [{ text: 'A point.', articleUrl: 'https://example.com/a-1' }],
+      discardedBullets: 1,
+    }));
+
+    const thrown = await thrownFrom(
+      harness
+        .serviceWith({
+          renderer: new BriefSnapshotRenderer({
+            clusterRepo: harness.clusterRepo,
+            topicRepo: harness.topicRepo,
+            clock: harness.clock.clock,
+            llmClient: client,
+          }),
+          emailTransport: refusingTransport(),
+        })
+        .sendBrief(SEND),
+    );
+
+    const reported = { writtenClusters: 2, calls: 2, discardedBullets: 2 };
+    expect((thrown as BriefNotSentError).delivery?.generation).toEqual(reported);
+    const [stored] = await harness.deliveryRepo.findBySnapshotId(
+      (await harness.snapshotRepo.listByTopicAndUser('user-1', 'topic-1'))[0]!.id,
+    );
+    expect(stored?.generation).toEqual(reported);
+  });
+
+  it('records a sent delivery as sent, not as refused', async () => {
+    await seedClusters();
+
+    const { snapshot, delivery } = await harness.service.sendBrief(SEND);
+
+    expect(delivery.outcome).toBe('sent');
+    const stored = await harness.deliveryRepo.findBySnapshotId(snapshot.id);
+    expect(stored[0]?.outcome).toBe('sent');
   });
 });
 
