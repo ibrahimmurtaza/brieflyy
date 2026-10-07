@@ -29,7 +29,11 @@ The bound reads the same on a weekly Topic, and it is the rule that stops a Frid
 
 ## Why the record is written after the send
 
-`BriefRun` is written once the transport has taken the message, not before. A row written for a send that failed would mark a period as dealt with that nobody was ever sent anything for, and the User would never be retried. The unique index on `(user, topic, scheduled_for)` is the backstop for two passes racing; the lookup before sending is the ordinary path, and it is what keeps a second pass from reaching the provider at all.
+Superseded by [ADR-0027](0027-a-bent-delivery-slot-is-claimed-before-the-send.md), which writes the claim *before* the transport is asked for anything. What follows is why it used to be the other way round, and it is the reasoning ADR-0027 starts from rather than a rule that still holds.
+
+`BriefRun` was written once the transport had taken the message, not before. A row written for a send that failed would mark a period as dealt with that nobody was ever sent anything for, and the User would never be retried. The unique index on `(user, topic, scheduled_for)` was the backstop for two passes racing; the lookup before sending was the ordinary path, and it is what keeps a second pass from reaching the provider at all.
+
+That is right about a *refusal* and wrong about a *death*, and the difference is whether the process was still there to find out.
 
 ## Daylight saving
 

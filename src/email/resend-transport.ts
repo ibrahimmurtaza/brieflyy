@@ -1,9 +1,10 @@
 import { Resend } from 'resend';
 
-import type {
-  EmailMessage,
-  EmailSendResult,
-  EmailTransport,
+import {
+  EmailRefusedError,
+  type EmailMessage,
+  type EmailSendResult,
+  type EmailTransport,
 } from './transport.js';
 
 export interface ResendTransportOptions {
@@ -46,11 +47,24 @@ export class ResendEmailTransport implements EmailTransport {
     if (message.headers !== undefined) {
       params.headers = { ...message.headers };
     }
-    const result = await this.client.emails.send(params);
+    let result: Awaited<ReturnType<Resend['emails']['send']>>;
+    try {
+      result = await this.client.emails.send(params);
+    } catch (err) {
+      // Deliberately not an EmailRefusedError. A thrown call never reached an
+      // answer, so the message may already be on its way — and the caller has to
+      // treat that differently from a provider that said no. Only the branch
+      // below has actually been refused.
+      throw err;
+    }
     if (result.error) {
-      throw new Error(`Resend send failed: ${result.error.message}`);
+      // The provider answered, and the answer was no: this is the one case where
+      // Brieflyy knows the message is not going to arrive.
+      throw new EmailRefusedError(`Resend send failed: ${result.error.message}`);
     }
     if (!result.data) {
+      // Neither an answer nor a refusal. As unknown as a timeout, and treated as
+      // such.
       throw new Error('Resend send returned no data and no error');
     }
     return { id: result.data.id, provider: this.providerName };

@@ -22,6 +22,25 @@ export interface EmailSendResult {
   readonly provider: string;
 }
 
+/**
+ * The provider was asked, and answered no.
+ *
+ * Its own type because "no" and "we never found out" are different facts with
+ * opposite consequences, and a caller that cannot tell them apart has to treat
+ * both the same way. This one means Brieflyy watched a message be declined, so
+ * nothing reached the User; a thrown network error, a timeout, a 5xx means the
+ * message may be in an inbox and must not be treated as though it never left.
+ *
+ * A transport raises it only where the provider itself said no — a validation
+ * error, an unrouteable address, a suppression — never for an exception.
+ */
+export class EmailRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'EmailRefusedError';
+  }
+}
+
 export interface EmailTransport {
   readonly providerName: string;
   send(message: EmailMessage): Promise<EmailSendResult>;

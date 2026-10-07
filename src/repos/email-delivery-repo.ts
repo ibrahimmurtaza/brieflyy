@@ -18,6 +18,7 @@ function rowToEmailDelivery(row: EmailDeliveryRow): EmailDelivery {
     briefSnapshotId: row.briefSnapshotId,
     topicId: row.topicId as TopicId,
     sentAt: new Date(row.sentAt),
+    outcome: row.outcome,
     unsubscribeToken: row.unsubscribeToken,
     globalUnsubscribeToken: row.globalUnsubscribeToken,
     generation: {
@@ -29,6 +30,11 @@ function rowToEmailDelivery(row: EmailDeliveryRow): EmailDelivery {
 }
 
 export interface EmailDeliveryRepo {
+  /**
+   * Record one send attempt, whether or not the transport took the message. A
+   * refusal is a row with `outcome: 'refused'` rather than no row at all, so an
+   * attempt that was turned down can be told from a brief nobody asked for.
+   */
   insert(delivery: EmailDelivery): Promise<void>;
   findBySnapshotId(snapshotId: string): Promise<readonly EmailDelivery[]>;
   /**
@@ -54,6 +60,7 @@ export class DrizzleEmailDeliveryRepo implements EmailDeliveryRepo {
       briefSnapshotId: delivery.briefSnapshotId,
       topicId: delivery.topicId,
       sentAt: delivery.sentAt,
+      outcome: delivery.outcome,
       unsubscribeToken: delivery.unsubscribeToken,
       globalUnsubscribeToken: delivery.globalUnsubscribeToken,
       writtenClusters: delivery.generation.writtenClusters,

@@ -6,13 +6,14 @@ import type {
   BriefPlan,
   BriefSnapshot,
   Cluster,
+  DeliveryOutcome,
   EmailDelivery,
   TopicId,
   UserId,
   ClusterId,
 } from '../domain/types.js';
 import { NO_GENERATION } from '../domain/types.js';
-import type { EmailTransport } from '../email/transport.js';
+import { EmailRefusedError, type EmailTransport } from '../email/transport.js';
 import { BRIEF_MAX_CLUSTERS_DEFAULT } from '../config.js';
 import type { ClusterRepo } from '../repos/cluster-repo.js';
 import type { BriefPlanRepo } from '../repos/brief-plan-repo.js';
@@ -83,6 +84,43 @@ export interface SendSnapshotInput extends RenderedSnapshot {
 export interface SendSnapshotResult {
   readonly delivery: EmailDelivery;
   readonly generation: BriefGeneration;
+}
+
+/**
+ * A send that did not go out, and what Brieflyy knows about why.
+ *
+ * Its own type rather than the provider's error passed straight on, because two
+ * callers need the difference and neither can get it from a message: the daily job
+ * has to know whether the message may be in an inbox before it decides whether to
+ * give the DeliverySlot back, and the pass has to know what writing the brief cost
+ * even though it never went anywhere.
+ *
+ * `refused` is only for a provider Brieflyy watched decline the message — the
+ * transport says so with `EmailRefusedError`. `unknown` is everything else: a
+ * timeout, a 5xx, a network failure, a database that would not record the attempt.
+ * The message may be in an inbox, so a caller must not treat it as though it
+ * certainly was not.
+ *
+ * The delivery it carries is the record of the attempt, so what was spent and what
+ * was tried are never lost with the error.
+ */
+export class BriefNotSentError extends Error {
+  constructor(
+    message: string,
+    readonly outcome: Exclude<DeliveryOutcome, 'sent'>,
+    /** What writing this brief cost, always. The calls were made either way. */
+    readonly generation: BriefGeneration,
+    /**
+     * The recorded attempt, where there is one. Null only where the failure
+     * happened after the transport took the message and before Brieflyy could
+     * record that — the claim stays unsettled and there is no row to point at.
+     */
+    readonly delivery: EmailDelivery | null,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = 'BriefNotSentError';
+  }
 }
 
 export interface SendBriefResult {
@@ -207,22 +245,54 @@ export class BriefPlanService {
   /**
    * Send a stored snapshot and record that it was sent.
    *
-   * The record is written after the send, because this row is the claim that a
-   * brief reached a User. A transport that threw never delivered anything, and a
-   * delivery recorded for it would be a report of an event that did not happen.
+   * The record is written either way, because it is the record of the *attempt*
+   * rather than of a delivery Brieflyy can be certain of: a transport that threw
+   * never took the message, but "nothing was recorded" and "a brief nobody asked
+   * for" are the same empty table, and a refused brief is worth being able to
+   * point at. Which of the two happened is on the row, so nothing has to be
+   * inferred from its absence.
+   *
+   * The caller's order matters here and is the reason this is three steps rather
+   * than one: the daily job takes its claim on the DeliverySlot between the
+   * render and this, so that a pass which dies inside the send leaves the slot
+   * claimed rather than offered again.
    */
   async sendSnapshot(input: SendSnapshotInput): Promise<SendSnapshotResult> {
-    await this.deps.emailTransport.send({
-      to: input.to,
-      subject: input.rendered.subject,
-      text: input.snapshot.text,
-      html: input.snapshot.html,
-      // The RFC 8058 headers, which are the only way a client knows it may
-      // render a one-click unsubscribe control at all.
-      headers: input.rendered.headers,
-    });
+    try {
+      await this.deps.emailTransport.send({
+        to: input.to,
+        subject: input.rendered.subject,
+        text: input.snapshot.text,
+        html: input.snapshot.html,
+        // The RFC 8058 headers, which are the only way a client knows it may
+        // render a one-click unsubscribe control at all.
+        headers: input.rendered.headers,
+      });
+    } catch (err) {
+      // Only the transport saying `EmailRefusedError` means Brieflyy watched the
+      // message be declined. Anything else — a thrown call, a timeout, a 5xx — is
+      // a send whose outcome is unknown, and the difference is the whole reason
+      // this catch does not call every failure a refusal.
+      const outcome = err instanceof EmailRefusedError ? 'refused' : 'unknown';
+      const delivery = await this.recordDelivery(
+        input.snapshot,
+        outcome,
+        input.rendered.generation,
+      );
+      throw new BriefNotSentError(
+        err instanceof Error ? err.message : String(err),
+        outcome,
+        input.rendered.generation,
+        delivery,
+        { cause: err },
+      );
+    }
 
-    const delivery = await this.recordDelivery(input.snapshot, input.rendered.generation);
+    const delivery = await this.recordDelivery(
+      input.snapshot,
+      'sent',
+      input.rendered.generation,
+    );
     return { delivery, generation: input.rendered.generation };
   }
 
@@ -358,8 +428,14 @@ export class BriefPlanService {
   }
 
   /**
-   * The record that this snapshot was emailed, carrying the tokens that the
-   * unsubscribe route will consume and what writing the brief cost.
+   * The record that this snapshot was handed to the transport, carrying the
+   * tokens that the unsubscribe route will consume, what writing the brief cost,
+   * and which of the transport's two answers this was.
+   *
+   * Written for a refusal as well as a send, and `outcome` is what tells the two
+   * apart: a refusal leaves no delivery in anybody's inbox, so the tokens on its
+   * row are the ones that went nowhere, and a row that existed without saying so
+   * would read as a delivered brief.
    *
    * Separate from the snapshot so a brief can be re-sent or unsubscribed from
    * without touching the document that was sent, and so the two sets of tokens
@@ -371,11 +447,13 @@ export class BriefPlanService {
    * The generation report is the one number about building a brief that is kept
    * anywhere, and it is here because this row exists for every brief that was
    * sent — including one a User asked for by hand from the Topic page, which the
-   * daily job would never know about. It is deliberately not on the snapshot:
-   * that is a document a User reads, served for as long as the product exists.
+   * daily job would never know about — and for every brief it was refused, which
+   * cost exactly as much to write. It is deliberately not on the snapshot: that is
+   * a document a User reads, served for as long as the product exists.
    */
   async recordDelivery(
     snapshot: BriefSnapshot,
+    outcome: DeliveryOutcome,
     generation: BriefGeneration = NO_GENERATION,
   ): Promise<EmailDelivery> {
     const delivery: EmailDelivery = {
@@ -384,6 +462,7 @@ export class BriefPlanService {
       briefSnapshotId: snapshot.id,
       topicId: snapshot.topicId,
       sentAt: this.deps.clock.now(),
+      outcome,
       unsubscribeToken: snapshot.unsubscribeToken,
       globalUnsubscribeToken: snapshot.globalUnsubscribeToken,
       generation,

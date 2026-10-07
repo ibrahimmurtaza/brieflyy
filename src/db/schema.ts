@@ -663,7 +663,19 @@ export const emailDeliveries = sqliteTable(
     topicId: text('topic_id')
       .notNull()
       .references(() => topics.id, { onDelete: 'cascade' }),
+    /**
+     * When Brieflyy handed the message to the transport, which for a delivery the
+     * transport refused is when it refused. Not when the mail arrived: that is the
+     * provider's to decide, and it is the unsubscribe window's anchor rather than
+     * anything a reader of this row could act on.
+     */
     sentAt: integer('sent_at', { mode: 'timestamp_ms' }).notNull(),
+    /**
+     * Which of the transport's two answers this is. Written for a send it refused
+     * as well as one it took, because a refusal that left no row behind was
+     * indistinguishable from a brief nobody asked for.
+     */
+    outcome: text('outcome', { enum: ['sent', 'refused', 'unknown'] }).notNull().default('sent'),
     // The two tokens in the brief that carries this delivery. Unique because
     // they are looked up by value: a token that resolved to two deliveries would
     // be one that unsubscribes the wrong person half the time.
@@ -728,12 +740,21 @@ export const unsubscribes = sqliteTable(
 );
 
 /**
-* One Topic of one User, answered for one DeliverySlot.
+ * One Topic of one User, answered — or being answered — for one DeliverySlot.
  *
- * The unique index on (user, topic, scheduled_for) is the whole reason the daily
- * job can run as often as it likes: a DeliverySlot can only be answered once, so a
- * second pass over the same one â€” whether it is the next tick, a restart, or two
- * processes â€” cannot send the same period's brief twice.
+ * The claim on the slot rather than the receipt for a send, and written before the
+ * transport is asked for anything. The unique index on (user, topic,
+ * scheduled_for) is what settles two passes that both reach the same slot, and
+ * where that index is read from is why it has to be the claim and not the receipt:
+ * an index filled in after the message has gone out stops the second *record* and
+ * not the second email, which is the thing the daily job can actually do to a User.
+ *
+ * A row with no `sent_at` is a claim nobody settled — the pass is still inside the
+ * send, or died in it — and it keeps the slot from being offered again, because the
+ * one thing this process cannot tell from where it stands is whether the message
+ * arrived. A transport that *refused* is a fact it witnessed, so the claim is
+ * released and the slot owed again; what that attempt cost stays on the
+ * EmailDelivery.
  */
 export const briefRuns = sqliteTable(
   'brief_runs',
@@ -747,7 +768,12 @@ export const briefRuns = sqliteTable(
       .references(() => topics.id, { onDelete: 'cascade' }),
     /** The DeliverySlot this brief answers, as a UTC instant. */
     scheduledFor: integer('scheduled_for', { mode: 'timestamp_ms' }).notNull(),
-    sentAt: integer('sent_at', { mode: 'timestamp_ms' }).notNull(),
+    /**
+     * When the transport took the message. Nullable and with no default, because
+     * the state it records is the absence of the column: a claim taken moments ago
+     * has a moment to record, and the slot is not owed again either way.
+     */
+    sentAt: integer('sent_at', { mode: 'timestamp_ms' }),
     briefSnapshotId: text('brief_snapshot_id')
       .notNull()
       .references(() => briefSnapshots.id, { onDelete: 'cascade' }),

@@ -491,6 +491,97 @@ CREATE TABLE sources (
 CREATE UNIQUE INDEX sources_slug_unique ON sources (slug);
 `;
 
+/**
+ * A database from before a BriefRun could be a claim on a DeliverySlot rather
+ * than a record of a brief that had already gone out. Every column is there and
+ * `sent_at` is `NOT NULL`, which is the truth about every run written so far: each
+ * one was recorded after the transport had taken the message.
+ */
+const CLAIMED_BRIEF_RUNS_SCHEMA_SQL = `
+CREATE TABLE users (
+  id TEXT PRIMARY KEY NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+  onboarding_state TEXT NOT NULL DEFAULT 'not_started'
+);
+CREATE TABLE topics (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  slug TEXT NOT NULL,
+  title TEXT NOT NULL,
+  blurb TEXT NOT NULL,
+  category TEXT NOT NULL,
+  origin_kind TEXT NOT NULL,
+  origin_template_id TEXT,
+  cadence TEXT NOT NULL DEFAULT 'daily',
+  created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+);
+CREATE TABLE brief_plans (
+  id TEXT PRIMARY KEY NOT NULL,
+  topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  cluster_ids TEXT NOT NULL DEFAULT ''
+);
+CREATE UNIQUE INDEX brief_plans_topic_user_idx ON brief_plans (topic_id, user_id, created_at);
+CREATE TABLE brief_snapshots (
+  id TEXT PRIMARY KEY NOT NULL,
+  brief_plan_id TEXT NOT NULL REFERENCES brief_plans(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  html TEXT NOT NULL,
+  text TEXT NOT NULL DEFAULT '',
+  unsubscribe_token TEXT NOT NULL,
+  global_unsubscribe_token TEXT NOT NULL
+);
+CREATE TABLE brief_runs (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+  scheduled_for INTEGER NOT NULL,
+  sent_at INTEGER NOT NULL,
+  brief_snapshot_id TEXT NOT NULL REFERENCES brief_snapshots(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX brief_runs_user_topic_slot_idx ON brief_runs (user_id, topic_id, scheduled_for);
+CREATE INDEX brief_runs_user_idx ON brief_runs (user_id);
+CREATE TABLE email_deliveries (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  brief_snapshot_id TEXT NOT NULL REFERENCES brief_snapshots(id) ON DELETE CASCADE,
+  topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+  sent_at INTEGER NOT NULL,
+  unsubscribe_token TEXT NOT NULL,
+  global_unsubscribe_token TEXT NOT NULL
+);
+`;
+
+/**
+ * One User, one Topic, one plan and one snapshot on a database of the age its
+ * test needs, so two cases about the brief tables are not two copies of the same
+ * six inserts.
+ */
+function seedClaimedBriefRunsDatabase(driver: Database.Database): void {
+  driver.exec(CLAIMED_BRIEF_RUNS_SCHEMA_SQL);
+  driver.prepare(`INSERT INTO users (id) VALUES (?)`).run('user-1');
+  driver
+    .prepare(
+      `INSERT INTO topics (id, user_id, slug, title, blurb, category, origin_kind, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run('topic-1', 'user-1', 'ai', 'AI', 'AI news', 'technology', 'freeform', 1);
+  driver
+    .prepare(
+      `INSERT INTO brief_plans (id, topic_id, user_id, created_at, cluster_ids) VALUES (?, ?, ?, ?, ?)`,
+    )
+    .run('plan-1', 'topic-1', 'user-1', 1, 'cluster-1');
+  driver
+    .prepare(
+      `INSERT INTO brief_snapshots (id, brief_plan_id, user_id, topic_id, created_at, html, text, unsubscribe_token, global_unsubscribe_token)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run('snap-1', 'plan-1', 'user-1', 'topic-1', 1, '<p>sent</p>', 'sent', 'u1', 'g1');
+}
+
 describe('applySchema', () => {
   it('adds topics.cadence to a database created before the column existed', async () => {
     const driver = createInMemorySqliteDriver();
@@ -585,6 +676,64 @@ describe('applySchema', () => {
       .prepare(`SELECT cadence FROM topics WHERE id = ?`)
       .get('topic-1') as { cadence: string } | undefined;
     expect(row?.cadence).toBe('weekly');
+  });
+
+  it('lets a brief run be claimed before the send it is claiming', () => {
+    // SQLite cannot relax `NOT NULL` on a live table any more than it can add a
+    // foreign key to one, so this is a rebuild rather than a dropped constraint.
+    // Without it the claim the daily job takes before it asks a transport for
+    // anything would have nowhere to say that the send has not happened yet.
+    const driver = createInMemorySqliteDriver();
+    seedClaimedBriefRunsDatabase(driver);
+    driver
+      .prepare(
+        `INSERT INTO brief_runs (id, user_id, topic_id, scheduled_for, sent_at, brief_snapshot_id)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run('run-1', 'user-1', 'topic-1', 1000, 2000, 'snap-1');
+
+    applySchema(driver);
+
+    const columns = driver
+      .prepare(`SELECT name, "notnull" AS not_null FROM pragma_table_info(?)`)
+      .all('brief_runs') as { name: string; not_null: number }[];
+    const notNull = new Map(columns.map((c) => [c.name, c.not_null === 1] as const));
+    expect(notNull.get('sent_at')).toBe(false);
+    expect(notNull.get('scheduled_for')).toBe(true);
+    // The unique index is what settles two passes reaching the same slot, so it
+    // has to come back with the table rather than be left to the second DDL pass.
+    expect(indexIsUnique(driver, 'brief_runs_user_topic_slot_idx')).toBe(true);
+    // And the row that was there is the row that is there: a run written by an
+    // older build was recorded after a send, so it keeps the moment it was sent.
+    const row = driver
+      .prepare(`SELECT scheduled_for, sent_at, brief_snapshot_id FROM brief_runs WHERE id = ?`)
+      .get('run-1') as Record<string, unknown> | undefined;
+    expect(row).toEqual({
+      scheduled_for: 1000,
+      sent_at: 2000,
+      brief_snapshot_id: 'snap-1',
+    });
+  });
+
+  it('records a delivery written before the outcome column as one that went out', () => {
+    // Every delivery in a database of that age was recorded after the transport
+    // had taken the message — a refusal left no row at all — so `sent` is the
+    // truth about all of them and not a guess.
+    const driver = createInMemorySqliteDriver();
+    seedClaimedBriefRunsDatabase(driver);
+    driver
+      .prepare(
+        `INSERT INTO email_deliveries (id, user_id, brief_snapshot_id, topic_id, sent_at, unsubscribe_token, global_unsubscribe_token)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run('del-1', 'user-1', 'snap-1', 'topic-1', 2000, 'u1', 'g1');
+
+    applySchema(driver);
+
+    const row = driver
+      .prepare(`SELECT outcome FROM email_deliveries WHERE id = ?`)
+      .get('del-1') as { outcome: string } | undefined;
+    expect(row).toEqual({ outcome: 'sent' });
   });
 
   it('rebuilds clusters, brief snapshots and email deliveries to gain their foreign keys', () => {
