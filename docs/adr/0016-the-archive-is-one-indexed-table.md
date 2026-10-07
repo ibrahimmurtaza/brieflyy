@@ -101,9 +101,14 @@ User's tier window:
 - **A Retired Story is indexed; a Story that is still being covered is not.**
   CONTEXT.md defines Retired as "none of its Clusters is Active", and a Story with a
   live Cluster is on the LivingBrief already. Indexing both would put a category in
-  the Archive whose own definition excludes it. Cluster state changes re-index the
-  Stories involved, in both directions, because a Cluster comes back as Active when
-  its Stories are covered again.
+  the Archive whose own definition excludes it. The index reads the state stored on
+  the Story rather than joining to ask, because the pass that decides Cluster state
+  writes it and that is the only place that can answer — so the predicate is one
+  column rather than an `EXISTS` over every Cluster the Story is in, and a Cluster
+  coming back as Active re-indexes its Stories because that pass wrote their state
+  again, not because this Archive worked it out for itself. The Cluster trigger is
+  still there for the rows that depend on the Cluster itself, which is a different
+  question.
 - **A Story's text is all of its Articles' text.** A Story is a grouping, not a
   document, and has no words of its own — the only way to search one is to search what
   was reported into it. Every Article landing on a Story rewrites its row, so a Story

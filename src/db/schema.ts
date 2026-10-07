@@ -423,6 +423,18 @@ export const stories = sqliteTable(
     lastPublishedAt: integer('last_published_at', { mode: 'timestamp_ms' })
       .notNull()
       .default(sql`0`),
+    /**
+     * Whether this Story is still being covered.
+     *
+     * Written by the same pass that decides which Clusters are Active, because
+     * that pass is the only thing that knows: a Story is Active while at least one
+     * Cluster holding it is, and nothing else can answer that without asking. The
+     * Archive's index reads this rather than joining to Clusters on every row, so
+     * what it lists is a fact about the Story rather than a question asked per
+     * request. `active` is the default because a Story is formed out of reporting
+     * that is happening now.
+     */
+    state: text('state', { enum: ['active', 'archive'] }).notNull().default('active'),
   },
   (t) => ({
     publishedIdx: index('stories_published_idx').on(t.lastPublishedAt),

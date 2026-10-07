@@ -287,6 +287,16 @@ export interface Story {
   readonly lastSeenAt: Date;
   readonly published: PublishedRange;
   readonly articleCount: number;
+  /**
+   * Whether this Story is still being covered, written by the pass that decides
+   * which Clusters are Active.
+   *
+   * Stored rather than derived wherever it is needed, because the only thing that
+   * can answer it is the pass that just ran: a Story is Active while at least one
+   * Cluster holding it is, so anywhere else would be re-asking the same question of
+   * the same Clusters to reach an answer already written.
+   */
+  readonly state: 'active' | 'archive';
 }
 
 export const FEEDBACK_TYPES = [

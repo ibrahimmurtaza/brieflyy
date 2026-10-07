@@ -1,12 +1,14 @@
-import { and, asc, eq, inArray, notInArray, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, ne, notInArray, sql } from 'drizzle-orm';
 
 import type { Db } from '../db/client.js';
+import { STORY_IS_ACTIVE } from '../db/story-state.js';
 import {
   articles,
   entities,
   articleEntities,
   clusters,
   clusterStories,
+  stories,
   type ClusterRow,
   type ArticleRow,
   type EntityRow,
@@ -265,6 +267,40 @@ export class DrizzleClusterRepo implements ClusterRepo {
     for (const sid of storyIds) {
       await this.db.insert(clusterStories).values({ clusterId: cluster.id, storyId: sid }).onConflictDoNothing();
     }
+    await this.writeStateOfStoriesHeldBy([cluster.id]);
+  }
+
+  /**
+   * Write the state of every Story these Clusters hold, from the Clusters rather
+   * than from what the caller thinks it is.
+   *
+   * This is the pass that decides which Clusters are Active, and a Story is
+   * Retired exactly when none of its Clusters is — so it is the only place that can
+   * say it without asking, and the Archive reads the answer rather than doing the
+   * asking itself. Written on both the way a Cluster is written up and the way it
+   * is put away, which is what makes a Story leave Retired on its own when a
+   * Cluster it is in is covered again.
+   *
+   * Each statement is guarded on the stored state disagreeing, which is not a
+   * saving of work for its own sake: `stories` carries a trigger that rewrites that
+   * Story's Archive row on every write, and `UPDATE OF state` fires whenever the
+   * column is named rather than when it changes. An unguarded pair would reindex
+   * every Story a re-formed Cluster holds on every ingest cycle to arrive at the
+   * answer it already had.
+   */
+  private async writeStateOfStoriesHeldBy(clusterIds: readonly ClusterId[]): Promise<void> {
+    if (clusterIds.length === 0) return;
+    const held = sql`stories.id IN (SELECT story_id FROM cluster_stories
+      WHERE cluster_id IN (${sql.join(clusterIds.map((id) => sql`${id}`), sql`, `)}))`;
+    const isActive = sql.raw(STORY_IS_ACTIVE);
+    await this.db
+      .update(stories)
+      .set({ state: 'archive' })
+      .where(and(held, sql`NOT ${isActive}`, ne(stories.state, 'archive')));
+    await this.db
+      .update(stories)
+      .set({ state: 'active' })
+      .where(and(held, isActive, ne(stories.state, 'active')));
   }
 
   async archiveExcluding(
@@ -294,6 +330,10 @@ export class DrizzleClusterRepo implements ClusterRepo {
           inArray(clusters.id, stale.map((r) => r.id)),
         ),
       );
+    // The Clusters are the fact the Stories' state is derived from, so it is
+    // written here rather than by the caller: this is the one pass, and a second
+    // path that archived a Cluster would be a second place to have remembered.
+    await this.writeStateOfStoriesHeldBy(stale.map((r) => r.id));
     return stale.length;
   }
 }

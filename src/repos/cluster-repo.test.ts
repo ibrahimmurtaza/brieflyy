@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { createTestDb } from '../testing/test-db.js';
-import { makeTopic, makeCluster, makeUser } from '../testing/fixtures.js';
+import { makeTopic, makeCluster, makeStory, makeUser } from '../testing/fixtures.js';
 import { DrizzleClusterRepo } from './cluster-repo.js';
 import { DrizzleStoryRepo } from './story-repo.js';
 import { DrizzleArticleRepo } from './article-repo.js';
@@ -295,4 +295,67 @@ describe('DrizzleClusterRepo', () => {
     const other = await clusterRepo.findById('cluster-2');
     expect(other?.state).toBe('active');
   });
+
+  it('retires the Stories of the Clusters it archives', async () => {
+    await storyRepo.insert(makeStory({ id: 'story-1' }));
+    await clusterRepo.insert(makeCluster({ id: 'cluster-1', topicId: 'topic-1' }), [
+      'story-1' as StoryId,
+    ]);
+    expect((await storyRepo.getById('story-1' as StoryId))?.state).toBe('active');
+
+    await clusterRepo.archiveExcluding('topic-1', [], new Date());
+
+    // Written by the same pass that archived the Cluster, so a Story nothing is
+    // covering is Retired without anything having to go looking to find out.
+    expect((await storyRepo.getById('story-1' as StoryId))?.state).toBe('archive');
+  });
+
+  it('leaves a Story Active while one of the Clusters holding it is', async () => {
+    await storyRepo.insert(makeStory({ id: 'story-1' }));
+    await clusterRepo.insert(makeCluster({ id: 'cluster-1', topicId: 'topic-1' }), [
+      'story-1' as StoryId,
+    ]);
+    await clusterRepo.insert(makeCluster({ id: 'cluster-2', topicId: 'topic-1' }), [
+      'story-1' as StoryId,
+    ]);
+
+    // One Cluster going quiet is not the Story being Retired, which is why the
+    // rule is about none of them rather than about the last one.
+    await clusterRepo.archiveExcluding('topic-1', ['cluster-2'], new Date());
+
+    expect((await storyRepo.getById('story-1' as StoryId))?.state).toBe('active');
+  });
+
+  it('brings a Retired Story back when one of its Clusters is Active again', async () => {
+    await storyRepo.insert(makeStory({ id: 'story-1' }));
+    await clusterRepo.insert(
+      makeCluster({ id: 'cluster-1', topicId: 'topic-1', state: 'archive' }),
+      ['story-1' as StoryId],
+    );
+    expect((await storyRepo.getById('story-1' as StoryId))?.state).toBe('archive');
+
+    // A Cluster that is covered again comes back as Active on the next pass, and
+    // the Story leaves Retired with it rather than staying retired by accident.
+    await clusterRepo.insert(
+      makeCluster({ id: 'cluster-1', topicId: 'topic-1', state: 'active' }),
+      ['story-1' as StoryId],
+    );
+
+    expect((await storyRepo.getById('story-1' as StoryId))?.state).toBe('active');
+  });
+
+  it('retires a Story whose only Cluster was formed below the threshold', async () => {
+    await storyRepo.insert(makeStory({ id: 'story-1' }));
+
+    // Forming a Cluster writes the state it decided on, so a Cluster that is born
+    // Archived is a Cluster that was never Active and must not leave its Stories
+    // looking as though it were.
+    await clusterRepo.insert(
+      makeCluster({ id: 'cluster-1', topicId: 'topic-1', state: 'archive' }),
+      ['story-1' as StoryId],
+    );
+
+    expect((await storyRepo.getById('story-1' as StoryId))?.state).toBe('archive');
+  });
 });
+
