@@ -152,8 +152,7 @@ _Avoid_: dashboard stats, summary
 **Active (Cluster)**: A Cluster's state while it is still picking up Stories — while its velocity (Stories per unit time) is above a threshold. Active Clusters appear in LivingBriefs and in new BriefPlans. A Cluster that stops getting covered loses Active on its own, rather than being switched off.
 _Avoid_: live, current
 
-**Retired (Story)**: A Story's state once none of its Clusters is Active. Retired Stories are retained per tier but are not surfaced in new Briefs, which plan from Active Clusters and never consult a Story.
-**Not built**: retirement as a stored fact. `stories` has no state column; "Retired" is derived where it is needed — the Archive's index asks whether any of a Story's Clusters is Active — so a Story is Retired by the absence of evidence rather than by a row of its own.
+**Retired (Story)**: A Story's state once none of its Clusters is Active. Retired Stories are retained per tier but are not surfaced in new Briefs, which plan from Active Clusters and never consult a Story. Stored on the Story rather than worked out where it is needed, and written by the pass that decides which Clusters are Active — the one thing that can answer it, having just decided. So a Story leaves Retired the way a Cluster leaves Active, and a page reading the Archive reads a fact rather than asking about every Cluster of every Story it lists.
 _Avoid_: dead, expired
 
 **Archive**: The persisted history of Clusters, BriefSnapshots, Articles, Stories, and FeedbackEvents beyond their active lifetime, held per Topic so it is one User's and no other's. Searchable by the User, by whole words through a full-text index. Retention is tiered, with BriefSnapshots exempt (retained forever).

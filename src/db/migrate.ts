@@ -1,7 +1,8 @@
 import Database from 'better-sqlite3';
 
-import type { SqliteDriver } from './client.js';
+import { tableExists, type SqliteDriver } from './client.js';
 import { applyArchiveIndex } from './archive-index.js';
+import { backfillStoryStates } from './story-state.js';
 import { extractSignature } from '../domain/extract.js';
 import { canonicalEntityKey } from '../domain/entity-extraction.js';
 import { articleText } from '../domain/feed-text.js';
@@ -181,7 +182,8 @@ CREATE TABLE IF NOT EXISTS stories (
   first_seen_at INTEGER NOT NULL,
   last_seen_at INTEGER NOT NULL,
   first_published_at INTEGER NOT NULL DEFAULT 0,
-  last_published_at INTEGER NOT NULL DEFAULT 0
+  last_published_at INTEGER NOT NULL DEFAULT 0,
+  state TEXT NOT NULL DEFAULT 'active'
 );
 CREATE INDEX IF NOT EXISTS stories_published_idx ON stories (last_published_at);
 
@@ -381,17 +383,6 @@ interface TableRebuild {
    * from the rows already stored.
    */
   readonly backfill?: Readonly<Record<string, string>>;
-}
-
-/** Whether a table exists in this database. */
-function tableExists(driver: SqliteDriver, table: string): boolean {
-  return (
-    driver
-      .prepare(
-        `SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = ?`,
-      )
-      .get(table) !== undefined
-  );
 }
 
 function columnNames(driver: SqliteDriver, table: string): Set<string> {
@@ -723,6 +714,17 @@ const COLUMN_MIGRATIONS: readonly ColumnMigration[] = [
     table: 'stories',
     column: 'last_published_at',
     ddl: `ALTER TABLE stories ADD COLUMN last_published_at INTEGER NOT NULL DEFAULT 0`,
+  },
+  {
+    // Whether this Story is still being covered, which the Archive's index reads
+    // rather than working out per row. `active` is the honest default for every
+    // row written before this existed: each of them was formed out of reporting
+    // happening now, and a Story that has since stopped being covered is Retired
+    // whatever the column says. `backfillStoryStates` says which, from the Clusters
+    // this database already holds.
+    table: 'stories',
+    column: 'state',
+    ddl: `ALTER TABLE stories ADD COLUMN state TEXT NOT NULL DEFAULT 'active'`,
   },
   {
     // What an Entity's identity is decided on. Rows written before it existed
@@ -1062,6 +1064,10 @@ export function applySchema(driver: SqliteDriver): void {
   // touch rows the new columns left empty.
   backfillStorySignatures(driver);
   backfillArticleSignatures(driver);
+  // A Story's state is a function of its Clusters', so it is derived from them
+  // rather than left on the default the column came with — see `story-state.ts`
+  // for why the fill is not a nicety here.
+  backfillStoryStates(driver);
   // Last of all: the Archive's own table, its full-text index and its triggers, and
   // the one-time fill of that index from what is already stored. After the backfills
   // above, so the fill reads the tables as they now stand, and so the triggers are

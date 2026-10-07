@@ -168,6 +168,7 @@ export class DrizzleStoryRepo implements StoryRepo {
       lastSeenAt: row.lastSeenAt,
       published: { first: row.firstPublishedAt, last: row.lastPublishedAt },
       articleCount,
+      state: (row.state as 'active' | 'archive') ?? 'active',
     };
   }
 
@@ -188,7 +189,9 @@ export class DrizzleStoryRepo implements StoryRepo {
     });
     // The Story has no Articles yet, and it has no Source of its own: the Source
     // it belongs to is a fact about the Articles in it, and the first one is
-    // written a line later.
+    // written a line later. Its state is Active for the same reason: it was just
+    // formed out of reporting happening now, and only the pass that decides which
+    // Clusters are Active may say otherwise.
     const story: Story = {
       id: input.id,
       sourceIds: [],
@@ -197,6 +200,7 @@ export class DrizzleStoryRepo implements StoryRepo {
       lastSeenAt: input.lastSeenAt,
       published: input.published,
       articleCount: 0,
+      state: 'active',
     };
     return story;
   }

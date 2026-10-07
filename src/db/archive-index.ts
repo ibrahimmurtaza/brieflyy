@@ -120,9 +120,16 @@ const articleRows: RowsFrom = (where) => `
  * reported into it. Keeping all of them searchable is the point — indexing only
  * the newest copy would make a Story unfindable by the words its first outlet used.
  *
- * A Story with an Active Cluster is not Retired, so it is not indexed. It is on the
- * LivingBrief already, and listing it here would put a category in the Archive whose
- * own definition excludes it.
+ * A Story that is not Retired is not indexed. It is on the LivingBrief already,
+ * and listing it here would put a category in the Archive whose own definition
+ * excludes it.
+ *
+ * `s.state` rather than a question asked of the Clusters: the pass that decides
+ * which Clusters are Active is the only thing that can answer it, and it has
+ * already written the answer down. Deriving it here instead would put a second,
+ * separately written copy of that rule into the SQL that maintains this index —
+ * evaluated on every write to it, for every Story the write touches, by code that
+ * has no business knowing how a Cluster's state is decided.
  *
  * Distinct, because the join is one row per Cluster and a Story spans Sources
  * (ADR 0010), so a dedup Story is normally held by more than one Cluster of the same
@@ -147,11 +154,7 @@ const storyRows: RowsFrom = (where) => `
   JOIN cluster_stories cs ON cs.story_id = s.id
   JOIN clusters c ON c.id = cs.cluster_id
   WHERE ${where}
-    AND NOT EXISTS (
-      SELECT 1 FROM cluster_stories cs2
-      JOIN clusters c2 ON c2.id = cs2.cluster_id
-      WHERE cs2.story_id = s.id AND c2.state = 'active'
-    )`;
+    AND s.state = 'archive'`;
 
 function write(rows: RowsFrom, where: string): string {
   return `INSERT INTO archive_items (${COLUMNS}) ${rows(where)};`;
@@ -186,7 +189,7 @@ function replaceItem(kind: string, rows: RowsFrom, id: string, alias: string): s
  * Rewrite the rows of every Story a predicate selects.
  *
  * One pair of statements rather than one per Story, because a Story's row depends
- * on its Articles and on which of its Clusters are Active — neither of which is
+ * on its Articles and on which of its Clusters hold it — neither of which is
  * anything the row itself can tell you. The delete re-selects through `stories`, so
  * the predicate can be written once and mean the same thing to both statements.
  */
@@ -259,6 +262,12 @@ function trigger(name: string, event: string, table: string, body: string): stri
  * more method after each of them is an index that is silently wrong the first time
  * a sixth path appears. There is no way to reach these tables that is not through
  * SQL, so there is nothing for a trigger to miss.
+ *
+ * The `stories` trigger watches the one column a Story's row reads off the Story
+ * itself, rather than every update to it. What else is written there — an Article
+ * landing, a link to a Cluster — has a trigger of its own below, and an update to
+ * `last_seen_at` or a published range says nothing about whether the Story is in
+ * the Archive.
  */
 export const ARCHIVE_INDEX_SQL = `
 ${trigger('archive_items_fts_ai', 'INSERT', 'archive_items', `  INSERT INTO archive_items_fts (rowid, title, body) VALUES (new.rowid, new.title, new.body);`)}
@@ -292,6 +301,8 @@ ${trigger('archive_items_entities_ad', 'DELETE', 'article_entities', rewriteEnti
 
 ${trigger('archive_items_links_ai', 'INSERT', 'cluster_stories', rewriteStories('s.id = new.story_id'))}
 ${trigger('archive_items_links_ad', 'DELETE', 'cluster_stories', rewriteStories('s.id = old.story_id'))}
+
+${trigger('archive_items_stories_au', 'UPDATE OF state', 'stories', rewriteStories('s.id = new.id'))}
 
 ${trigger('archive_items_topic_sources_ai', 'INSERT', 'topic_sources', rewriteArticlesInTopic('new.topic_id', 'new.source_id'))}
 ${trigger('archive_items_topic_sources_ad', 'DELETE', 'topic_sources', drop('article', `topic_id = old.topic_id

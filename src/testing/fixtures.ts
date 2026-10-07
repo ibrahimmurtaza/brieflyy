@@ -263,6 +263,10 @@ export function makeStory(input: StoryFixture): Story {
       last: input.lastPublishedAt ?? lastSeenAt,
     },
     articleCount: input.articleCount ?? 1,
+    // A Story is Active as formed: it comes out of reporting happening now, and only
+    // the pass that decides which Clusters are Active may say otherwise — so there
+    // is no fixture option for the other state, since nothing writes one.
+    state: 'active',
   };
 }
 

@@ -371,6 +371,60 @@ CREATE UNIQUE INDEX magic_links_token_hash_unique ON magic_links (token_hash);
 CREATE INDEX magic_links_account_idx ON magic_links (account_id);
 `;
 
+/**
+ * A database from before a Story carried a state of its own. `clusters.state` is
+ * already there and already written, so the only shape change is the column a
+ * Story is given — and it is a column the migration has to fill from what the
+ * database already says, because a Story nothing is covering any more is Retired
+ * whether or not a row of its own records it.
+ */
+const PRE_STORY_STATE_SQL = `
+CREATE TABLE users (
+  id TEXT PRIMARY KEY NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+  onboarding_state TEXT NOT NULL DEFAULT 'not_started'
+);
+CREATE TABLE topics (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  slug TEXT NOT NULL,
+  title TEXT NOT NULL,
+  blurb TEXT NOT NULL,
+  category TEXT NOT NULL,
+  origin_kind TEXT NOT NULL,
+  origin_template_id TEXT,
+  cadence TEXT NOT NULL DEFAULT 'daily',
+  created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+  removed_at INTEGER
+);
+CREATE TABLE stories (
+  id TEXT PRIMARY KEY NOT NULL,
+  signature TEXT NOT NULL DEFAULT '{}',
+  first_seen_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL,
+  first_published_at INTEGER NOT NULL DEFAULT 0,
+  last_published_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX stories_published_idx ON stories (last_published_at);
+CREATE TABLE clusters (
+  id TEXT PRIMARY KEY NOT NULL,
+  topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  bullet_points TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL,
+  article_count INTEGER NOT NULL,
+  velocity REAL NOT NULL,
+  source_ids TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'active'
+);
+CREATE TABLE cluster_stories (
+  cluster_id TEXT NOT NULL REFERENCES clusters(id) ON DELETE CASCADE,
+  story_id TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE
+);
+`;
+
 /** A database from before a pass recorded what writing its briefs cost. */
 const NO_GENERATION_COLUMNS_SCHEMA_SQL = `
 CREATE TABLE brief_job_runs (
@@ -1284,6 +1338,58 @@ describe('applySchema', () => {
       .prepare(`SELECT cluster_window_days FROM topics WHERE id = ?`)
       .get('topic-1') as { cluster_window_days: number } | undefined;
     expect(row?.cluster_window_days).toBe(7);
+  });
+
+  it('gives every Story the state its Clusters already say', () => {
+    const driver = createInMemorySqliteDriver();
+    driver.exec(PRE_STORY_STATE_SQL);
+    driver.prepare(`INSERT INTO users (id) VALUES (?)`).run('user-1');
+    driver
+      .prepare(
+        `INSERT INTO topics (id, user_id, slug, title, blurb, category, origin_kind, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run('topic-1', 'user-1', 'ai', 'AI', 'AI news', 'technology', 'freeform', 1);
+    const insertStory = (id: string): void => {
+      driver
+        .prepare(`INSERT INTO stories (id, first_seen_at, last_seen_at) VALUES (?, ?, ?)`)
+        .run(id, 1, 1);
+    };
+    const insertCluster = (id: string, state: string, storyId: string): void => {
+      driver
+        .prepare(
+          `INSERT INTO clusters (id, topic_id, title, summary, bullet_points, created_at,
+             last_seen_at, article_count, velocity, source_ids, state)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(id, 'topic-1', id, 's', '[]', 1, 1, 1, 1, 'src-a', state);
+      driver
+        .prepare(`INSERT INTO cluster_stories (cluster_id, story_id) VALUES (?, ?)`)
+        .run(id, storyId);
+    };
+    insertStory('story-moving');
+    insertStory('story-stalled');
+    insertCluster('cluster-moving', 'active', 'story-moving');
+    // Two Archived Clusters hold the second Story, which is what a Story spanning
+    // Sources normally looks like and what makes the rule about *any* of them.
+    insertCluster('cluster-stalled', 'archive', 'story-stalled');
+    insertCluster('cluster-stalled-two', 'archive', 'story-stalled');
+
+    applySchema(driver);
+
+    const stateOf = (id: string): string | undefined =>
+      (
+        driver
+          .prepare(`SELECT state FROM stories WHERE id = ?`)
+          .get(id) as { state: string } | undefined
+      )?.state;
+    // Filled from the Clusters rather than left on the default: a Story nothing is
+    // covering any more is Retired, and a column that had every existing row on
+    // `active` would say the Archive holds nothing — a User's whole history
+    // dropped out of the index to answer a question about a new column.
+    expect(stateOf('story-stalled')).toBe('archive');
+    expect(stateOf('story-moving')).toBe('active');
+    expect(() => applySchema(driver)).not.toThrow();
   });
 
   it('keys the Entities a database already held, from the names it already has', () => {

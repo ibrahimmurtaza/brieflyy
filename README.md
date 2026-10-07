@@ -83,7 +83,7 @@ saying so is the point:
   `src/db/schema.ts` — against a live database, and it diffs tables. The Archive's
   FTS5 virtual table and its shadow tables are DDL rather than a table shape, so
   they live in `src/db/archive-index.ts` and are invisible to it; the diff therefore
-  wants to drop them, and leaves the twenty-one triggers that maintain the index
+  wants to drop them, and leaves the twenty-two triggers that maintain the index
   referring to a table that is gone. It also asks for confirmation at a terminal,
   which is not there in CI. Run it against a database you can lose.
 
@@ -456,7 +456,7 @@ DDL that follows already matches the shape they produced; an index on a column a
 older table does not have would otherwise fail against the table as it stands.
 
 The Archive's text index is the one piece of DDL that is not in `migrate.ts`: its
-table, its FTS5 virtual table and the twenty-one triggers that keep the two in step
+table, its FTS5 virtual table and the twenty-two triggers that keep the two in step
 live in `src/db/archive-index.ts`, and `applySchema` calls `applyArchiveIndex` from
 it. It is separate for two reasons. `schemaStatements()` cuts `SCHEMA_SQL` on
 semicolons to find indexes worth rebuilding, and a trigger body is full of them. And
@@ -481,7 +481,9 @@ src/
 │
 ├── db/                    # Drizzle schema, migration runner, driver factory
 │                          # (archive-index.ts holds the Archive's DDL and its
-│                          # triggers; applySchema calls it)
+│                          # triggers, which applySchema calls; story-state.ts holds
+│                          # the rule for whether a Story is Retired, written by
+│                          # both the migration and the cluster repo)
 ├── directory/             # Seed JSON + directory loader (Sources, TopicTemplates)
 ├── domain/                # pure types & helpers (crypto, clock, timezone,
 │                          # DeliverySlot, tier, story signature, trends, LLM contract)

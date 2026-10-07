@@ -359,12 +359,95 @@ describe('the Archive text index', () => {
     expect(row('story', 'story-1')).toBeDefined();
 
     // Clusters come back as Active when they are covered again, and a Story with a
-    // live Cluster is not a Retired Story.
+    // live Cluster is not a Retired Story. Written through the repository, because
+    // the repository is what the pass that decides Cluster state goes through.
+    await clusters.insert(
+      makeCluster({
+        id: 'cluster-old',
+        topicId: 'topic-1',
+        state: 'active',
+        createdAt: new Date('2026-08-01T00:00:00Z'),
+      }),
+      ['story-1' as StoryId],
+    );
+
+    expect(row('story', 'story-1')).toBeUndefined();
+    // And stops being findable by the reporting it was indexed from, which is the
+    // half a stale index gets wrong: the row would still be there for the
+    // full-text table to match. The Article carries the same word and stays, so
+    // this cannot pass by the word having stopped matching anything.
+    expect(matchIds('Zap')).toEqual(['a-1']);
+  });
+
+  it('does not work a Story out again from its Clusters', async () => {
+    await stories.insert(STORY_ONE);
+    await articles.insert({
+      article: makeArticle({ id: 'a-1', sourceId: 'src-a', storyId: 'story-1', title: 'Zap' }),
+      entityIds: [],
+    });
+    await clusters.insert(
+      makeCluster({
+        id: 'cluster-old',
+        topicId: 'topic-1',
+        state: 'archive',
+        createdAt: new Date('2026-08-01T00:00:00Z'),
+      }),
+      ['story-1' as StoryId],
+    );
+    expect(row('story', 'story-1')).toBeDefined();
+
+    // The same Cluster row, behind the pass's back. Whether a Story is Retired is a
+    // fact about the Story, written by the one pass that can answer it, so editing
+    // the Cluster without going through that pass must not move the Story in or out
+    // of the Archive. This is the shape of the seam: the index reads `stories.state`
+    // rather than joining to ask, which is the same answer this test would get from
+    // the derived version and the reason it has to be said here rather than read
+    // off the behaviour.
     driver
       .prepare(`UPDATE clusters SET state = 'active' WHERE id = ?`)
       .run('cluster-old');
 
-    expect(row('story', 'story-1')).toBeUndefined();
+    expect(row('story', 'story-1')).toBeDefined();
+  });
+
+  it('leaves a Retired Story indexed when a re-form changes nothing', async () => {
+    await stories.insert(STORY_ONE);
+    await articles.insert({
+      article: makeArticle({ id: 'a-1', sourceId: 'src-a', storyId: 'story-1', title: 'Zap' }),
+      entityIds: [],
+    });
+    await clusters.insert(
+      makeCluster({
+        id: 'cluster-old',
+        topicId: 'topic-1',
+        state: 'archive',
+        createdAt: new Date('2026-08-01T00:00:00Z'),
+      }),
+      ['story-1' as StoryId],
+    );
+    const before = driver
+      .prepare(`SELECT rowid FROM archive_items WHERE kind = 'story' AND item_id = ?`)
+      .get('story-1') as { rowid: number };
+
+    // The next cycle forms the same Cluster again with the same state, which is
+    // what almost every ingest cycle does to most Clusters. The Story's state has
+    // not moved, so its Archive row must not be rewritten: `UPDATE OF state` fires
+    // on the column being named rather than on the value changing, and a rewrite
+    // here is a User's history reindexed to arrive at the answer it already had.
+    await clusters.insert(
+      makeCluster({
+        id: 'cluster-old',
+        topicId: 'topic-1',
+        state: 'archive',
+        createdAt: new Date('2026-08-01T00:00:00Z'),
+      }),
+      ['story-1' as StoryId],
+    );
+
+    const after = driver
+      .prepare(`SELECT rowid FROM archive_items WHERE kind = 'story' AND item_id = ?`)
+      .get('story-1') as { rowid: number };
+    expect(after.rowid).toBe(before.rowid);
   });
 
   it('indexes a FeedbackEvent against the Cluster the User pressed a button on', async () => {

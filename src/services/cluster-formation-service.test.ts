@@ -125,13 +125,15 @@ async function givenStory(
     readonly entities: readonly EntityName[];
     readonly body: string;
     readonly hoursAgo: number;
+    /** The moment the hours are counted back from, for a Story written later on. */
+    readonly now?: Date;
     readonly title?: string;
     readonly sourceId?: SourceId;
     /** A copy of the same event, carried by a second outlet in the same Story. */
     readonly syndicatedFrom?: SourceId;
   },
 ): Promise<readonly EntityId[]> {
-  const seenAt = new Date(NOW.getTime() - input.hoursAgo * HOUR);
+  const seenAt = new Date((input.now ?? NOW).getTime() - input.hoursAgo * HOUR);
   const entityIds: EntityId[] = [];
   for (const name of input.entities) {
     const entity = await h.entityRepo.upsertByKey({
@@ -575,6 +577,57 @@ describe('ClusterFormationService', () => {
     expect(report.archived).toBe(1);
     const after = await h.clusterRepo.listByTopicId('topic-1');
     expect(after.every((c) => c.state === 'archive')).toBe(true);
+  });
+
+  it('retires a Story whose Clusters have all stopped being Active', async () => {
+    const h = await buildHarness();
+    await givenStory(h, {
+      storyId: 'story-acme',
+      entities: ['acme', 'foo'],
+      body: BODY.acme,
+      hoursAgo: 2,
+    });
+    await h.service.formClustersForTopic('topic-1');
+    expect((await h.storyRepo.getById('story-acme' as StoryId))?.state).toBe('active');
+
+    // Five days on, one Story spread over five days is under the threshold, so
+    // the Cluster holding it is no longer Active — and it is still inside the
+    // window, which is the case a derived answer would have had to go looking for.
+    const later = new Date(NOW.getTime() + 5 * 24 * HOUR);
+    await h.service.formClustersForTopic('topic-1', later);
+
+    // Written by the pass that archived the Cluster, so a request reading the
+    // Archive has a fact to read rather than a question to answer.
+    expect((await h.storyRepo.getById('story-acme' as StoryId))?.state).toBe('archive');
+  });
+
+  it('brings a Story back out of Retired when it is covered again', async () => {
+    const h = await buildHarness();
+    await givenStory(h, {
+      storyId: 'story-acme',
+      entities: ['acme', 'foo'],
+      body: BODY.acme,
+      hoursAgo: 2,
+    });
+    const later = new Date(NOW.getTime() + 5 * 24 * HOUR);
+    await h.service.formClustersForTopic('topic-1');
+    await h.service.formClustersForTopic('topic-1', later);
+    expect((await h.storyRepo.getById('story-acme' as StoryId))?.state).toBe('archive');
+
+    // Another outlet reports it, which fuses into the same Cluster as a new one
+    // carrying both Stories. The old Cluster is still Archived, so this is the
+    // Story leaving Retired by itself rather than by anything asking it to.
+    await givenStory(h, {
+      storyId: 'story-acme-follow-up',
+      entities: ['acme', 'foo', 'bar'],
+      body: BODY.acmeFollowUp,
+      hoursAgo: 0,
+      now: later,
+    });
+    const clusters = await h.service.formClustersForTopic('topic-1', later);
+
+    expect(clusters.every((c) => c.state === 'active')).toBe(true);
+    expect((await h.storyRepo.getById('story-acme' as StoryId))?.state).toBe('active');
   });
 
   it('updates a Cluster in place rather than piling up a copy per cycle', async () => {
