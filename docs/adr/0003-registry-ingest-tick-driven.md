@@ -1,5 +1,7 @@
 # Registry ingest polls every source once per topic-set
 
+**Amended by [ADR-0026](0026-a-sources-failure-backoff-is-stored-on-the-source.md)**: the "Observability" section's claim that the per-source fields come from the Source rows *plus the in-memory backoff map*, which "resets on process restart — acceptable in v1", no longer describes this repository. The backoff is three columns on `sources` now, so a restart reads the same streak the last cycle left rather than starting again from zero, and the status says outright whether a Source is being held back. Everything else below — the union of every Topic's sources, the cadence, the exponential schedule and its cap, and the reason `/admin/ingest` has to give the operator — still holds unchanged. Read that paragraph as the decision that was made once and then replaced, and ADR-0026 for why.
+
 The single-source `IngestService` is wrapped by a `RegistryIngestService` that, on each cycle, walks the union of every Topic's `topic_sources` rows (deduped), and invokes `IngestService.ingestSource` for each. The cycle is driven by an `IngestScheduler` that runs on a fixed cadence (default 30 minutes), applies exponential backoff per failing source, and exposes a status object for observability.
 
 ## Why a separate layer

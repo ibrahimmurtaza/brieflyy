@@ -19,6 +19,7 @@ import { DrizzleStoryRepo } from '../repos/story-repo.js';
 import { DrizzleTopicRepo } from '../repos/topic-repo.js';
 import { DrizzleBriefPlanRepo } from '../repos/brief-plan-repo.js';
 import { EMPTY_SIGNATURE } from '../domain/story-signature.js';
+import { NO_BACKOFF } from '../domain/types.js';
 import type { SourceId, StoryId, TopicId } from '../domain/types.js';
 
 const NOW = new Date('2026-09-02T12:00:00Z');
@@ -79,6 +80,7 @@ async function signInWithTopic(options: { readonly withSources?: boolean } = {})
         feedUrl: null,
         lastPolledAt: null,
         lastSuccessAt: null,
+        backoff: NO_BACKOFF,
       });
       await topicRepo.insertTopicSource('topic-1', id, 0);
     }

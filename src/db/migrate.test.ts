@@ -10,6 +10,7 @@ import { applySchema, migrateToDatabaseFile } from './migrate.js';
 import { DrizzleTopicRepo } from '../repos/topic-repo.js';
 import { DrizzleUserRepo } from '../repos/user-repo.js';
 import { DrizzleStoryRepo } from '../repos/story-repo.js';
+import { DrizzleSourceRepo } from '../repos/source-repo.js';
 import { decodeSignature, encodeSignature } from '../domain/story-signature.js';
 import { articleSignatureOf, signatureOf, WIRE_COPIES } from '../testing/story-fixtures.js';
 import type { StoryId } from '../domain/types.js';
@@ -476,6 +477,20 @@ CREATE TABLE brief_snapshots (
 );
 `;
 
+/** A database from before a Source carried the failure backoff it was serving. */
+const NO_SOURCE_BACKOFF_SCHEMA_SQL = `
+CREATE TABLE sources (
+  id TEXT PRIMARY KEY NOT NULL,
+  slug TEXT NOT NULL,
+  name TEXT NOT NULL,
+  homepage_url TEXT NOT NULL,
+  feed_url TEXT,
+  last_polled_at INTEGER,
+  last_success_at INTEGER
+);
+CREATE UNIQUE INDEX sources_slug_unique ON sources (slug);
+`;
+
 describe('applySchema', () => {
   it('adds topics.cadence to a database created before the column existed', async () => {
     const driver = createInMemorySqliteDriver();
@@ -701,6 +716,44 @@ describe('applySchema', () => {
       .prepare(`SELECT name FROM pragma_index_list(?)`)
       .all('unsubscribes') as { name: string }[];
     expect(rows.map((r) => r.name)).toContain('unsubscribes_token_unique');
+  });
+
+  it('adds the failure backoff to a database that already holds Sources', async () => {
+    // The streak a broken Source has accumulated is the thing a restart used to
+    // throw away, so the columns holding it are added to the Sources the database
+    // already has rather than only to a fresh one. Zero failures and no next
+    // attempt is what every pre-backoff Source is: nothing had recorded a streak,
+    // and the next cycle is free to poll it.
+    const driver = createInMemorySqliteDriver();
+    driver.exec(NO_SOURCE_BACKOFF_SCHEMA_SQL);
+    driver
+      .prepare(
+        `INSERT INTO sources (id, slug, name, homepage_url, feed_url, last_polled_at, last_success_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        'reuters',
+        'reuters',
+        'Reuters',
+        'https://www.reuters.com',
+        'https://www.reuters.com/rss/topNews',
+        1_772_000_000_000,
+        1_771_999_000_000,
+      );
+
+    applySchema(driver);
+
+    const db = createDatabase({ driver });
+    const repo = new DrizzleSourceRepo(db);
+    const got = await repo.getById('reuters');
+    // The Source survives, with the poll history it had, and reads as serving no
+    // backoff at all.
+    expect(got?.name).toBe('Reuters');
+    expect(got?.lastPolledAt).toEqual(new Date(1_772_000_000_000));
+    expect(got?.lastSuccessAt).toEqual(new Date(1_771_999_000_000));
+    expect(got?.backoff.consecutiveFailures).toBe(0);
+    expect(got?.backoff.nextAttemptAt).toBeNull();
+    expect(got?.backoff.lastError).toBeNull();
   });
 
   it('keeps the rows of a table it rebuilds', () => {

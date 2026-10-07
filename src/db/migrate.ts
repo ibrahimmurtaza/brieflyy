@@ -85,7 +85,10 @@ CREATE TABLE IF NOT EXISTS sources (
   homepage_url TEXT NOT NULL,
   feed_url TEXT,
   last_polled_at INTEGER,
-  last_success_at INTEGER
+  last_success_at INTEGER,
+  consecutive_failures INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at INTEGER,
+  last_error TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS sources_slug_unique ON sources (slug);
 
@@ -818,6 +821,31 @@ const COLUMN_MIGRATIONS: readonly ColumnMigration[] = [
     table: 'subscriptions',
     column: 'cancelled_at',
     ddl: `ALTER TABLE subscriptions ADD COLUMN cancelled_at INTEGER`,
+  },
+  {
+    // How many polls of this Source have failed in a row, which is what sizes the
+    // delay before the next one. Zero is the truth about every Source written
+    // before this existed: nothing had recorded a streak against one, and the
+    // next cycle is free to poll it.
+    table: 'sources',
+    column: 'consecutive_failures',
+    ddl: `ALTER TABLE sources ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0`,
+  },
+  {
+    // When this Source may be polled again. Nullable with no default, because the
+    // state it records is the absence of the column: a Source with nothing to
+    // serve out has no time it is waiting until.
+    table: 'sources',
+    column: 'next_attempt_at',
+    ddl: `ALTER TABLE sources ADD COLUMN next_attempt_at INTEGER`,
+  },
+  {
+    // What the last of those failures said. Nullable for the same reason as
+    // next_attempt_at: a Source that is not serving a backoff has no error to
+    // report, and this is where an operator reads the one it does.
+    table: 'sources',
+    column: 'last_error',
+    ddl: `ALTER TABLE sources ADD COLUMN last_error TEXT`,
   },
 ];
 

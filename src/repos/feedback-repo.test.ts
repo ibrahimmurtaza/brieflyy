@@ -7,6 +7,7 @@ import { DrizzleFeedbackRepo } from './feedback-repo.js';
 import { DrizzleTopicRepo } from './topic-repo.js';
 import { DrizzleUserRepo } from './user-repo.js';
 import { DrizzleSourceRepo } from './source-repo.js';
+import { NO_BACKOFF } from '../domain/types.js';
 import type { SourceId } from '../domain/types.js';
 
 describe('DrizzleFeedbackRepo', () => {
@@ -26,6 +27,7 @@ describe('DrizzleFeedbackRepo', () => {
       feedUrl: null,
       lastPolledAt: null,
       lastSuccessAt: null,
+      backoff: NO_BACKOFF,
     });
 
     await userRepo.insert(makeUser({ id: 'user-1', onboardingState: 'completed' }));

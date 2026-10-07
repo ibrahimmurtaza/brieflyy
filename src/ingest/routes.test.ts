@@ -16,14 +16,8 @@ import {
 } from '../testing/test-clocks.js';
 import type { Clock } from '../domain/clock.js';
 import type { TopicId } from '../domain/types.js';
-import type { FeedFetcher, RawFeed, RawFeedEntry } from './feed-fetcher.js';
-
-class StaticFeedFetcher implements FeedFetcher {
-  constructor(private readonly feed: RawFeed) {}
-  async fetch(_url: string): Promise<RawFeed> {
-    return this.feed;
-  }
-}
+import type { RawFeedEntry } from './feed-fetcher.js';
+import { BreakableFeedFetcher } from './test-constants.js';
 
 const BODY_A =
   'Acme Corp today unveiled a new AI product called Foo, analysts said. The launch changes the landscape for enterprise customers worldwide.';
@@ -48,6 +42,8 @@ interface TestApp {
   /** The id of the single signed-in user, or null before sign-up. */
   userId(): string | null;
   articleCount(): number;
+  /** Make one registry Source's feed fail, so a cycle leaves it backing off. */
+  breakFeed(feedUrl: string, error: string): void;
 }
 
 async function buildApp(): Promise<TestApp> {
@@ -55,6 +51,7 @@ async function buildApp(): Promise<TestApp> {
   const { db, driver } = createTestDb();
   const transport = new ConsoleEmailTransport({ logger: () => {} });
   const clock = makeTestClock(new Date('2026-09-02T12:00:00Z')).clock;
+  const fetcher = new BreakableFeedFetcher({ entries: ENTRIES });
   const app = await createApp({
     db,
     emailTransport: transport,
@@ -62,7 +59,7 @@ async function buildApp(): Promise<TestApp> {
     cookieSecure: false,
     clock,
     random: deterministicRandom,
-    feedFetcher: new StaticFeedFetcher({ entries: ENTRIES }),
+    feedFetcher: fetcher,
   });
 
   async function signIn(email = 'iris@example.com'): Promise<string> {
@@ -96,8 +93,21 @@ async function buildApp(): Promise<TestApp> {
     return (driver.prepare(`SELECT COUNT(*) AS n FROM articles`).get() as { n: number }).n;
   }
 
-  return { app, transport, db, driver, clock, signIn, userId, articleCount };
+  return {
+    app,
+    transport,
+    db,
+    driver,
+    clock,
+    signIn,
+    userId,
+    articleCount,
+    breakFeed: (feedUrl, error) => fetcher.breakFeed(feedUrl, error),
+  };
 }
+
+/** The registry feed URL for the Guardian, which is what `attachTopicWithSource` polls. */
+const GUARDIAN_FEED_URL = 'https://www.theguardian.com/world/rss';
 
 /** Give the signed-in user a topic fed by a registry Source, so a tick has work to do. */
 async function attachTopicWithSource(ctx: TestApp): Promise<void> {
@@ -106,6 +116,17 @@ async function attachTopicWithSource(ctx: TestApp): Promise<void> {
   const topicRepo = new DrizzleTopicRepo(createDatabase({ driver: ctx.driver }));
   await topicRepo.insert(makeTopic({ id: 't', userId }));
   await topicRepo.insertTopicSource('t' as TopicId, 'the-guardian', 0);
+}
+
+/**
+ * Sign in, put the Guardian on a Topic and break its feed, so the next cycle
+ * leaves a Source serving a backoff behind it.
+ */
+async function breakTheGuardian(ctx: TestApp): Promise<string> {
+  const cookie = await ctx.signIn();
+  await attachTopicWithSource(ctx);
+  ctx.breakFeed(GUARDIAN_FEED_URL, 'upstream 503');
+  return cookie;
 }
 
 describe('ingest admin routes', () => {
@@ -191,5 +212,53 @@ describe('ingest admin routes', () => {
     expect(res.statusCode).toBe(200);
     expect(res.headers['content-type']).toMatch(/text\/html/);
     expect(res.body).toContain('Ingest scheduler');
+  });
+
+  it('says the status is the reason a Source is not being polled', async () => {
+    const cookie = await breakTheGuardian(ctx);
+    await submitForm(ctx.app, cookie, '/api/ingest/tick');
+
+    const res = await ctx.app.inject({
+      method: 'GET',
+      url: '/api/ingest/status',
+      headers: { cookie },
+    });
+    const body = res.json() as {
+      sources: {
+        sourceId: string;
+        servingBackoff: boolean;
+        nextAttemptAt: string | null;
+        consecutiveFailures: number;
+        lastError: string | null;
+      }[];
+    };
+    const guardian = body.sources.find((s) => s.sourceId === 'the-guardian');
+    // An operator looking at a Source whose last poll is a while back has to be
+    // able to tell a feed being held off from a scheduler that has stopped, and
+    // the reason has to be in the answer rather than something to infer.
+    expect(guardian?.servingBackoff).toBe(true);
+    expect(guardian?.consecutiveFailures).toBe(1);
+    expect(guardian?.lastError).toBe('upstream 503');
+    expect(guardian?.nextAttemptAt).not.toBeNull();
+
+    // A Source that has never run says so, rather than carrying a date it has
+    // not earned and reading as one that is late.
+    const quanta = body.sources.find((s) => s.sourceId === 'quanta-magazine');
+    expect(quanta?.servingBackoff).toBe(false);
+    expect(quanta?.nextAttemptAt).toBeNull();
+  });
+
+  it('names the backoff on the dashboard, so the reading is on the page', async () => {
+    const cookie = await breakTheGuardian(ctx);
+    await submitForm(ctx.app, cookie, '/api/ingest/tick');
+
+    const res = await ctx.app.inject({
+      method: 'GET',
+      url: '/admin/ingest',
+      headers: { cookie },
+    });
+    expect(res.body).toContain('Backoff');
+    expect(res.body).toContain('backing off');
+    expect(res.body).toContain('upstream 503');
   });
 });

@@ -27,6 +27,7 @@ import {
   STANDFIRST_REPORTS,
 } from '../testing/story-fixtures.js';
 import { parseRss } from './rss-parser.js';
+import { NO_BACKOFF } from '../domain/types.js';
 import type { Source, SourceId } from '../domain/types.js';
 import { isSafeExternalUrl } from '../domain/url.js';
 
@@ -184,6 +185,7 @@ async function buildService(input: BuildInput): Promise<BuildResult> {
         : input.feedUrl,
     lastPolledAt: null,
     lastSuccessAt: null,
+    backoff: NO_BACKOFF,
   };
   await sr.insert(source);
 

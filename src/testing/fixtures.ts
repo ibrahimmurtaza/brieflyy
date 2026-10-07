@@ -1,5 +1,6 @@
 import { DEFAULT_CLUSTER_WINDOW_DAYS } from '../domain/cluster-window.js';
 import { EMPTY_SIGNATURE } from '../domain/story-signature.js';
+import { NO_BACKOFF } from '../domain/types.js';
 import type {
   Account,
   Article,
@@ -220,6 +221,7 @@ export function makeSource(input: SourceFixture): Source {
     feedUrl: null,
     lastPolledAt: null,
     lastSuccessAt: null,
+    backoff: NO_BACKOFF,
   };
 }
 

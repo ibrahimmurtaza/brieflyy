@@ -14,6 +14,7 @@ import { canonicalEntityKey } from '../domain/entity-extraction.js';
 import { CLUSTER_ACTIVE_VELOCITY_THRESHOLD } from './cluster-formation-service.js';
 import { ClusterFormationService } from './cluster-formation-service.js';
 import type { Clock } from '../domain/clock.js';
+import { NO_BACKOFF } from '../domain/types.js';
 import type { ArticleId, EntityId, SourceId, StoryId, TopicId } from '../domain/types.js';
 
 /** The moment the window closes. Every fixture time is relative to it. */
@@ -72,6 +73,7 @@ async function buildHarness(
     feedUrl: 'https://example.com/feed',
     lastPolledAt: null,
     lastSuccessAt: null,
+    backoff: NO_BACKOFF,
   });
   await topicRepo.insert(
     makeTopic({
@@ -114,6 +116,7 @@ async function addSource(
     feedUrl: `https://${id}.example.com/feed`,
     lastPolledAt: null,
     lastSuccessAt: null,
+    backoff: NO_BACKOFF,
   });
 }
 

@@ -14,6 +14,30 @@ export class FailingFeedFetcher implements FeedFetcher {
   }
 }
 
+/**
+ * A fetcher that serves one feed and can be made to fail another.
+ *
+ * For a test that needs a healthy Source and a broken one on the same cycle,
+ * which `StaticFeedFetcher` and `FailingFeedFetcher` cannot be: one of them
+ * answers every URL.
+ */
+export class BreakableFeedFetcher implements FeedFetcher {
+  private readonly broken = new Map<string, string>();
+
+  constructor(private readonly feed: RawFeed) {}
+
+  /** Make one feed URL answer with `error` from now on. */
+  breakFeed(feedUrl: string, error: string): void {
+    this.broken.set(feedUrl, error);
+  }
+
+  async fetch(url: string): Promise<RawFeed> {
+    const failure = this.broken.get(url);
+    if (failure !== undefined) throw new Error(failure);
+    return this.feed;
+  }
+}
+
 export function makeEntry(
   externalId: string,
   publishedAt: Date,

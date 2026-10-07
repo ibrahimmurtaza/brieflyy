@@ -36,8 +36,12 @@ export async function registerIngestRoutes(
           lastPolledAt: s.lastPolledAt?.toISOString() ?? null,
           lastSuccessAt: s.lastSuccessAt?.toISOString() ?? null,
           consecutiveFailures: s.consecutiveFailures,
-          nextAttemptAt: s.nextAttemptAt.toISOString(),
+          nextAttemptAt: s.nextAttemptAt?.toISOString() ?? null,
           lastError: s.lastError,
+          // Said outright, because the two states an operator cannot tell apart
+          // from the timestamps are a Source being held off and a scheduler that
+          // has stopped.
+          servingBackoff: s.servingBackoff,
         })),
       });
     },
@@ -108,6 +112,7 @@ function renderDashboard(
         'Last polled',
         'Last success',
         'Failures',
+        'Backoff',
         'Next attempt',
         'Last error',
       ],
@@ -116,7 +121,12 @@ function renderDashboard(
         factValue(s.lastPolledAt?.toISOString() ?? null),
         factValue(s.lastSuccessAt?.toISOString() ?? null),
         factValue(s.consecutiveFailures),
-        factValue(s.nextAttemptAt.toISOString()),
+        // Why a Source has not been polled, in the column an operator is already
+        // reading the dates in. A Source that has never run carries no next
+        // attempt and no backoff, and reads as "never" rather than as a date it
+        // has not earned.
+        s.servingBackoff ? 'backing off' : '',
+        factValue(s.nextAttemptAt?.toISOString() ?? null),
         s.lastError === null ? '' : `<code>${escapeHtml(s.lastError)}</code>`,
       ]),
     },

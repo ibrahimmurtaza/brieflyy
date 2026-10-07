@@ -22,6 +22,7 @@ import { DrizzleSourceRepo } from '../repos/source-repo.js';
 import { DrizzleStoryRepo } from '../repos/story-repo.js';
 import { DrizzleTopicRepo } from '../repos/topic-repo.js';
 import { DrizzleUserRepo } from '../repos/user-repo.js';
+import { NO_BACKOFF } from '../domain/types.js';
 import type {
   Source,
   SourceId,
@@ -49,6 +50,11 @@ interface BuildInput {
 
 interface BuildResult {
   readonly scheduler: IngestScheduler;
+  /**
+   * A second scheduler over the same database, with nothing carried over from
+   * the first — which is what a deploy leaves behind.
+   */
+  readonly restart: () => IngestScheduler;
   readonly setFetcher: (f: FeedFetcher) => void;
   readonly fetcherForUrl: (url: string, f: FeedFetcher) => void;
   readonly sourceRepo: DrizzleSourceRepo;
@@ -77,6 +83,7 @@ async function buildHarness(opts: BuildInput = {}): Promise<BuildResult> {
     feedUrl: 'https://www.reuters.com/rss/topNews',
     lastPolledAt: null,
     lastSuccessAt: null,
+    backoff: NO_BACKOFF,
   };
   const guardian: Source = {
     id: 'the-guardian',
@@ -86,6 +93,7 @@ async function buildHarness(opts: BuildInput = {}): Promise<BuildResult> {
     feedUrl: 'https://www.theguardian.com/rss',
     lastPolledAt: null,
     lastSuccessAt: null,
+    backoff: NO_BACKOFF,
   };
   await sourceRepo.insert(reuters);
   await sourceRepo.insert(guardian);
@@ -141,32 +149,35 @@ async function buildHarness(opts: BuildInput = {}): Promise<BuildResult> {
   });
 
   let cycleCounter = 0;
-  const registry = new RegistryIngestService({
-    ingest,
-    topicRepo,
-    articleRepo,
-    storyRepo,
-    clock: clock.clock,
-    cycleIdFn: () => {
-      cycleCounter++;
-      return `cycle-${cycleCounter}`;
-    },
-  });
-
-  const scheduler = new IngestScheduler({
-    registry,
-    sourceRepo,
-    clock: clock.clock,
-    config: {
-      intervalMs: opts.intervalMs ?? 30 * 60 * 1000,
-      backoffBaseMs: opts.backoffBaseMs ?? 60 * 1000,
-      backoffMaxMs: opts.backoffMaxMs ?? 30 * 60 * 1000,
-    },
-    ...(opts.afterCycle ? { afterCycle: opts.afterCycle } : {}),
-  });
+  const buildScheduler = (): IngestScheduler => {
+    const registry = new RegistryIngestService({
+      ingest,
+      topicRepo,
+      articleRepo,
+      storyRepo,
+      clock: clock.clock,
+      cycleIdFn: () => {
+        cycleCounter++;
+        return `cycle-${cycleCounter}`;
+      },
+    });
+    return new IngestScheduler({
+      registry,
+      sourceRepo,
+      clock: clock.clock,
+      config: {
+        intervalMs: opts.intervalMs ?? 30 * 60 * 1000,
+        backoffBaseMs: opts.backoffBaseMs ?? 60 * 1000,
+        backoffMaxMs: opts.backoffMaxMs ?? 30 * 60 * 1000,
+      },
+      ...(opts.afterCycle ? { afterCycle: opts.afterCycle } : {}),
+    });
+  };
+  const scheduler = buildScheduler();
 
   return {
     scheduler,
+    restart: buildScheduler,
     sourceRepo,
     topicRepo,
     userRepo,
@@ -320,7 +331,7 @@ describe('IngestScheduler', () => {
       (s) => s.sourceId === ('reuters' as SourceId),
     );
     expect(src?.consecutiveFailures).toBe(1);
-    expect(src?.nextAttemptAt.getTime()).toBe(pollAt.getTime() + 1000);
+    expect(src?.nextAttemptAt).toEqual(new Date(pollAt.getTime() + 1000));
     expect(src?.lastError).toBe('upstream 503');
 
     clock.advance(1500);
@@ -328,18 +339,14 @@ describe('IngestScheduler', () => {
     status = scheduler.status();
     src = status.sources.find((s) => s.sourceId === ('reuters' as SourceId));
     expect(src?.consecutiveFailures).toBe(2);
-    expect(src?.nextAttemptAt.getTime()).toBe(
-      pollAt.getTime() + 1500 + 2000,
-    );
+    expect(src?.nextAttemptAt).toEqual(new Date(pollAt.getTime() + 1500 + 2000));
 
     clock.advance(3000);
     await scheduler.tick();
     status = scheduler.status();
     src = status.sources.find((s) => s.sourceId === ('reuters' as SourceId));
     expect(src?.consecutiveFailures).toBe(3);
-    expect(src?.nextAttemptAt.getTime()).toBe(
-      pollAt.getTime() + 4500 + 4000,
-    );
+    expect(src?.nextAttemptAt).toEqual(new Date(pollAt.getTime() + 4500 + 4000));
   });
 
   it('caps the backoff delay at backoffMaxMs', async () => {
@@ -369,7 +376,7 @@ describe('IngestScheduler', () => {
     expect(src?.consecutiveFailures).toBe(6);
     // The delay it settled on, which is what "capped" means: without the cap the
     // sixth failure would wait 1000 * 2**5 = 32s.
-    const delay = (src?.nextAttemptAt.getTime() ?? 0) - clock.clock.now().getTime();
+    const delay = (src?.nextAttemptAt?.getTime() ?? 0) - clock.clock.now().getTime();
     expect(delay).toBe(4000);
   });
 
@@ -400,6 +407,156 @@ describe('IngestScheduler', () => {
       .sources.find((s) => s.sourceId === ('reuters' as SourceId));
     expect(src?.consecutiveFailures).toBe(0);
     expect(src?.lastError).toBeNull();
+  });
+
+  it('leaves a Source serving its backoff alone after a restart, and keeps counting', async () => {
+    // The backoff is held on the Source rather than in the process, so a deploy
+    // cannot be a way of putting a broken feed straight back into the next
+    // cycle's path — which is the thing it is for.
+    const { scheduler, restart, sourceRepo, topicRepo, userRepo, fetcherForUrl, clock } =
+      await buildHarness({
+        intervalMs: 60_000,
+        backoffBaseMs: 60 * 60_000,
+        backoffMaxMs: 60 * 60_000,
+      });
+    await insertTopicWithSources(topicRepo, userRepo, {
+      id: 't',
+      userId: 'u',
+      sourceIds: ['reuters'],
+    });
+
+    let attempts = 0;
+    fetcherForUrl('https://www.reuters.com/rss/topNews', {
+      async fetch() {
+        attempts++;
+        throw new Error('upstream 503');
+      },
+    });
+
+    await scheduler.tick();
+    expect(attempts).toBe(1);
+
+    // The streak is on the row, where a process that has just started can find it.
+    const stored = (await sourceRepo.getById('reuters'))?.backoff;
+    expect(stored?.consecutiveFailures).toBe(1);
+    expect(stored?.lastError).toBe('upstream 503');
+    expect(stored?.nextAttemptAt).toEqual(new Date('2026-09-02T13:00:00Z'));
+
+    // A scheduler built now shares only the database with the one that failed it.
+    const restarted = restart();
+
+    // Well inside the first backoff window: a process that had forgotten the
+    // streak would poll the broken feed on this very cycle.
+    clock.advance(5 * 60_000);
+    const skipped = await restarted.tick();
+    expect(attempts, 'a restart put a backed-off Source back into the cycle').toBe(1);
+    expect(
+      skipped.sources.find((s) => s.sourceId === 'reuters')?.skipped,
+      'the cycle did not report the Source as skipped',
+    ).toBe(true);
+
+    // Past the window: it is tried again, and the streak carries on from where
+    // it was rather than starting again from one.
+    clock.advance(2 * 60 * 60_000);
+    await restarted.tick();
+    expect(attempts).toBe(2);
+    expect((await sourceRepo.getById('reuters'))?.backoff.consecutiveFailures).toBe(2);
+  });
+
+  it('clears the stored backoff once a Source succeeds, so it is due on the normal cadence', async () => {
+    const { scheduler, restart, sourceRepo, topicRepo, userRepo, fetcherForUrl, clock } =
+      await buildHarness({
+        intervalMs: 60_000,
+        backoffBaseMs: 60 * 60_000,
+        backoffMaxMs: 60 * 60_000,
+      });
+    await insertTopicWithSources(topicRepo, userRepo, {
+      id: 't',
+      userId: 'u',
+      sourceIds: ['reuters'],
+    });
+
+    let broken = true;
+    fetcherForUrl('https://www.reuters.com/rss/topNews', {
+      async fetch() {
+        if (broken) throw new Error('upstream 503');
+        return { entries: [] };
+      },
+    });
+    await scheduler.tick();
+    clock.advance(2 * 60 * 60_000);
+    await scheduler.tick();
+    expect((await sourceRepo.getById('reuters'))?.backoff.consecutiveFailures).toBe(2);
+
+    broken = false;
+    clock.advance(2 * 60 * 60_000);
+    await scheduler.tick();
+
+    const recoveredAt = new Date('2026-09-02T16:00:00Z');
+    const recovered = (await sourceRepo.getById('reuters'))?.backoff;
+    // The streak and the error are gone, and the next attempt is the cadence —
+    // not the backoff's window, and not nothing, because a Source with no date
+    // scheduling it is polled on every cycle the loop wakes early for somebody
+    // else's backoff.
+    expect(recovered).toEqual({
+      consecutiveFailures: 0,
+      lastError: null,
+      nextAttemptAt: new Date(recoveredAt.getTime() + 60_000),
+    });
+
+    // And it stays that way across a restart, so the recovery is not just what
+    // this process happens to remember.
+    const restarted = restart();
+    const status = await restarted.statusHydrated();
+    const reuters = status.sources.find((s) => s.sourceId === 'reuters');
+    expect(reuters?.consecutiveFailures).toBe(0);
+    expect(reuters?.lastError).toBeNull();
+    expect(reuters?.servingBackoff).toBe(false);
+    expect(reuters?.nextAttemptAt).toEqual(new Date(recoveredAt.getTime() + 60_000));
+  });
+
+  it('tells a Source serving a backoff apart from one that has never run', async () => {
+    const { scheduler, restart, topicRepo, userRepo, fetcherForUrl, clock } =
+      await buildHarness({
+        intervalMs: 60_000,
+        backoffBaseMs: 60 * 60_000,
+        backoffMaxMs: 60 * 60_000,
+      });
+    // One broken feed on a Topic, and one registry Source no Topic follows, so
+    // one cycle leaves a Source held back beside one that has never started.
+    await insertTopicWithSources(topicRepo, userRepo, {
+      id: 't',
+      userId: 'u',
+      sourceIds: ['reuters'],
+    });
+    fetcherForUrl(
+      'https://www.reuters.com/rss/topNews',
+      new FailingFeedFetcher('upstream 503'),
+    );
+    await scheduler.tick();
+
+    const status = await restart().statusHydrated();
+    const reuters = status.sources.find((s) => s.sourceId === 'reuters');
+    const guardian = status.sources.find((s) => s.sourceId === 'the-guardian');
+
+    // The broken one is held back, and the dashboard says that is why.
+    expect(reuters?.servingBackoff).toBe(true);
+    expect(reuters?.nextAttemptAt).toEqual(new Date('2026-09-02T13:00:00Z'));
+
+    // The untouched one has no next attempt at all, which is a Source that has
+    // not started rather than one late for a slot it never had.
+    expect(guardian?.lastPolledAt).toBeNull();
+    expect(guardian?.consecutiveFailures).toBe(0);
+    expect(guardian?.servingBackoff).toBe(false);
+    expect(guardian?.nextAttemptAt).toBeNull();
+
+    // Once the window has passed the Source is no longer being held back, even
+    // though it is still mid-streak — it is waiting to be retried, not waiting.
+    clock.advance(2 * 60 * 60_000);
+    const later = await scheduler.statusHydrated();
+    expect(
+      later.sources.find((s) => s.sourceId === 'reuters')?.servingBackoff,
+    ).toBe(false);
   });
 
   it('produces a status report covering every registered source', async () => {
@@ -622,6 +779,51 @@ describe('IngestScheduler', () => {
     clock.advance(2 * 60 * 60_000);
     await scheduler.tick();
     expect(attempts).toBe(2);
+  });
+
+  it('keeps a healthy Source on its own cadence when a sibling\'s backoff wakes the loop early', async () => {
+    // The loop wakes early to retry a Source that is serving a short backoff, and
+    // every other Source is on that cycle. A Source that already had a good poll
+    // must still not be reached out to again until its interval has gone: the
+    // early wake-up is about the broken one, not about everybody.
+    const { scheduler, topicRepo, userRepo, fetcherForUrl, clock } = await buildHarness({
+      intervalMs: 30 * 60_000,
+      backoffBaseMs: 60_000,
+    });
+    await insertTopicWithSources(topicRepo, userRepo, {
+      id: 't',
+      userId: 'u',
+      sourceIds: ['reuters', 'the-guardian'],
+    });
+    fetcherForUrl(
+      'https://www.reuters.com/rss/topNews',
+      new FailingFeedFetcher('boom'),
+    );
+
+    const guardianPolls: number[] = [];
+    fetcherForUrl('https://www.theguardian.com/rss', {
+      async fetch() {
+        guardianPolls.push(clock.clock.now().getTime());
+        return { entries: [] };
+      },
+    });
+
+    // Four cycles, each just after the broken Source's one-minute backoff has
+    // elapsed, so every one of them is an early wake-up rather than a cadence.
+    for (let i = 0; i < 4; i++) {
+      clock.advance(61_000);
+      await scheduler.tick();
+    }
+
+    expect(
+      guardianPolls.length,
+      'a Source on its normal cadence was polled on every early wake-up',
+    ).toBe(1);
+
+    // Past the interval it is polled again, on the normal cadence.
+    clock.advance(30 * 60_000);
+    await scheduler.tick();
+    expect(guardianPolls).toHaveLength(2);
   });
 
   it('polls a healthy Source on every cycle, with no backoff to wait out', async () => {

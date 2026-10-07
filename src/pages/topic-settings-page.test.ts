@@ -15,6 +15,7 @@ import {
 } from '../testing/test-clocks.js';
 import { DrizzleSourceRepo } from '../repos/source-repo.js';
 import { DrizzleTopicRepo } from '../repos/topic-repo.js';
+import { NO_BACKOFF } from '../domain/types.js';
 import type { TopicId } from '../domain/types.js';
 
 const NOW = new Date('2026-09-02T12:00:00Z');
@@ -73,6 +74,7 @@ async function signInWithTopic(): Promise<Harness> {
       feedUrl: null,
       lastPolledAt: null,
       lastSuccessAt: null,
+      backoff: NO_BACKOFF,
     });
   }
   await topicRepo.addSource('topic-1', 'wire-reuters');

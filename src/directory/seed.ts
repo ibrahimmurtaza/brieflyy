@@ -151,10 +151,11 @@ export async function applyDirectorySeed(
   // Upsert, not insert-and-ignore. A Source's name, homepage and feed URL are
   // facts the registry owns, so a database created against an older seed.json
   // has to be brought up to date or it keeps Sources that can never be
-  // ingested — silently, with no error to notice. last_polled_at and
-  // last_success_at are deliberately untouched: they are this installation's
-  // poll history, and the backoff is computed from them, so writing them here
-  // would clear every Source's failure streak on each boot.
+  // ingested — silently, with no error to notice. The poll history and the
+  // failure backoff are deliberately untouched: they are this installation's
+  // record of what has happened to each Source, and writing them here would clear
+  // every Source's failure streak on each boot, which is the one thing the
+  // backoff has to outlast.
   for (const s of seed.sources) {
     await db
       .insert(sources)

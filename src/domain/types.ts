@@ -100,6 +100,34 @@ export type ArticleId = string;
 export type StoryId = string;
 export type EntityId = string;
 
+/**
+ * The failure backoff one Source is serving out.
+ *
+ * Held on the Source rather than in the ingest scheduler, because the whole
+ * reason for a backoff is to outlast the process that started it: a deploy that
+ * cleared every streak would put every broken feed straight back into the next
+ * cycle's path, which is the thing the backoff exists to prevent.
+ */
+export interface SourceBackoff {
+  /** How many polls in a row have failed, and so what the next delay is sized from. */
+  readonly consecutiveFailures: number;
+  /** What the last of those failures said. Cleared with the rest on a success. */
+  readonly lastError: string | null;
+  /**
+   * When this Source may be polled again. Null when there is no backoff to serve
+   * out — which is both a Source that has never been polled and one that has
+   * recovered — so the two are told apart by `consecutiveFailures`.
+   */
+  readonly nextAttemptAt: Date | null;
+}
+
+/** No failures recorded, nothing waiting out. See {@link SourceBackoff}. */
+export const NO_BACKOFF: SourceBackoff = {
+  consecutiveFailures: 0,
+  lastError: null,
+  nextAttemptAt: null,
+};
+
 export interface Source {
   readonly id: SourceId;
   readonly slug: string;
@@ -108,6 +136,8 @@ export interface Source {
   readonly feedUrl: string | null;
   readonly lastPolledAt: Date | null;
   readonly lastSuccessAt: Date | null;
+  /** What this installation's poll history says about polling this Source again. */
+  readonly backoff: SourceBackoff;
 }
 
 export interface TopicTemplate {

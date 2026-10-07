@@ -16,6 +16,7 @@ import { DrizzleSourceRepo } from '../repos/source-repo.js';
 import { DrizzleStoryRepo } from '../repos/story-repo.js';
 import { DrizzleTopicRepo } from '../repos/topic-repo.js';
 import { DrizzleUserRepo } from '../repos/user-repo.js';
+import { NO_BACKOFF } from '../domain/types.js';
 import type { Source, TopicCategory, TopicId, UserId } from '../domain/types.js';
 import { StaticFeedFetcher, makeEntry, BODY_A, BODY_B } from './test-constants.js';
 
@@ -59,6 +60,7 @@ async function buildService(opts: BuildInput = {}): Promise<BuildResult> {
     feedUrl: 'https://www.reuters.com/rss/topNews',
     lastPolledAt: null,
     lastSuccessAt: null,
+    backoff: NO_BACKOFF,
   };
   const guardian: Source = {
     id: 'the-guardian',
@@ -68,6 +70,7 @@ async function buildService(opts: BuildInput = {}): Promise<BuildResult> {
     feedUrl: 'https://www.theguardian.com/rss',
     lastPolledAt: null,
     lastSuccessAt: null,
+    backoff: NO_BACKOFF,
   };
   await sourceRepo.insert(reuters);
   await sourceRepo.insert(guardian);
