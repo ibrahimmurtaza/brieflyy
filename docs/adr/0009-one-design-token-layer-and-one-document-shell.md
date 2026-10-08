@@ -67,7 +67,9 @@ and a preconnect, for a system stack that is already installed everywhere.
 
 The semantic values are chosen against their own backgrounds and the ratios are
 written into the header comment of `src/pages/styles.ts`, so a later edit knows
-what it has to keep:
+what it has to keep. `src/pages/styles.test.ts` computes every one of them from the
+resolved tokens rather than trusting the comment, so the table below cannot go on
+asserting a ratio the stylesheet has stopped having:
 
 | Token | Value | On | Ratio |
 |---|---|---|---|
@@ -76,8 +78,18 @@ what it has to keep:
 | `--color-link` | `#1856c4` | canvas | 6.63:1 |
 | `--color-primary` | `#1b5fd0` | white text | 5.84:1 |
 | `--color-danger` | `#b00020` | canvas | 7.33:1 |
+| `--color-success` | `#19732f` | canvas | 5.94:1 |
 | `--color-border` | `#767676` | canvas | 4.54:1 (3:1 needed) |
 | `--color-focus-ring` | `#1b5fd0` | canvas | 5.84:1 (3:1 needed) |
+
+`--color-success` is `#19732f` rather than the `#1a7f37` this decision originally
+recorded, and it is the first thing the check found that the comment did not: the
+old value was 5.08:1 on the canvas and 4.47:1 on `--color-success-surface`, so the
+`.callout--success` background cost a step and the success copy inside it fell
+under AA while both tokens still looked fine in isolation. A contrast ratio belongs
+to a *pair*, and the pairs that matter are the ones a component rule makes rather
+than the ones a token declares — so `styles.test.ts` checks the documented pairs
+and the fourteen the component rules actually draw.
 
 `--color-primary` is darker than the `#1f6feb` the application used. That value
 passes AA as link text by 0.13 of a ratio and fails as a button fill carrying

@@ -15,6 +15,13 @@ import {
 } from '../testing/test-clocks.js';
 import { WRITE_GUARD_EXEMPTIONS, type RegisteredRoute } from './access.js';
 
+/**
+ * What this file holds the build over, phrased as the Tests section's bullet for
+ * it does, because `docs-agreement.test.ts` holds the two to each other.
+ */
+export const GUARD =
+  'every registered route that submits something is behind the cross-site guard';
+
 class EmptyFeedFetcher implements FeedFetcher {
   async fetch(_url: string): Promise<RawFeed> {
     return { entries: [] };

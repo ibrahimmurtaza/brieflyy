@@ -12,6 +12,13 @@ import {
 } from '../testing/test-clocks.js';
 import type { FeedFetcher, RawFeed } from '../ingest/feed-fetcher.js';
 
+/**
+ * The sentence the Tests section's bullet for this file leads with, so that
+ * `docs-agreement.test.ts` can hold the two to each other rather than holding the
+ * bullet against a marker that says nothing about what is checked.
+ */
+export const GUARD = 'every registered route is public by allowlist';
+
 class EmptyFeedFetcher implements FeedFetcher {
   async fetch(_url: string): Promise<RawFeed> {
     return { entries: [] };

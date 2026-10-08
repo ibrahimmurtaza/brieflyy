@@ -7,6 +7,12 @@ import { describe, expect, it } from 'vitest';
 import { createInMemorySqliteDriver } from './client.js';
 import { applySchema } from './migrate.js';
 
+/**
+ * Said here and in the Tests section's bullet alike; `docs-agreement.test.ts`
+ * compares the two, so a guard cannot claim one thing and be described as another.
+ */
+export const GUARD = 'the declared schema and the applied DDL agree';
+
 const DB_DIR = resolve(dirname(fileURLToPath(import.meta.url)));
 const SCHEMA_TS = readFileSync(join(DB_DIR, 'schema.ts'), 'utf8');
 
