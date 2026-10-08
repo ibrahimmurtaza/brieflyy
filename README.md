@@ -480,7 +480,8 @@ so a shape change that touches nullability has to move both.
 src/
 ├── app.ts                 # createApp() — Fastify factory
 ├── server.ts              # process entrypoint (loads .env, applies schema, listens)
-├── app-wiring.ts          # the deferral list app-wiring.test.ts holds the app to
+├── app-wiring.ts          # the two lists app-wiring.test.ts holds the app to, and
+│                          # the rules that read them
 ├── env.ts                 # the only module that reads configuration
 ├── config.ts              # shared constants
 │
@@ -566,10 +567,19 @@ Four of the six have a directory of their own, and two do not:
 
 ### What is not wired into the application
 
-`src/app-wiring.test.ts` walks the import closure of `server.ts` and `app.ts` and
-fails when an exported `*Service` is in neither, unless `DEFERRED_SERVICES` in
-`src/app-wiring.ts` names it against a ticket number. That list is empty, so there is
-no service that is built and unreachable. These modules are outside the closure on
+`src/app-wiring.test.ts` walks the import closure of `server.ts` and `app.ts`,
+reads every exported class out of the syntax tree, and fails when one is in neither
+and nothing constructs it. A class is named in one of the two lists in
+`src/app-wiring.ts` or it is reported. `DEFERRED_SERVICES` is for application code
+that exists and is not wired yet, and every entry in it names the ticket that will
+wire the class. That list is empty, so there is no service that is built and
+unreachable — and the emptiness is a claim the guard checks against the list rather
+than one the prose asserts. `REACHED_BY_SUITES` is for the six classes that are test
+doubles rather than application code, and each names the module that reaches it; a
+double the application constructed would be application code in the wrong list, and
+one no suite constructs is dead code, so both of those fail too.
+
+These modules are outside the closure on
 purpose, and each is reached by something other than a request:
 
 | Module | Reached by |
@@ -666,15 +676,33 @@ signed-in User at `/admin/ingest` and `/admin/briefs`.
 pnpm test
 ```
 
-The suite is 97 test files across `src/`, one per module, holding 1,612 cases —
-Vitest prints the live figure at the end of every run. `docs-agreement.test.ts`
-checks the file count and cannot check the case count without running the suite it
-lives in, so that one number is worth reading off a run rather than trusting.
-Alongside the behavioural suites, six
-of the files are guards that fail the build when the shape of the system drifts:
+The suite is 98 test files across `src/` holding 1,678 cases — Vitest prints the
+live figure at the end of every run. `docs-agreement.test.ts` checks the file
+count and cannot check the case count without running the suite it lives in, so
+that one number is worth reading off a run rather than trusting.
 
-- `app-wiring.test.ts` — every `*Service` is constructed by the application
-  (the entrypoint or `createApp`) or explicitly deferred to a ticket.
+The layout is **78 of the 139 modules** under `src/` having a sibling test file of
+the same name. The other 61 are reached by a suite named for what it covers rather
+than for one module — `repos/oauth-repos.test.ts` over four repositories,
+`pages/topic-page.test.ts` over the routes that render a Topic — and some are
+test-only helpers, entrypoints and the two modules whose behaviour is a shape
+rather than a decision (`src/env.ts`, `src/db/schema.ts`). A module without a
+sibling file is not a module without a test; both numbers are here because "one per
+module" was the claim once and sixty-one of them had none.
+
+Alongside the behavioural suites, seven
+of the files are guards that fail the build when the shape of the system drifts.
+Each one exports `GUARD` — the sentence below that it holds the build over — and
+`docs-agreement.test.ts` finds the guards by that export rather than by a list of
+its own, so the list cannot fall behind the files: a guard added here and not named
+below fails the build, and a guard that stops exporting is caught by this file still
+naming it. The convention has one gap, and it is a real one: a brand new guard file
+that forgets the export and is not named below is indistinguishable from a
+behavioural suite, and nothing here can say otherwise.
+
+- `app-wiring.test.ts` — every class the application is built from is constructed
+  by it, or is named in `src/app-wiring.ts` with the ticket or the module that
+  accounts for it.
 - `route-guard.test.ts` — every registered route is public by allowlist or
   refuses an anonymous request.
 - `write-guard.test.ts` — every registered route that submits something is behind
@@ -683,11 +711,14 @@ of the files are guards that fail the build when the shape of the system drifts:
 - `env-example.test.ts` — configuration is read in one module, and `.env.example`
   documents exactly the variables it reads.
 - `schema-agreement.test.ts` — the declared schema and the applied DDL agree.
+- `styles.test.ts` — the contrast ratios the stylesheet's header comment documents
+  are the ratios its tokens actually hold, and each documented pair clears the
+  minimum its own note claims.
 - `docs-agreement.test.ts` — the documents agree with the code: every script in
   `package.json` is in the commands block and every command in it is a script, the
   architecture tree names every directory under `src/` and no others, the status
-  table has a row per ticket, the counts above are the counts on disk, and every
-  ADR the README or the glossary points at exists.
+  table has a row per ticket, the counts above are the counts on disk, every guard
+  on disk is named here, and every ADR the README or the glossary points at exists.
 
 The rest cover the auth and OAuth flows, onboarding, ingest, clustering, brief
 planning and rendering, feedback, trends, discover, archive search, unsubscribe,

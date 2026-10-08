@@ -22,7 +22,7 @@
  *   --color-link        #1856c4 on #ffffff    6.63:1  link text
  *   --color-primary     #1b5fd0 with #ffffff  5.84:1  button fill
  *   --color-danger      #b00020 on #ffffff    7.33:1  error copy
- *   --color-success     #1a7f37 on #ffffff    5.08:1  success copy
+ *   --color-success     #19732f on #ffffff    5.94:1  success copy
  *   --color-border      #767676 on #ffffff    4.54:1  control boundary (needs 3:1)
  *   --color-focus-ring  #1b5fd0 on #ffffff    5.84:1  focus indicator (needs 3:1)
  */
@@ -52,7 +52,7 @@ export const STYLESHEET = `/* Brieflyy design tokens and page rules. Generated o
 
   --green-50: #e6f4ea;
   --green-200: #a3d4a8;
-  --green-700: #1a7f37;
+  --green-700: #19732f;
 
   --amber-50: #fff5d6;
   --amber-300: #e0c66b;

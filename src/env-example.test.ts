@@ -4,6 +4,13 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
+/**
+ * The Tests section's bullet for this file opens with this sentence, and
+ * `docs-agreement.test.ts` requires the bullet to carry it — so the two cannot
+ * end up describing different checks.
+ */
+export const GUARD = 'configuration is read in one module';
+
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)));
 const REPO = resolve(SRC, '..');
 const ENV_MODULE = join(SRC, 'env.ts');
