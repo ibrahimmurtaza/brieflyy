@@ -5,6 +5,18 @@ import { createApp } from '../app.js';
 import type { Db } from '../db/client.js';
 import { ConsoleEmailTransport } from '../email/console-transport.js';
 import { DrizzleBriefJobRunRepo } from '../repos/brief-job-run-repo.js';
+import { DrizzleBriefPlanRepo } from '../repos/brief-plan-repo.js';
+import { DrizzleBriefSnapshotRepo } from '../repos/brief-snapshot-repo.js';
+import { DrizzleEmailDeliveryRepo } from '../repos/email-delivery-repo.js';
+import { DrizzleTopicRepo } from '../repos/topic-repo.js';
+import { DrizzleUserRepo } from '../repos/user-repo.js';
+import {
+  makeBriefPlan,
+  makeBriefSnapshot,
+  makeEmailDelivery,
+  makeTopic,
+  makeUser,
+} from '../testing/fixtures.js';
 import { createTestDb } from '../testing/test-db.js';
 import { extractMagicLinkToken } from '../testing/email.js';
 import {
@@ -13,6 +25,7 @@ import {
   resetDeterministic,
 } from '../testing/test-clocks.js';
 import type { Clock } from '../domain/clock.js';
+import type { TopicId } from '../domain/types.js';
 
 interface TestApp {
   readonly app: FastifyInstance;
@@ -21,6 +34,10 @@ interface TestApp {
   readonly clock: Clock;
   readonly jobRuns: DrizzleBriefJobRunRepo;
   signIn(): Promise<string>;
+  /** A User who signed up at `signedUpAt`, with no brief of any kind. */
+  signUp(id: string, signedUpAt: Date): Promise<void>;
+  /** One brief the transport took, `sentAt` after that User signed up. */
+  sendBrief(userId: string, sentAt: Date): Promise<void>;
 }
 
 const NOW = new Date('2026-09-02T12:00:00Z');
@@ -56,7 +73,46 @@ async function buildApp(): Promise<TestApp> {
     return header.split(';')[0]!;
   }
 
-  return { app, transport, db, clock, jobRuns: new DrizzleBriefJobRunRepo(db), signIn };
+  async function signUp(id: string, signedUpAt: Date): Promise<void> {
+    await new DrizzleUserRepo(db).insert(makeUser({ id, createdAt: signedUpAt }));
+  }
+
+  async function sendBrief(userId: string, sentAt: Date): Promise<void> {
+    const topicId = `topic-${userId}` as TopicId;
+    await new DrizzleTopicRepo(db).insert(makeTopic({ id: topicId, userId }));
+    await new DrizzleBriefPlanRepo(db).insert(
+      makeBriefPlan({ id: `plan-${userId}`, topicId, userId, createdAt: sentAt }),
+    );
+    await new DrizzleBriefSnapshotRepo(db).insert(
+      makeBriefSnapshot({
+        id: `snapshot-${userId}`,
+        briefPlanId: `plan-${userId}`,
+        userId,
+        topicId,
+        createdAt: sentAt,
+      }),
+    );
+    await new DrizzleEmailDeliveryRepo(db).insert(
+      makeEmailDelivery({
+        id: `delivery-${userId}`,
+        userId,
+        topicId,
+        briefSnapshotId: `snapshot-${userId}`,
+        sentAt,
+      }),
+    );
+  }
+
+  return {
+    app,
+    transport,
+    db,
+    clock,
+    jobRuns: new DrizzleBriefJobRunRepo(db),
+    signIn,
+    signUp,
+    sendBrief,
+  };
 }
 
 describe('brief status routes', () => {
@@ -257,5 +313,99 @@ describe('brief status routes', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.body).toContain('<em>never</em>');
+  });
+
+  it('counts the Users a first brief arrived for, and how many there are to count', async () => {
+    // Two Users, one of them served inside a day of signing up and one of them
+    // served three days in. The second is why the count is reported beside the
+    // number of Users rather than on its own: 1 of what is the reading, and 1 on
+    // its own is a number nobody can act on.
+    const cookie = await ctx.signIn();
+    const signedUpAt = new Date('2026-08-30T09:00:00Z');
+    await ctx.signUp('user-early', signedUpAt);
+    await ctx.signUp('user-late', signedUpAt);
+    await ctx.sendBrief('user-early', new Date('2026-08-30T18:00:00Z'));
+    await ctx.sendBrief('user-late', new Date('2026-09-02T09:00:00Z'));
+
+    const res = await ctx.app.inject({
+      method: 'GET',
+      url: '/api/briefs/status',
+      headers: { cookie },
+    });
+
+    // Three Users: the one who just signed in through the magic link, and the two
+    // above.
+    expect((res.json() as { activation: unknown }).activation).toEqual({
+      activated: 1,
+      signedUp: 3,
+      windowHours: 24,
+    });
+  });
+
+  it('says the window it measured the activation count over', async () => {
+    // A count of Users is only a fact about a window, and a number with the
+    // window left out of it is one an operator has to guess at.
+    const cookie = await ctx.signIn();
+
+    const res = await ctx.app.inject({
+      method: 'GET',
+      url: '/api/briefs/status',
+      headers: { cookie },
+    });
+
+    const activation = (res.json() as { activation: { windowHours: number } }).activation;
+    expect(activation.windowHours).toBe(24);
+  });
+
+  it('reports no activated User for an installation that has served none', async () => {
+    // Zero of each rather than nothing at all: an installation where every User
+    // signed up and none has been served is a different thing from an
+    // installation with no Users.
+    const cookie = await ctx.signIn();
+
+    const res = await ctx.app.inject({
+      method: 'GET',
+      url: '/api/briefs/status',
+      headers: { cookie },
+    });
+
+    expect((res.json() as { activation: unknown }).activation).toMatchObject({
+      activated: 0,
+      signedUp: 1,
+    });
+  });
+
+  it('renders the activation count on the dashboard, and reads nothing else as it', async () => {
+    // The page's other numbers are one pass's, and a User's first brief is not a
+    // pass — so the label has to say which it is, or the same "1" on this page
+    // reads as both.
+    const cookie = await ctx.signIn();
+    await ctx.jobRuns.insert({
+      id: 'run-1',
+      startedAt: new Date('2026-09-02T12:00:00Z'),
+      finishedAt: new Date('2026-09-02T12:00:04Z'),
+      sentCount: 7,
+      failureCount: 1,
+      generation: { writtenClusters: 21, calls: 24, discardedBullets: 2 },
+    });
+    const signedUpAt = new Date('2026-08-30T09:00:00Z');
+    await ctx.signUp('user-early', signedUpAt);
+    await ctx.sendBrief('user-early', new Date('2026-08-30T18:00:00Z'));
+
+    const res = await ctx.app.inject({
+      method: 'GET',
+      url: '/admin/briefs',
+      headers: { cookie },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain('Users whose first brief arrived within 24 hours of signing up');
+    expect(res.body).toContain('Users signed up');
+    // Two Users: the one signed in through the magic link and the one above. The
+    // pass's own numbers are untouched by any of it.
+    expect(res.body).toMatch(/Users signed up<\/dt><dd>2<\/dd>/);
+    expect(res.body).toMatch(
+      /Users whose first brief arrived within 24 hours of signing up<\/dt><dd>1<\/dd>/,
+    );
   });
 });
