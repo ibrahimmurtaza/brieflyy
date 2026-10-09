@@ -122,6 +122,16 @@ export class IngestScheduler {
    * nothing is polled immediately however long this map has known about it.
    */
   private backoffs = new Map<SourceId, SourceBackoff>();
+  /**
+   * The Sources the last cycle reached, which is the only set whose next attempts
+   * can say anything about when the loop is next due.
+   *
+   * A Source no live Topic follows is not polled by any cycle, so nothing ever
+   * moves its next attempt forward: the date on its row is whatever the last
+   * process that could reach it left there. Taking that date into account is how a
+   * Source nobody follows ends up holding the loop awake forever.
+   */
+  private reachableSourceIds: ReadonlySet<SourceId> = new Set();
   private lastCycleAt: Date | null = null;
   private lastCycleId: string | null = null;
   private nextDueAt: Date | null = null;
@@ -170,6 +180,12 @@ export class IngestScheduler {
     const report = await this.registry.ingestOnce({
       isDue: (sourceId, at) => this.isSourceDue(sourceId, at),
     });
+    // The cycle's own list of what it reached, kept so the next due time is worked
+    // out from the Sources a cycle can actually poll rather than from every row in
+    // the registry. Skipped Sources are in this list too: being held until later is
+    // a fact about a Source the cycle did reach, and it is exactly the kind that
+    // should wake the loop early.
+    this.reachableSourceIds = new Set(report.sources.map((r) => r.sourceId));
     await this.applyReportBackoff(report, now);
     // After the backoff state, so the cycle is finished as far as the registry
     // and the scheduler are concerned before anything downstream reads what it
@@ -343,12 +359,26 @@ export class IngestScheduler {
     return new Date(source.lastPolledAt.getTime() + this.intervalMs());
   }
 
+  /**
+   * When the next cycle is due: a whole interval from now, brought forward by
+   * whichever Source this cycle reached is asking to be polled sooner.
+   *
+   * Only the Sources the last cycle reached. The registry holds Sources no live
+   * Topic follows, and no cycle will ever poll them, so their next attempt is not
+   * a time this loop has to be awake for — it is a date nothing is going to move.
+   * Left in the running of this, one of them sitting on an overdue date holds the
+   * due time in the past forever: the loop waits zero, wakes, finds every Source
+   * it can reach either skipped or freshly scheduled, and asks again. A cycle that
+   * does real work per pass therefore becomes a spin that pegs a core and starves
+   * the event loop the very network calls the rest of the app depends on.
+   */
   private computeNextDueAt(now: Date): Date {
     let earliest = new Date(now.getTime() + this.intervalMs());
-    for (const backoff of this.backoffs.values()) {
-      if (backoff.nextAttemptAt === null) continue;
-      if (backoff.nextAttemptAt.getTime() < earliest.getTime()) {
-        earliest = backoff.nextAttemptAt;
+    for (const sourceId of this.reachableSourceIds) {
+      const nextAttemptAt = this.backoffs.get(sourceId)?.nextAttemptAt;
+      if (nextAttemptAt === null || nextAttemptAt === undefined) continue;
+      if (nextAttemptAt.getTime() < earliest.getTime()) {
+        earliest = nextAttemptAt;
       }
     }
     return earliest;

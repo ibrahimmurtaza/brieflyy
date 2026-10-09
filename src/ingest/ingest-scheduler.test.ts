@@ -709,6 +709,107 @@ describe('IngestScheduler', () => {
     ).not.toBeNull();
   });
 
+  it('does not let a Source no live Topic follows hold the loop awake', async () => {
+    // The registry outlives the Topics naming its Sources. A Source left on only
+    // removed Topics is never polled, so the date on its row is never moved — and
+    // while the scheduler reads it as a due time it pins the next cycle in the
+    // past. The loop then waits zero and starts again, and each pass runs the
+    // whole after-cycle pipeline, so the spin pegs a core and starves the event
+    // loop the rest of the app's requests depend on.
+    const { scheduler, topicRepo, userRepo, sourceRepo, guardian, clock } =
+      await buildHarness({ intervalMs: 30 * 60 * 1000 });
+    await insertTopicWithSources(topicRepo, userRepo, {
+      id: 't',
+      userId: 'u',
+      sourceIds: ['reuters'],
+    });
+
+    // The guardian is in the registry and on no Topic at all, sitting on a next
+    // attempt long past: the shape left behind when a Topic is removed.
+    await sourceRepo.recordBackoff(guardian.id, {
+      consecutiveFailures: 0,
+      lastError: null,
+      nextAttemptAt: new Date(clock.clock.now().getTime() - 24 * 60 * 60_000),
+    });
+
+    const report = await scheduler.tick();
+    expect(report.sources.map((s) => s.sourceId)).toEqual(['reuters']);
+
+    const nextDueAt = scheduler.status().nextDueAt;
+    expect(nextDueAt).not.toBeNull();
+    // A whole interval on, which is what an unreachable Source must not be able
+    // to shorten: the wait cannot be zero, because zero is a spin.
+    expect(nextDueAt!.getTime()).toBeGreaterThanOrEqual(
+      clock.clock.now().getTime() + 30 * 60 * 1000,
+    );
+  });
+
+  it('still wakes early for a reached Source that is serving a short backoff', async () => {
+    // The fix above must not cost the scheduler the wake-ups it exists for: a
+    // Source on a live Topic that failed is one the cycle reached, and its backoff
+    // is a time the loop has to be awake for even though it is far sooner than the
+    // cadence.
+    const { scheduler, topicRepo, userRepo, fetcherForUrl, clock } =
+      await buildHarness({
+        intervalMs: 30 * 60 * 1000,
+        backoffBaseMs: 60_000,
+      });
+    await insertTopicWithSources(topicRepo, userRepo, {
+      id: 't',
+      userId: 'u',
+      sourceIds: ['reuters'],
+    });
+    fetcherForUrl(
+      'https://www.reuters.com/rss/topNews',
+      new FailingFeedFetcher('boom'),
+    );
+
+    await scheduler.tick();
+
+    const nextDueAt = scheduler.status().nextDueAt;
+    expect(nextDueAt).not.toBeNull();
+    expect(nextDueAt!.getTime()).toBe(clock.clock.now().getTime() + 60_000);
+  });
+
+  it('asks for no wait only once, when a reached Source is already overdue', async () => {
+    // A Source on a live Topic whose cadence went by while the process was down is
+    // legitimately due now, so the first cycle after a restart must not wait for
+    // it. What it must not do is keep asking: the cycle polls the Source, moves
+    // its next attempt on to the cadence, and the loop goes back to waiting.
+    const { scheduler, topicRepo, userRepo, sourceRepo, reuters, clock } =
+      await buildHarness({ intervalMs: 60_000 });
+    await insertTopicWithSources(topicRepo, userRepo, {
+      id: 't',
+      userId: 'u',
+      sourceIds: ['reuters'],
+    });
+    await sourceRepo.recordBackoff(reuters.id, {
+      consecutiveFailures: 0,
+      lastError: null,
+      nextAttemptAt: new Date(clock.clock.now().getTime() - 60 * 60_000),
+    });
+
+    // The first two waits resolve at once so the cycle runs; the third never
+    // resolves, because a sleep that always resolves is a spin and the point of
+    // the test is that the loop no longer asks for one.
+    const waits: number[] = [];
+    scheduler.setSleepFn((ms) => {
+      waits.push(ms);
+      return waits.length <= 2 ? Promise.resolve() : new Promise<void>(() => {});
+    });
+
+    const runPromise = scheduler.runForever();
+    while (waits.length < 3) await new Promise((r) => setImmediate(r));
+    await scheduler.stop();
+    await runPromise;
+
+    // The first wait is the overdue Source; every wait after the cycle moved its
+    // next attempt forward is the cadence, not zero.
+    expect(waits[0]).toBeLessThanOrEqual(0);
+    expect(waits.slice(1)).not.toHaveLength(0);
+    expect(waits.slice(1).every((ms) => ms === 60_000)).toBe(true);
+  });
+
   it('retries a failing Source after its backoff, and stops retrying once it succeeds', async () => {
     const { scheduler, topicRepo, userRepo, setFetcher, clock } = await buildHarness({
       intervalMs: 1000,
