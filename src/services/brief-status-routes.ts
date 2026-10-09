@@ -8,6 +8,7 @@ import type { OnboardingService } from '../onboarding/onboarding-service.js';
 import type { BriefGeneration, BriefJobRun } from '../domain/types.js';
 import { NO_GENERATION } from '../domain/types.js';
 import type { EmailTransport } from '../email/transport.js';
+import type { ActivationMeasure, ActivationRepo } from '../repos/activation-repo.js';
 import type { ScheduledBriefService } from './scheduled-brief-service.js';
 
 export interface BriefStatusRoutesOptions {
@@ -19,6 +20,13 @@ export interface BriefStatusRoutesOptions {
   readonly emailTransport: EmailTransport;
   /** What the shell's header says about the signed-in operator. */
   readonly onboardingService: OnboardingService;
+  /**
+   * How many Users a first brief arrived for. The only number on either surface
+   * that is not about a pass of the job: a brief is what activates a User, and a
+   * page of per-pass counts cannot say whether the job is reaching the people who
+   * just arrived.
+   */
+  readonly activation: ActivationRepo;
 }
 
 /**
@@ -35,7 +43,7 @@ export async function registerBriefStatusRoutes(
   fastify: FastifyInstance,
   opts: BriefStatusRoutesOptions,
 ): Promise<void> {
-  const { scheduler, emailTransport, onboardingService } = opts;
+  const { scheduler, emailTransport, onboardingService, activation } = opts;
 
   fastify.get('/api/briefs/status', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
     if (!requireAuth(req, reply, { json: true })) return reply;
@@ -49,6 +57,7 @@ export async function registerBriefStatusRoutes(
       sentCount: lastRun?.sentCount ?? 0,
       failureCount: lastRun?.failureCount ?? 0,
       generation: lastRun?.generation ?? NO_GENERATION,
+      activation: serializeActivation(await activation.measure()),
     });
   });
 
@@ -60,11 +69,29 @@ export async function registerBriefStatusRoutes(
       provider: emailTransport.providerName,
       lastRun: status.lastRun,
       recentRuns: status.recentRuns,
+      activation: await activation.measure(),
       account: await resolveShellAccount(req.auth, onboardingService),
       requestToken: req.requestToken ?? null,
     });
     return reply.type('text/html; charset=utf-8').send(html);
   });
+}
+
+/**
+ * The measure as the JSON body carries it.
+ *
+ * The measure already names the window it was taken over, so it is passed through
+ * as it stands rather than rebuilt here: a second place that assembles the
+ * answer is a second place that can answer a slightly different one, and "how
+ * many Users received a first brief" is not a fact on its own — it is a fact about
+ * a day, and a reader handed only the count cannot tell which day.
+ */
+function serializeActivation(measure: ActivationMeasure): Record<string, unknown> {
+  return {
+    activated: measure.activated,
+    signedUp: measure.signedUp,
+    windowHours: measure.windowHours,
+  };
 }
 
 function serializeRun(run: BriefJobRun): Record<string, unknown> {
@@ -83,8 +110,29 @@ interface BriefDashboardInput {
   readonly provider: string;
   readonly lastRun: BriefJobRun | null;
   readonly recentRuns: readonly BriefJobRun[];
+  readonly activation: ActivationMeasure;
   readonly account: ShellAccount;
   readonly requestToken?: string | null;
+}
+
+/**
+ * How many Users a first brief arrived for, and how many there are.
+ *
+ * Two facts rather than one because a count on its own cannot be read: three
+ * Users served a first brief is a good morning for an installation of three and
+ * a bad one for an installation of three thousand. The label is generated from the
+ * measure's own window rather than written out, and says *first* because every
+ * other number on the page is one pass's and this one is a User's whole history
+ * so far.
+ */
+function activationFacts(activation: ActivationMeasure): readonly StatusFact[] {
+  return [
+    {
+      label: `Users whose first brief arrived within ${activation.windowHours} hours of signing up`,
+      value: factValue(activation.activated),
+    },
+    { label: 'Users signed up', value: factValue(activation.signedUp) },
+  ];
 }
 
 /**
@@ -119,6 +167,7 @@ function renderBriefDashboard(input: BriefDashboardInput): string {
       { label: 'Briefs sent', value: factValue(input.lastRun?.sentCount ?? 0) },
       { label: 'Briefs failed', value: factValue(input.lastRun?.failureCount ?? 0) },
       ...generationFacts(last),
+      ...activationFacts(input.activation),
     ],
     table: {
       heading: 'Recent passes',

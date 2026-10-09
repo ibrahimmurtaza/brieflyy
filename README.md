@@ -550,7 +550,9 @@ Four of the six have a directory of their own, and two do not:
   Cluster formation.
 - **Brief** — no directory: it is `services/brief-plan-service.ts`,
   `services/brief-snapshot-renderer.ts`, `services/scheduled-brief-service.ts` and
-  `services/brief-status-routes.ts`, plus `repos/brief-*-repo.ts`. A brief is
+  `services/brief-status-routes.ts`, plus `repos/brief-*-repo.ts` and
+  `repos/activation-repo.ts`, the one repository the status surface measures
+  activation through (ADR-0028). A brief is
   planned, rendered, stored and sent as one step, and the daily job is a trigger
   for that step rather than a second way of doing it.
 - **Feedback** — no directory: `services/feedback-service.ts`, `domain/feedback.ts`
@@ -674,18 +676,27 @@ waits for the work in flight before the database is closed. The first two are
 configurable (`INGEST_*`, `BRIEFS_*`) and both report what they last did to a
 signed-in User at `/admin/ingest` and `/admin/briefs`.
 
+`/admin/briefs` also reports one number that is not about a pass: how many Users
+received their first brief within 24 hours of signing up, beside how many Users
+there are and beside the window itself. It is read on demand off `users.created_at`
+and the first `sent` EmailDelivery of each User, so no row is written to count it
+and the counter cannot fall behind an inbox (ADR-0028). A refusal or an `unknown`
+outcome is not a brief received, and a User whose first one landed outside the
+window — later than a day, or earlier than the day they signed up — is not
+counted.
+
 ## Tests
 
 ```bash
 pnpm test
 ```
 
-The suite is 98 test files across `src/` holding 1,681 cases — Vitest prints the
+The suite is 99 test files across `src/` holding 1,694 cases — Vitest prints the
 live figure at the end of every run. `docs-agreement.test.ts` checks the file
 count and cannot check the case count without running the suite it lives in, so
 that one number is worth reading off a run rather than trusting.
 
-The layout is **78 of the 139 modules** under `src/` having a sibling test file of
+The layout is **79 of the 140 modules** under `src/` having a sibling test file of
 the same name. The other 61 are reached by a suite named for what it covers rather
 than for one module — `repos/oauth-repos.test.ts` over four repositories,
 `pages/topic-page.test.ts` over the routes that render a Topic — and some are

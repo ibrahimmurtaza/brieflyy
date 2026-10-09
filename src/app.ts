@@ -35,6 +35,7 @@ import { DrizzleBriefPlanRepo } from './repos/brief-plan-repo.js';
 import { DrizzleBriefSnapshotRepo } from './repos/brief-snapshot-repo.js';
 import { DrizzleBriefRunRepo } from './repos/brief-run-repo.js';
 import { DrizzleBriefJobRunRepo } from './repos/brief-job-run-repo.js';
+import { DrizzleActivationRepo } from './repos/activation-repo.js';
 import { DrizzleEmailDeliveryRepo } from './repos/email-delivery-repo.js';
 import { DrizzleUnsubscribeRepo } from './repos/unsubscribe-repo.js';
 import { AuthService } from './auth/auth-service.js';
@@ -259,6 +260,11 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
   const briefRunRepo = new DrizzleBriefRunRepo(opts.db);
   const briefJobRunRepo = new DrizzleBriefJobRunRepo(opts.db);
   const unsubscribeRepo = new DrizzleUnsubscribeRepo(opts.db);
+  // What activation is, measured rather than recorded: how many Users have been
+  // sent their first brief inside the window of signing up. Its own repository
+  // because the question is about Users and their deliveries together and about
+  // nothing else — no other reader wants a join of the two.
+  const activationRepo = new DrizzleActivationRepo(opts.db);
   // What the DiscoverTab measures. Built here rather than at the route because the
   // measurements are the same for every User and only the lookup that reads them
   // is per-request.
@@ -554,6 +560,7 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     scheduler: scheduledBriefService,
     emailTransport: opts.emailTransport,
     onboardingService,
+    activation: activationRepo,
   });
 
   if (opts.briefJobAutoStart === true) {

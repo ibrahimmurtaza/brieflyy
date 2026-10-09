@@ -10,7 +10,9 @@ import type {
   Cadence,
   Cluster,
   ClusterId,
+  DeliveryOutcome,
   DeliverySettings,
+  EmailDelivery,
   Entity,
   EntityId,
   FeedbackEvent,
@@ -319,6 +321,37 @@ export function makeBriefSnapshot(input: BriefSnapshotFixture): BriefSnapshot {
     text: input.text ?? 'A brief that was sent.',
     unsubscribeToken: `unsub-${input.id}`,
     globalUnsubscribeToken: `global-unsub-${input.id}`,
+  };
+}
+
+export interface EmailDeliveryFixture {
+  readonly id: string;
+  readonly userId: string;
+  readonly topicId: string;
+  readonly briefSnapshotId: string;
+  readonly sentAt: Date;
+  readonly outcome?: DeliveryOutcome;
+}
+
+/**
+ * One send attempt, whether or not the transport took the message.
+ *
+ * A fixture rather than an object per test because a delivery carries two
+ * required unsubscribe tokens and a generation report beside its own fields, and
+ * because a test about what a User received needs a delivery to have received
+ * anything at all.
+ */
+export function makeEmailDelivery(input: EmailDeliveryFixture): EmailDelivery {
+  return {
+    id: input.id,
+    userId: input.userId as UserId,
+    topicId: input.topicId as TopicId,
+    briefSnapshotId: input.briefSnapshotId,
+    sentAt: input.sentAt,
+    outcome: input.outcome ?? 'sent',
+    unsubscribeToken: `unsub-${input.id}`,
+    globalUnsubscribeToken: `global-unsub-${input.id}`,
+    generation: { writtenClusters: 0, calls: 0, discardedBullets: 0 },
   };
 }
 
