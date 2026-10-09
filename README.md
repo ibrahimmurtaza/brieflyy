@@ -654,7 +654,11 @@ the verifier cannot agree on the same mistake.
 Three loops run for the life of the process and all three stop on it. `IngestScheduler`
 polls every Source a Topic names (ADR-0003), leaving a Source whose feed is failing alone
 for a Backoff that grows with each failure and is held on the Source row, so a restart
-does not put every broken feed back into the next cycle (ADR-0026);
+does not put every broken feed back into the next cycle (ADR-0026). The loop's next
+wake-up is read off the Sources the last cycle could actually reach, because a Source
+on no live Topic is never polled and so never has its date moved — one of those
+sitting in the past would otherwise hold the loop at a zero wait for good
+(ADR-0029);
 `ScheduledBriefService` answers each of a
 User's Topics for the DeliverySlot its own Cadence puts it on (ADR-0011), except any
 the User or the Topic has unsubscribed from (ADR-0012). It claims each DeliverySlot
