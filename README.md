@@ -71,6 +71,7 @@ pnpm db:migrate          # apply the DDL in src/db/migrate.ts to DATABASE_URL
 pnpm db:generate         # writes SQL into ./drizzle that nothing here applies
 pnpm db:push             # drizzle's own diff; drops the Archive index. See below
 pnpm ingest:check-feeds  # poll every registry feed live; non-zero if one is not ingestible
+pnpm cluster:benchmark   # score Cluster grouping against the labelled pairs, over DATABASE_URL
 ```
 
 `pnpm db:migrate` is the command that applies DDL, and it is the one the "Changing
@@ -97,6 +98,18 @@ ingestible, which is not something a test can assert: a feed URL that 404s or
 returns an empty document looks perfectly fine to a test that never opens it. It
 reaches the network, so it is the one command here that is not part of
 `pnpm verify`.
+
+`pnpm cluster:benchmark` is the other one, and for the same kind of reason: it
+measures Cluster grouping against a real corpus, and a corpus with no real Topics
+in it would report a rule doing perfectly on nothing. It reads `DATABASE_URL`,
+forms every live Topic's Clusters with the rule in `src/domain/cluster-grouping.ts`
+— the same function `ClusterFormationService` calls — and scores that against the
+labelled Story pairs in `src/testing/cluster-pair-fixtures.ts`. It prints recall,
+precision, the largest Cluster, the Cluster count and the singleton proportion,
+all read off the corpus rather than off the clock, so two runs diff. It exits
+non-zero when a labelled pair cannot be resolved, because a report that quietly
+dropped pairs reads as a better rule than it is. `docs/cluster-grouping-baseline.md`
+records what the current rule scores and exactly how each number is defined.
 
 `pnpm typecheck` covers `src/`, which is where the unit tests live, and not
 `tests/e2e/`: `tsconfig.json` includes only `src/**/*.ts`, and Playwright compiles
@@ -506,6 +519,9 @@ src/
 ├── archive/               # the Archive view: the search results page. Its route is
 │                          # in pages/routes.ts, with the rest of the shell's; its
 │                          # full-text index is in db/archive-index.ts
+├── benchmark/             # the Cluster grouping benchmark: the labelled-pair scoring
+│                          # and the report (cluster-grouping-benchmark.ts), and the
+│                          # runner behind pnpm cluster:benchmark
 ├── billing/               # the PaymentProvider seam (Stripe), the BillingService, the
 │                          # Subscription settings surface and its five routes:
 │                          # GET /settings/billing, POST /billing/checkout,
@@ -588,6 +604,7 @@ purpose, and each is reached by something other than a request:
 | --- | --- |
 | `src/verify/` | `pnpm secrets:check`, and `pnpm verify` |
 | `src/ingest/check-feeds.ts` | `pnpm ingest:check-feeds` |
+| `src/benchmark/` | `pnpm cluster:benchmark`, and its scoring suite |
 | `src/ingest/test-constants.ts` | the ingest suites |
 | `src/testing/`, `src/app-wiring.ts` | the suites |
 
@@ -691,21 +708,21 @@ counted.
 pnpm test
 ```
 
-The suite is 99 test files across `src/` holding 1,694 cases — Vitest prints the
+The suite is 101 test files across `src/` holding 1,719 cases — Vitest prints the
 live figure at the end of every run. `docs-agreement.test.ts` checks the file
 count and cannot check the case count without running the suite it lives in, so
 that one number is worth reading off a run rather than trusting.
 
-The layout is **79 of the 140 modules** under `src/` having a sibling test file of
-the same name. The other 61 are reached by a suite named for what it covers rather
+The layout is **81 of the 144 modules** under `src/` having a sibling test file of
+the same name. The other 63 are reached by a suite named for what it covers rather
 than for one module — `repos/oauth-repos.test.ts` over four repositories,
 `pages/topic-page.test.ts` over the routes that render a Topic — and some are
 test-only helpers, entrypoints and the two modules whose behaviour is a shape
 rather than a decision (`src/env.ts`, `src/db/schema.ts`). A module without a
 sibling file is not a module without a test; both numbers are here because "one per
-module" was the claim once and sixty-one of them had none.
+module" was the claim once and sixty-three of them had none.
 
-Alongside the behavioural suites, seven
+Alongside the behavioural suites, eight
 of the files are guards that fail the build when the shape of the system drifts.
 Each one exports `GUARD` — the sentence below that it holds the build over — and
 `docs-agreement.test.ts` finds the guards by that export rather than by a list of
@@ -734,6 +751,10 @@ behavioural suite, and nothing here can say otherwise.
   architecture tree names every directory under `src/` and no others, the status
   table has a row per ticket, the counts above are the counts on disk, every guard
   on disk is named here, and every ADR the README or the glossary points at exists.
+- `cluster-pair-fixtures.test.ts` — the labelled pairs are the shape the benchmark
+  needs: pairs of Stories that are one event, a hard negative set that shares
+  entities or a recurring column with its partner, a note on each, and a set small
+  enough for a person to check.
 
 The rest cover the auth and OAuth flows, onboarding, ingest, clustering, brief
 planning and rendering, feedback, trends, discover, archive search, unsubscribe,
