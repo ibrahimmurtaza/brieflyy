@@ -1,4 +1,5 @@
 import type { Clock } from '../domain/clock.js';
+import { groupByEntityOverlap, sharedEntityCount } from '../domain/cluster-grouping.js';
 import { bulletsFrom, oneLinerFrom } from '../domain/cluster-text.js';
 import { clusterWindowStart } from '../domain/cluster-window.js';
 import type {
@@ -17,17 +18,6 @@ import type { StoryRepo } from '../repos/story-repo.js';
 import type { TopicRepo } from '../repos/topic-repo.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-/**
- * How much of its Entities two Stories must have in common to be in the same
- * Cluster, as a share of the larger of the two Entity sets.
- *
- * Half, not more, because a Story rarely has exactly as many Entities as the
- * Story it follows: the launch of a product is the same story as the launch of
- * that product by that company, even though the second names two things the
- * first did not.
- */
-const STORY_OVERLAP_THRESHOLD = 0.5;
 
 /**
  * The velocity a Cluster has to reach to be Active, in Stories per day.
@@ -67,6 +57,28 @@ export interface ClusterFormationServiceDeps {
   readonly clusterRepo: ClusterRepo;
   readonly topicRepo: TopicRepo;
   readonly clock: Clock;
+}
+
+/**
+ * The Entities grouping sees for each of a Topic's Stories.
+ *
+ * Exported rather than kept as a method because the benchmark reads it too, and
+ * a second copy of "which Articles of this Story are in scope for this Topic"
+ * would drift from the one that runs — which is exactly what the benchmark
+ * exists to catch.
+ */
+export async function entityIdsByStoryInScope(
+  topic: Topic,
+  stories: readonly Story[],
+  articleRepo: ArticleRepo,
+): Promise<readonly (readonly EntityId[])[]> {
+  const perStory = await Promise.all(
+    stories.map(async (story) => {
+      const articles = await articleRepo.listByStory(story.id);
+      return articles.filter((a) => topic.sourceIds.includes(a.sourceId));
+    }),
+  );
+  return entityIdsOf(perStory);
 }
 
 export class ClusterFormationService {
@@ -146,59 +158,28 @@ export class ClusterFormationService {
   /**
    * Split Stories into the groups that become Clusters.
    *
-   * Two Stories are linked when enough of their Entities overlap, and a group is
-   * every Story reachable from any other by a chain of such links. Closure
-   * rather than adjacency is the point: comparing only the Stories either side
-   * of each other in time would make the grouping a function of when things
-   * happened to arrive, so one Story landing between two related ones would
-   * pull them apart.
+   * The rule itself is in `domain/cluster-grouping.ts`, which the benchmark
+   * measures against real Topics as well, so that what is measured is what runs
+   * here. What is left here is the reading of it: the Entities of the Articles
+   * of a Story that this Topic actually follows, and the order each group comes
+   * back in.
    */
   private async groupStories(
     topic: Topic,
     stories: readonly Story[],
   ): Promise<readonly (readonly Story[])[]> {
     if (stories.length === 0) return [];
-    const entityIdsByStory = entityIdsOf(
-      await this.inScopeArticlesByStory(topic, stories),
+    const entityIdsByStory = await entityIdsByStoryInScope(
+      topic,
+      stories,
+      this.deps.articleRepo,
     );
 
-    const parent = stories.map((_, index) => index);
-    const find = (index: number): number => {
-      let root = index;
-      while (parent[root] !== root) root = parent[root]!;
-      let walk = index;
-      while (parent[walk] !== walk) {
-        const next = parent[walk]!;
-        parent[walk] = root;
-        walk = next;
-      }
-      return root;
-    };
-    const union = (a: number, b: number): void => {
-      const rootA = find(a);
-      const rootB = find(b);
-      if (rootA !== rootB) parent[rootB] = rootA;
-    };
-
-    for (let i = 0; i < stories.length; i++) {
-      for (let j = i + 1; j < stories.length; j++) {
-        if (this.overlaps(entityIdsByStory[i]!, entityIdsByStory[j]!)) {
-          union(i, j);
-        }
-      }
-    }
-
-    const byRoot = new Map<number, Story[]>();
-    for (let i = 0; i < stories.length; i++) {
-      const root = find(i);
-      const group = byRoot.get(root);
-      const story = stories[i]!;
-      if (group) group.push(story);
-      else byRoot.set(root, [story]);
-    }
-    // Ordered by first appearance so a set of Stories always forms the same
-    // Clusters in the same order, whichever order they were read in.
-    return [...byRoot.values()].map((group) =>
+    const groups = groupByEntityOverlap(
+      stories,
+      (_story, index) => entityIdsByStory[index]!,
+    );
+    return groups.map((group) =>
       [...group].sort((a, b) => a.lastSeenAt.getTime() - b.lastSeenAt.getTime()),
     );
   }
@@ -224,20 +205,6 @@ export class ClusterFormationService {
         return articles.filter((a) => topic.sourceIds.includes(a.sourceId));
       }),
     );
-  }
-
-  /**
-   * The share of the larger Entity set two Stories have in common.
-   *
-   * Two Stories with no Entities at all overlap by nothing, not by everything:
-   * a division by an empty set is not evidence they are the same story, and
-   * treating it as such would fuse every unrecognised Article in a Topic into
-   * one Cluster.
-   */
-  private overlaps(a: readonly EntityId[], b: readonly EntityId[]): boolean {
-    const larger = Math.max(a.length, b.length);
-    if (larger === 0) return false;
-    return sharedCount(new Set(a), new Set(b)) / larger >= STORY_OVERLAP_THRESHOLD;
   }
 
   private async finalizeCluster(
@@ -334,7 +301,7 @@ function rankArticles(articles: readonly Article[]): readonly Article[] {
   const centrality = entityIdsByArticle.map(
     (ids) =>
       entityIdsByArticle.filter(
-        (other) => other !== ids && sharedCount(ids, other) > 0,
+        (other) => other !== ids && sharedEntityCount(ids, other) > 0,
       ).length,
   );
   return articles
@@ -346,18 +313,6 @@ function rankArticles(articles: readonly Article[]): readonly Article[] {
         a.index - b.index,
     )
     .map((entry) => entry.article);
-}
-
-/** How many of `probe`'s Entities also appear in `other`. */
-function sharedCount(
-  probe: ReadonlySet<EntityId>,
-  other: ReadonlySet<EntityId>,
-): number {
-  let shared = 0;
-  for (const id of probe) {
-    if (other.has(id)) shared += 1;
-  }
-  return shared;
 }
 
 function mostRecent(stories: readonly Story[]): Story {
