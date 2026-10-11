@@ -32,8 +32,8 @@ _Avoid_: profile, credentials
 **Provider**: A sign-in Brieflyy offers that hands the identity check to somebody else, currently only Google. Whether one is offered is a property of the deployment, not of the User or the request: an instance with no Provider configured offers no Google button, and the routes behind one refuse rather than fail. See ADR-0019.
 _Avoid_: social login, SSO (when meaning the identity check rather than the protocol)
 
-**OnboardingState**: A User's progress through first-run topic selection and delivery-time setup. It is what decides which screen a User lands on after signing in, and nothing else: there is no activation event, no time limit and no measurement of one.
-**Not built**: the activation moment — a first brief landing within 24h of signup. Nothing in the application records one or waits for one, so this is a number with no counter behind it rather than a behaviour that is merely unmeasured.
+**OnboardingState**: A User's progress through first-run topic selection and delivery-time setup. It is what decides which screen a User lands on after signing in, and nothing else: nothing times a User out of a state, and nothing acts on a User reaching one late. Whether that progress turned into a brief anybody reads is **Activation**, which is measured rather than declared.
+**Not built**: acting on an activation. Nothing in the application is told when a User activates or fails to, so a User who signs up and is never served is counted rather than chased — the measure is read by an operator, and there is no path out of it into the product.
 _Avoid_: signup flow, first-run
 
 **DeliveryTime**: A per-User clock time at which that User's scheduled BriefSnapshots are generated and emailed. All of a User's Topics share one DeliveryTime.
@@ -165,6 +165,10 @@ _Avoid_: dead, expired
 _Avoid_: history, log
 
 ### Onboarding & discovery
+
+**Activation**: How many Users received their first brief within a day of signing up. A measure rather than an event, and read on demand rather than stored: it is derived from two facts the application already holds — when each User signed up, and when the transport took their first brief — so there is no row kept for the counting and none that can fall behind the arrivals behind it. Only a brief the provider took counts as received, so a refusal and an outcome Brieflyy never learned are not a User who has had a brief, and such a User is judged on the next one that did go out. Told by `/admin/briefs` and `/api/briefs/status`, beside the number of Users there are to have been activated: a count on its own says three without saying three of what. The window is part of the answer rather than an assumption behind it — it is stated on both surfaces and named in `ACTIVATION_WINDOW_MS`. See ADR-0028.
+**Not built**: waiting for one. Nothing subscribes to an activation, so the application never learns that a User who has signed up has not been served, and does nothing about it.
+_Avoid_: activation event, activation rate, conversion, onboarding completion
 
 **Directory**: The curated set of TopicTemplates Brieflyy ships. A User selecting a Directory entry clones it into a per-user Topic.
 _Avoid_: catalog, library
