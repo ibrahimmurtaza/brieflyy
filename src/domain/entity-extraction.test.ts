@@ -347,13 +347,29 @@ describe('canonicalEntityKey', () => {
   });
 
   it('folds a demonym onto the country it belongs to', () => {
-    // "Israeli" and "Israel" are one thing written two ways, and were two Entities
-    // that never overlapped. The fold is to the country's own name rather than to
-    // a code, so `America` stays `America` and `American` joins it.
-    expect(canonicalEntityKey('Israeli')).toBe('israel');
+    // An adjective modifying a noun is the country, and the fold is to the
+    // country's own name rather than to a code, so `America` stays `America` and
+    // `American` joins it. Not "Israeli company" though: `company` is an inner
+    // word and goes, leaving the adjective standing alone.
+    expect(canonicalEntityKey('West African')).toBe('west africa');
+    expect(canonicalEntityKey('Libyan National Army')).toBe('libya national army');
+    expect(canonicalEntityKey('Central African Republic')).toBe('central africa republic');
+    expect(canonicalEntityKey('Israeli Prime')).toBe('israel prime');
     expect(canonicalEntityKey('Israel')).toBe('israel');
-    expect(canonicalEntityKey('American')).toBe('america');
-    expect(canonicalEntityKey('Palestinian')).toBe('palestine');
+    expect(canonicalEntityKey('America')).toBe('america');
+  });
+
+  it('leaves a demonym standing alone as its own Entity', () => {
+    // Folding the bare adjective merges a rare Entity into a common one, which
+    // raises the country's document frequency and lowers its weight everywhere —
+    // the only fold in this module with a measured cost against it. The corpus
+    // keeps 10 such rows and 67 links this way.
+    expect(canonicalEntityKey('Israeli')).toBe('israeli');
+    expect(canonicalEntityKey('Australian')).toBe('australian');
+    expect(canonicalEntityKey('Americans')).toBe('americans');
+    // And it is still a partial name, so "Australian" in one Article is still
+    // known to be about something and is not mistaken for a head noun.
+    expect(isPartialName('australian')).toBe(true);
   });
 });
 

@@ -386,7 +386,20 @@ export function canonicalEntityKey(name: string): string {
   }
   // After the prefix, because "Former Israeli" is a former something in Israel
   // and the adjective is not in front of the country until the "former" has gone.
-  words = words.map((word) => DEMONYMS.get(word) ?? word);
+  //
+  // Only when there is a noun for it to modify. "Israeli company" is Israel, and
+  // folding it produces `israel company` — a rare Entity, adding no weight to the
+  // country's own. "Israeli" alone is a different problem: folding it into
+  // `israel` merges a rare Entity into a common one, which raises Israel's
+  // document frequency and so lowers its IDF weight in every Story that carries
+  // it. Measured over this corpus, that standalone fold is the only fold in this
+  // module that costs anything — one different-event family — because every pair
+  // whose whole overlap is that country falls with its weight. So the adjective
+  // folds and the bare demonym does not, and "Israeli" and "Israel" are two
+  // Entities where one was wanted.
+  if (words.length > 1) {
+    words = words.map((word) => DEMONYMS.get(word) ?? word);
+  }
   return words.join(' ');
 }
 

@@ -1789,20 +1789,20 @@ describe('applySchema', () => {
     // this the next Article that writes the country reaches for a row the
     // migration has not made, and the two are two Entities again.
     const driver = seededCanonicalisationDatabase([
-      ['ent-1', 'Israeli', 'israeli', 'place'],
+      ['ent-1', 'West African', 'west african', 'place'],
     ]);
 
     applySchema(driver);
 
     expect(keyedEntities(driver)).toEqual([
-      { id: 'ent-1', canonical_name: 'Israeli', canonical_key: 'israel' },
+      { id: 'ent-1', canonical_name: 'West African', canonical_key: 'west africa' },
     ]);
   });
 
   it('merges the two rows the demonym fold makes one thing, repointing every Article', () => {
     const driver = seededCanonicalisationDatabase([
-      ['ent-1', 'Israel', 'israel', 'place'],
-      ['ent-2', 'Israeli', 'israeli', 'place'],
+      ['ent-1', 'West Africa', 'west africa', 'place'],
+      ['ent-2', 'West African', 'west african', 'place'],
     ]);
 
     // Two rows for one thing is what the unique index on the key cannot be made
@@ -1811,11 +1811,33 @@ describe('applySchema', () => {
     expect(() => applySchema(driver)).not.toThrow();
 
     expect(keyedEntities(driver)).toEqual([
-      { id: 'ent-1', canonical_name: 'Israel', canonical_key: 'israel' },
+      { id: 'ent-1', canonical_name: 'West Africa', canonical_key: 'west africa' },
     ]);
     expect(linksOf(driver)).toEqual([
       { article_id: 'a-1', entity_id: 'ent-1' },
       { article_id: 'a-2', entity_id: 'ent-1' },
+    ]);
+  });
+
+  it('leaves a bare demonym its own row, because it no longer folds to the country', () => {
+    // "Israeli" is in the text and "Israel" is the country, and the fold that joined
+    // them is not one the rule makes: it merges a rare Entity into a common one,
+    // which lowers the country's weight in every Story carrying it. Measured, it
+    // was the only fold in the module with a cost against it.
+    const driver = seededCanonicalisationDatabase([
+      ['ent-1', 'Israel', 'israel', 'place'],
+      ['ent-2', 'Israeli', 'israeli', 'person'],
+    ]);
+
+    applySchema(driver);
+
+    expect(keyedEntities(driver)).toEqual([
+      { id: 'ent-1', canonical_name: 'Israel', canonical_key: 'israel' },
+      { id: 'ent-2', canonical_name: 'Israeli', canonical_key: 'israeli' },
+    ]);
+    expect(linksOf(driver)).toEqual([
+      { article_id: 'a-1', entity_id: 'ent-1' },
+      { article_id: 'a-2', entity_id: 'ent-2' },
     ]);
   });
 
