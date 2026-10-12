@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   evaluateClusterGrouping,
   formatClusterReport,
-  precisionCeiling,
+  entityPrecisionCeiling,
   resolveClusterPairs,
   type PairResolution,
 } from './cluster-grouping-benchmark.js';
@@ -288,17 +288,17 @@ resolution: resolutionOf(
   });
 });
 
-describe('precisionCeiling', () => {
-  it('counts the different-event families no floor can keep apart', () => {
+describe('entityPrecisionCeiling', () => {
+  it('counts the different-event families no Entity floor can keep apart', () => {
     // Two Stories whose Entity sets are identical score a cosine of exactly 1,
-    // so no floor below 1 can hold them apart. A precision target above what is
-    // left is not a rule that has not been tuned yet; it is arithmetic.
+    // so no floor below 1 can hold them apart. A rule reading Entities alone
+    // cannot beat this number however it is tuned.
     const resolution = resolutionOf(
       { sameEvent: [], differentEvent: [pair(ref('bbc', '2'), ref('cnbc', '2'))] },
       corpus,
     );
 
-    const ceiling = precisionCeiling(resolution.differentEvent, groundingOf);
+    const ceiling = entityPrecisionCeiling(resolution.differentEvent, groundingOf);
 
     expect(ceiling.identical).toBe(1);
     expect(ceiling.ceiling).toBe(0);
@@ -310,17 +310,36 @@ describe('precisionCeiling', () => {
       corpus,
     );
 
-    const ceiling = precisionCeiling(resolution.differentEvent, groundingOf);
+    const ceiling = entityPrecisionCeiling(resolution.differentEvent, groundingOf);
 
     expect(ceiling.identical).toBe(0);
     expect(ceiling.ceiling).toBe(1);
   });
 
   it('says nothing could be measured rather than reporting a ceiling over no pairs', () => {
-    const ceiling = precisionCeiling([], groundingOf);
+    const ceiling = entityPrecisionCeiling([], groundingOf);
 
     expect(ceiling.ceiling).toBeNull();
     expect(ceiling.families).toBe(0);
+  });
+
+  it('reports a bound on Entity grouping, and says a second signal can pass it', () => {
+    // The report line has to stop a reader taking this as the ceiling on the
+    // application: a Story also carries a signature, and the families this
+    // counts as identical Entities are not identical as text.
+    const report = evaluateClusterGrouping({
+      grouped: [{ topicId: topicOne, clusters: [[storyA], [storyB]] }],
+      resolution: resolutionOf(
+        { sameEvent: [], differentEvent: [pair(ref('bbc', '2'), ref('cnbc', '2'))] },
+        corpus,
+      ),
+      groundingOf,
+    });
+
+    const text = formatClusterReport(report, { rule: 'r', corpus: 'c' });
+
+    expect(text).toContain('for a rule reading Entities only');
+    expect(text).toContain('can go above this');
   });
 });
 

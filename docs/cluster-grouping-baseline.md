@@ -22,7 +22,7 @@ family six do rests on six.
 | --- | --- |
 | **recall** | Same-event families the rule put in one Cluster, over the same-event families it could measure. |
 | **precision** | Different-event families it kept apart, over the different-event families it could measure. |
-| **ceiling** | The precision this negative set allows whatever rule is run: the different-event families that do **not** name identical Entities. |
+| **ceiling** | The precision a rule reading **Entities only** can reach: the different-event families that do not name identical Entities. Not a bound on the application — see "What this does not reach". |
 | **clusters** | Every Cluster formed across every live Topic, counting a Story once per Topic it is in scope for. |
 | **largest** | The most Stories any one of them holds. |
 | **singletons** | The share of Clusters holding exactly one Story. |
@@ -84,7 +84,8 @@ cluster grouping benchmark
 
   recall      51.7%  15 of 29 same-event pairs end up in one Cluster (85 topic observations)
   precision   59.2%  29 of 49 different-event pairs stay apart (151 topic observations)
-  ceiling     83.7%  41 of 49 are separable; 8 name identical Entities and score a cosine of exactly 1
+  ceiling     83.7%  for a rule reading Entities only: 8 of 49 name identical Entities and score a cosine of exactly 1
+              41 are separable by Entity. A rule reading the Story signature too can go above this.
 
   clusters    4162 over 14 topics holding 1618 stories
   largest     7 stories in one Cluster
@@ -163,24 +164,49 @@ line rather than one of the `at` lines.
 
 ### What this does not reach
 
-**Precision is capped at 83.7% on this negative set, and the cap is arithmetic.**
-Eight of the 49 different-event families name exactly the same Entities as one
-another, so their cosine is exactly 1.0 and no floor below 1 separates them. The
-benchmark computes and prints this ceiling, which is the difference between a
-rule that has not been tuned yet and a negative that Entities cannot tell apart.
+**Precision is capped at 83.7% for a rule reading Entities, and the cap is
+arithmetic.** Eight of the 49 different-event families name exactly the same
+Entities as one another, so their cosine is exactly 1.0 and no floor below 1
+separates them. The benchmark computes and prints this as `ceiling`, labelled
+for what it is — a bound on Entity grouping, not on the application.
 
-Ticket #118 asked for precision above 90% and quoted a baseline of 96.1%. That
-target is not reachable against a negative set built the way #117 built it, and
-#117 said so when it closed, warning whoever took #118 that its precision
-criteria were written against a baseline that does not reproduce. The recall
-target was reachable and is exceeded: 20.9% quoted, 31.0% measured, 51.7% now.
+**That is not the application's ceiling, and saying so was the mistake this
+section used to make.** A Story also carries a signature — its content words and
+key phrases (ADR-0007), documented there as the signal that tells two reports
+about the same company apart. Six of those eight families score between 0.028 and
+0.120 against each other: identical as Entity vectors, plainly different as text.
+Measured on this corpus, gating a merge on a signature floor alongside the Entity
+cosine gives:
 
-**Recall is capped by Entity extraction, not by the grouping rule.** Six of the
-29 same-event families share no Entity at all — two reports of one event where
-one outlet's extractor found nothing the other's did — so no similarity function
-over Entities can join them and the ceiling from extraction alone is 79.3%. More
-than half of real event families still come back split. The lever is
-`src/domain/entity-extraction.ts`, not this rule.
+| signature floor | recall | precision | largest | singletons |
+| --- | --- | --- | --- | --- |
+| — (not used) | 51.7% | 59.2% | 7 | 92.5% |
+| 0.02 | 55.2% | 63.3% | 7 | 93.2% |
+| 0.03 | 51.7% | 67.3% | 5 | 93.5% |
+| **0.04** | **51.7%** | **71.4%** | 6 | 94.6% |
+| 0.05 | 44.8% | 73.5% | 5 | 94.9% |
+| 0.06 | 41.4% | 77.6% | 5 | 95.6% |
+| 0.10 | 37.9% | 85.7% | 4 | 97.4% |
+
+At 0.04 precision rises 12 points with no loss of recall. Only two of the 49 are
+identical in *both* representations, so the ceiling for a rule reading both is
+**95.9%**. This is a calibration measurement rather than something
+`pnpm cluster:benchmark` prints — the shipped command groups with Entities alone.
+It is [#119](https://github.com/ibrahimmurtaza/brieflyy/issues/119), not this
+rule, because it adds a signal the ticket did not ask for and fits a second
+threshold to the same 78 families.
+
+Ticket #118 asked for precision above 90% and quoted a baseline of 96.1%. The
+measured baseline was 36.7%, and #117 said on close that the quoted figure did not
+reproduce. The recall target was reachable and is exceeded: 20.9% quoted, 31.0%
+measured, 51.7% now.
+
+**Recall is capped at 79.3% for a rule reading Entities**, because six of the 29
+same-event families share no Entity at all — no similarity function over Entities
+joins them. Five of those six clear a signature floor of 0.04 anyway, so that
+ceiling belongs to Entity extraction rather than to this rule, but it does not
+belong to the application either. More than half of real event families still
+come back split, and which lever finally moves them is open rather than settled.
 
 ### The two Topics this corpus was widened by
 

@@ -178,22 +178,31 @@ export interface PairScore {
 }
 
 /**
- * How high precision can go on a set of labelled pairs, whatever the rule.
+ * How high precision can go on a set of labelled pairs for a rule reading
+ * Entities, and nothing else.
  *
  * Two Stories naming the same Entities score a cosine of exactly 1 — their
- * vectors are the same vector — so no floor below 1 can hold them apart and no
+ * vectors are the same vector — so no floor below 1 holds them apart and no
  * amount of tuning reaches a family like that. Counting those pairs separately
- * is what separates "the rule is not tuned yet" from "this negative is not
- * separable by Entity at all", and the two call for opposite responses: one is
- * a change to the rule, the other is a change to what the rule reads.
+ * separates "the rule is not tuned yet" from "this negative is not separable by
+ * Entity at all".
+ *
+ * **This bounds a rule reading Entities, and only those.** It is not a bound on
+ * what this application can do: a Story also carries a signature (its content
+ * words and key phrases, ADR-0007), and six of the eight families here score
+ * between 0.028 and 0.120 against each other — they are identical as Entity
+ * vectors and plainly different as text. A rule reading both clears this number.
+ * What this figure is good for is telling the reader that a precision below it
+ * is the rule's doing, and a precision above it needs a second signal rather
+ * than a different threshold.
  *
  * Only pairs some Topic holds both Stories for are counted, so the ceiling and
  * the measured precision are over the same families.
  */
-export function precisionCeiling(
+export function entityPrecisionCeiling(
   differentEvent: readonly ResolvedStoryPair[],
   groundingOf: (storyId: StoryId) => readonly GroundedEntity[],
-): PrecisionCeiling {
+): EntityPrecisionCeiling {
   const separable: string[] = [];
   const unseparable: string[] = [];
   for (const pair of differentEvent) {
@@ -213,17 +222,17 @@ export function precisionCeiling(
   };
 }
 
-/** What `precisionCeiling` found, and which families each half was. */
-export interface PrecisionCeiling {
+/** What `entityPrecisionCeiling` found, and which families each half was. */
+export interface EntityPrecisionCeiling {
   /** Different-event families the ceiling is over. */
   readonly families: number;
   /** How many of them name exactly the same Entities as one another. */
   readonly identical: number;
   /** `(families - identical) / families`, or null when there are no families. */
   readonly ceiling: number | null;
-  /** The families no floor below 1 can keep apart. */
+  /** The families no Entity floor below 1 can keep apart. */
   readonly unseparable: readonly string[];
-  /** The families a rule could in principle keep apart. */
+  /** The families a rule reading Entities could in principle keep apart. */
   readonly separable: readonly string[];
 }
 
@@ -242,13 +251,14 @@ export interface ClusterGroupingReport {
   /** Different-event pairs the rule kept apart. */
   readonly precision: PairScore;
   /**
-   * The highest precision this labelled set allows, whatever the rule does.
+   * The highest precision a rule reading Entities alone can reach on this set.
    *
-   * Reported beside the measured precision so the gap between the two reads as
-   * what it is: a rule left to tune, or Entities that cannot tell two Stories
-   * apart however they are compared.
+   * Reported beside the measured precision so a reader can tell a rule left to
+   * tune from a negative that Entities cannot separate at all. It is a bound on
+   * Entity-only grouping, not on the application: see
+   * `entityPrecisionCeiling`.
    */
-  readonly precisionCeiling: PrecisionCeiling;
+  readonly entityPrecisionCeiling: EntityPrecisionCeiling;
   /** The largest Cluster at every floor the rule ships, so the bound is measured. */
   readonly largestByFloor: readonly FloorReading[];
 }
@@ -269,7 +279,7 @@ export function evaluateClusterGrouping(input: {
   readonly grouped: readonly GroupedTopic[];
   readonly resolution: PairResolution;
   /**
-   * What each Story names, for the precision ceiling.
+   * What each Story names, for the Entity-only precision ceiling.
    *
    * Required rather than optional because a ceiling of zero over a real negative
    * set is a false reading rather than an absence: without it the report would
@@ -364,7 +374,10 @@ export function evaluateClusterGrouping(input: {
     singletonProportion: clusters === 0 ? null : singletons / clusters,
     recall: measure(input.resolution.sameEvent, 'same-event'),
     precision: measure(input.resolution.differentEvent, 'different-event'),
-    precisionCeiling: precisionCeiling(input.resolution.differentEvent, input.groundingOf),
+    entityPrecisionCeiling: entityPrecisionCeiling(
+      input.resolution.differentEvent,
+      input.groundingOf,
+    ),
     largestByFloor,
   };
 }
@@ -384,7 +397,7 @@ export function formatClusterReport(
     score.ratio === null ? 'n/a (nothing observed)' : `${(score.ratio * 100).toFixed(1)}%`;
   const share = (value: number | null) =>
     value === null ? 'n/a (nothing grouped)' : `${(value * 100).toFixed(1)}%`;
-  const ceiling = report.precisionCeiling;
+  const ceiling = report.entityPrecisionCeiling;
 
   const lines = [
     'cluster grouping benchmark',
@@ -396,7 +409,8 @@ export function formatClusterReport(
     ...(ceiling.ceiling === null
       ? []
       : [
-          `  ceiling     ${(ceiling.ceiling * 100).toFixed(1)}%  ${ceiling.families - ceiling.identical} of ${ceiling.families} are separable; ${ceiling.identical} name identical Entities and score a cosine of exactly 1`,
+          `  ceiling     ${(ceiling.ceiling * 100).toFixed(1)}%  for a rule reading Entities only: ${ceiling.identical} of ${ceiling.families} name identical Entities and score a cosine of exactly 1`,
+          `              ${ceiling.families - ceiling.identical} are separable by Entity. A rule reading the Story signature too can go above this.`,
         ]),
     '',
     `  clusters    ${report.clusters} over ${report.topics} topics holding ${report.stories} stories`,

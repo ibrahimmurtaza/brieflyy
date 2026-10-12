@@ -6,6 +6,12 @@ how rare it is across the Topic's Stories and by what kind of thing it is — an
 the most similar pair is merged first, subject to every member of the resulting
 Cluster clearing the floor with every other member.
 
+This ADR decides what grouping reads, which is Entities alone. That is the whole
+of it, and it is worth saying plainly at the top: the bounds below are bounds on
+*Entity grouping*, and the obvious next lever — the Story signature — is not
+used here. A later reader who takes them as bounds on the application will be
+wrong.
+
 ## What ADR-0006 got right, and what it got wrong
 
 The determinism argument survives untouched. Closure was chosen over comparing
@@ -65,22 +71,33 @@ benchmark's labelled pairs; the largest Cluster fell from 13 Stories to 7. Those
 are on `docs/cluster-grouping-baseline.md` with the frontier the floor was
 chosen from.
 
-**Precision cannot reach the 90% ticket #118 asked for, and no rule reading
-Entities ever will.** Eight of the 49 different-event pairs name exactly the
-same Entities as one another, so their cosine is exactly 1.0 and no floor below
-1 separates them: the ceiling on this negative set is 83.7%, and the benchmark
-now prints it so the gap between measured and achievable is a number rather than
-an argument. Ticket #117 said as much when it built the set, and its note to
-whoever took this ticket stands — the precision criteria were written against a
-baseline that does not reproduce.
+**Precision is bounded for a rule reading Entities, at 83.7% on this negative
+set.** Eight of the 49 different-event pairs name exactly the same Entities as
+one another, so their cosine is exactly 1.0 and no floor below 1 separates them.
+The benchmark prints that bound beside the measurement, and names it for what it
+is — a bound on Entity grouping, not on the application.
 
-**Recall is bounded by Entity extraction, not by the grouping rule.** Six of the
-29 same-event families share no Entity at all — two reports of one event where
-one outlet's extractor found nothing the other's did — so no similarity function
-over Entities can join them. The ceiling from extraction alone is 79.3%, and the
-rule now reaches 51.7% of the 29. More than half of real event families still
-come back split, and that is a fact about what `entity-extraction.ts` pulls out
-of an Article, not about how the Clusters are formed from it.
+**It is not the bound on what this application can do.** A Story also carries a
+signature: its content words and its key phrases (ADR-0007), which is documented
+there as the signal that tells two reports about the same company apart. Six of
+those eight families score between 0.028 and 0.120 against each other — they are
+identical as Entity vectors and plainly different as text. Measured against the
+same corpus, gating a merge on a signature floor alongside the Entity cosine takes
+precision to **71.4% at 0.04** and **85.7% at 0.10**, the first at no cost to
+recall at all. Only two of the 49 are identical in *both* representations, so the
+ceiling for a rule reading both is 95.9%. That work is not in this ADR; it is
+[#119](https://github.com/ibrahimmurtaza/brieflyy/issues/119), and the threshold
+it wants is a second parameter fitted to the same 78 labelled families, which is
+the reason it is a ticket rather than a constant here.
+
+**Recall is bounded for a rule reading Entities, at 79.3%, and that bound is
+also the wrong place to stop looking.** Six of the 29 same-event families share
+no Entity at all — two reports of one event where one outlet's extractor found
+nothing the other's did — so no similarity function over Entities joins them.
+Five of those six clear a signature floor of 0.04 anyway, so the ceiling here is
+Entity extraction's rather than the rule's, but not the application's either.
+More than half of real event families still come back split, and which lever
+finally moves them is an open question rather than a settled one.
 
 The floor is 0.45, and `SHIPPED_SIMILARITY_FLOORS` is the range over which the
 largest Cluster is claimed to stay bounded. That claim is measured rather than
@@ -89,4 +106,5 @@ prints the largest Cluster it found.
 
 Related: [[0002-story-and-cluster-are-distinct-grains]],
 [[0005-cluster-velocity-is-measured-over-its-own-life]],
+[[0007-story-identity-is-a-stored-signature]],
 [[0008-entity-identity-is-a-canonical-key]].

@@ -111,16 +111,18 @@ non-zero when a labelled pair cannot be resolved, because a report that quietly
 dropped pairs reads as a better rule than it is. `docs/cluster-grouping-baseline.md`
 records what the current rule scores and exactly how each number is defined.
 
-It also prints two numbers that bound what the rule can do, rather than leaving
-them to be discovered by disappointment. The **ceiling** is the precision the
-negative set allows whatever rule is run: eight of its 49 different-event pairs
-name exactly the same Entities, so their cosine is exactly 1 and no threshold
-separates them. And the **at** lines regroup every Topic at each floor in
+It also prints two numbers that bound what grouping over Entities alone can do,
+rather than leaving them to be discovered by disappointment. The **ceiling** is
+the precision a rule reading only Entities can reach: eight of its 49
+different-event pairs name exactly the same Entities, so their cosine is exactly
+1 and no threshold separates them. It is labelled as an Entity-only bound
+because it is one — a rule reading the Story signature as well clears it, which
+is [#119](https://github.com/ibrahimmurtaza/brieflyy/issues/119) rather than
+this rule. And the **at** lines regroup every Topic at each floor in
 `SHIPPED_SIMILARITY_FLOORS` and print the largest Cluster, so the claim that the
 all-pairs floor bounds Cluster size is a measurement rather than an assertion —
 the shipped floor itself is the headline `largest` line rather than one of them.
-Recall is bounded from above the same way — by what Entity extraction finds, not
-by the grouping rule — and both bounds are written up in `docs/adr/0030`.
+`docs/adr/0030` records both bounds, and which of them a second signal moves.
 
 `pnpm typecheck` covers `src/`, which is where the unit tests live, and not
 `tests/e2e/`: `tsconfig.json` includes only `src/**/*.ts`, and Playwright compiles
@@ -719,7 +721,7 @@ counted.
 pnpm test
 ```
 
-The suite is 102 test files across `src/` holding 1,744 cases — Vitest prints the
+The suite is 102 test files across `src/` holding 1,745 cases — Vitest prints the
 live figure at the end of every run. `docs-agreement.test.ts` checks the file
 count and cannot check the case count without running the suite it lives in, so
 that one number is worth reading off a run rather than trusting.
