@@ -43,6 +43,19 @@ const DELIVERY_MINUTE = 45;
 const READ_TOPIC = 'World news';
 const READ_TOPIC_SLUG = 'world-news';
 
+/**
+ * How many Clusters the lede says are active, as a number.
+ *
+ * `null` when the lede does not carry a count yet, so an assertion about it fails
+ * on the number rather than on the match — "20 active clusters" contains "0 active
+ * clusters", which is what a substring check on the empty case would trip over the
+ * day grouping happened to form a round number.
+ */
+function clusterCountOf(lede: string | null): number | null {
+  const count = /(\d+)\s+active\s+clusters?/.exec(lede ?? '')?.[1];
+  return count === undefined ? null : Number(count);
+}
+
 test('a User signs up, finishes onboarding, and lands on a brief with Clusters in it', async ({
   page,
 }, testInfo) => {
@@ -121,7 +134,10 @@ test('a User signs up, finishes onboarding, and lands on a brief with Clusters i
   expect(formed.status(), 'cluster formation did not run for the new User').toBe(200);
 
   await page.reload();
-  await expect(page.locator('p.lede')).not.toContainText('0 active clusters');
+  // The count, read as a number rather than as text: "20 active clusters" contains
+  // "0 active clusters", so a substring check passes a brief that has Clusters in
+  // it and fails the moment grouping forms a round number of them.
+  await expect(clusterCountOf(await page.locator('p.lede').textContent())).toBeGreaterThan(0);
   // And the empty state is gone rather than sitting under the Clusters.
   await expect(page.getByText('No stories yet for this topic')).toHaveCount(0);
 
