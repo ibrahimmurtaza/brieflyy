@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import {
   canonicalEntityKey,
+  isFullerNameFor,
   extractEntities,
+  isPartialName,
+  namesNothing,
+  theOnlyFullerName,
 } from './entity-extraction.js';
 import {
   SAME_COMPANY_REPORTS,
@@ -86,11 +90,11 @@ describe('extractEntities', () => {
   });
 
   it('reads a name once, whole, rather than as overlapping pieces of itself', () => {
-    const found = names('The New York Times reported it on Tuesday.');
-    expect(found).toContain('New York Times');
+    const found = names('The Riverton Register reported it on Tuesday.');
+    expect(found).toContain('Riverton Register');
     // No piece of the name is also emitted on its own, and no other name is
     // emitted out of the same span.
-    expect(found.filter((n) => n.includes('York'))).toEqual(['New York Times']);
+    expect(found.filter((n) => n.includes('Riverton'))).toEqual(['Riverton Register']);
   });
 
   it('keeps a name whole across a possessive, a hyphen and an inner connector', () => {
@@ -141,6 +145,59 @@ describe('extractEntities', () => {
     expect(names('The US and the EU said GDP would rise, the CEO added.')).toEqual(
       [],
     );
+  });
+
+  it('does not extract the outlet that published the Article', () => {
+    // An Entity exists so two Articles can be recognised as being about the same
+    // subject, and an outlet is in every Article it published: "BBC" was attached
+    // to 43 of them, which is a hub linking unrelated Stories rather than a name
+    // that identifies anything. The same goes for a newsletter whose name is in
+    // most of a User's Topics, which is why it has to be named rather than
+    // inferred from the registry — a Source Brieflyy does not poll is still an
+    // outlet in the text.
+    const found = names(
+      'BBC reported that Reuters and the Guardian had not seen the New York Times report.',
+    );
+    for (const outlet of ['BBC', 'Reuters', 'Guardian', 'New York Times']) {
+      expect(found, outlet).not.toContain(outlet);
+    }
+    expect(names('The Guardian Environment filed the story.')).toEqual([]);
+    expect(names('Hacker News linked to the discussion. HN carried it too.')).toEqual(
+      [],
+    );
+  });
+
+  it('does not extract a head noun with nothing in front of it', () => {
+    // "University" and "County" name a sort of thing rather than one of them, and
+    // every Article about an institution carries one. They dilute the overlap
+    // two Stories are compared on without identifying anything; the institution
+    // they head is still extracted.
+    const found = names(
+      'The county said the university would open a campus. County officials disagreed.',
+    );
+    for (const head of ['County', 'University', 'university', 'county']) {
+      expect(found, head).not.toContain(head);
+    }
+    expect(
+      names('Riverside University and Boulder County both disagreed on Tuesday.'),
+    ).toEqual(expect.arrayContaining(['Riverside University', 'Boulder County']));
+  });
+
+  it('reads a name the prefix is not part of', () => {
+    // The three shapes a name arrives in that are not the name: the verb an
+    // outlet leads a headline with, the adjective and the column word. Each of
+    // them is the same thing as the bare name, which is what makes the two
+    // Articles overlap at all.
+    expect(keys('Fired OpenAI and OpenAI disagreed.')).toEqual(['openai']);
+    expect(
+      keys('Exclusive Riverton Labs and Riverton Labs disagreed.'),
+    ).toEqual(['riverton labs']);
+    expect(
+      keys('Analysis Riverton Labs and Riverton Labs disagreed.'),
+    ).toEqual(['riverton labs']);
+    // And the name itself is untouched: "General Motors" is not "General" in
+    // front of "Motors", and folding it away would be a rule cascade guessing.
+    expect(canonicalEntityKey('General Motors')).toBe('general motors');
   });
 
   it('deduplicates by canonical identity, not by the letters used to write it', () => {
@@ -254,6 +311,178 @@ describe('canonicalEntityKey', () => {
 
   it('never empties a name that has no identity left to drop', () => {
     expect(canonicalEntityKey('Ltd')).toBe('ltd');
+  });
+
+  it('drops the qualifier an outlet puts in front of the name', () => {
+    // The verb a headline leads with, the adjective that says which of several,
+    // and the column word a section prints above its stories. None of them says
+    // which thing is meant, and each of them is how one outlet's Article fails to
+    // overlap another's about the same thing.
+    expect(canonicalEntityKey('Fired OpenAI')).toBe('openai');
+    expect(canonicalEntityKey('Exclusive Guardian Australia')).toBe(
+      'guardian australia',
+    );
+    expect(canonicalEntityKey('Analysis Riverton Labs')).toBe('riverton labs');
+    expect(canonicalEntityKey('Daily Briefing')).toBe('daily briefing');
+    // Which is a newsletter's title rather than a briefing, so it is furniture
+    // rather than a head noun with words in front of it.
+    expect(namesNothing('Daily Briefing')).toBe(true);
+    // Only from the front, and only while something is left to name: a name that
+    // is one qualifier is not a name at all, and folding it to nothing would be a
+    // rule deciding a word is not there.
+    expect(canonicalEntityKey('Former')).toBe('former');
+    expect(canonicalEntityKey('Former Riverton Labs')).toBe('riverton labs');
+    // Nor from the end: "Riverton Labs Holdings" is one name either way, and the
+    // suffix was already being dropped by the fold above.
+    expect(canonicalEntityKey('Riverton Labs Group')).toBe('riverton labs');
+  });
+
+  it('folds a name written only with a transliterated qualifier onto the thing it qualifies', () => {
+    // Two spellings of one bridge, each carrying the qualifier its writer used for
+    // it. Nothing in the spelling says which is which, so the qualifier is listed
+    // rather than derived — and the rest of the name is what survives.
+    expect(canonicalEntityKey('Pivnichyi Northern Bridge')).toBe(
+      canonicalEntityKey('Kyiv Northern Bridge'),
+    );
+  });
+
+  it('folds a demonym onto the country it belongs to', () => {
+    // "Israeli" and "Israel" are one thing written two ways, and were two Entities
+    // that never overlapped. The fold is to the country's own name rather than to
+    // a code, so `America` stays `America` and `American` joins it.
+    expect(canonicalEntityKey('Israeli')).toBe('israel');
+    expect(canonicalEntityKey('Israel')).toBe('israel');
+    expect(canonicalEntityKey('American')).toBe('america');
+    expect(canonicalEntityKey('Palestinian')).toBe('palestine');
+  });
+});
+
+describe('namesNothing', () => {
+  it('is true of an outlet, whatever of it the Article names', () => {
+    // An outlet is in every Article it published, so an Entity for it links
+    // unrelated Stories through the one word they share. It is a name in the text
+    // and not a thing in the story, which is the whole of the difference.
+    for (const outlet of [
+      'BBC',
+      'BBC News',
+      'The Guardian',
+      'Guardian Australia',
+      'Reuters',
+      'New York Times',
+      'Hacker News',
+      'HN',
+      'WIRED',
+      'The Verge',
+      'Nature',
+    ]) {
+      expect(namesNothing(outlet), outlet).toBe(true);
+    }
+  });
+
+  it('is true of the labels a feed stamps on an item rather than text it wrote', () => {
+    for (const label of ['HN', 'Points', 'Comments', 'Article URL', 'Permalink']) {
+      expect(namesNothing(label), label).toBe(true);
+    }
+  });
+
+  it('is false of a head noun standing alone, and false of what it heads', () => {
+    expect(namesNothing('University')).toBe(true);
+    expect(namesNothing('County')).toBe(true);
+    expect(namesNothing('Academy')).toBe(true);
+    // The institution is still an Entity: what it is called is what identifies it.
+    expect(namesNothing('Riverside University')).toBe(false);
+    expect(namesNothing('University of Belvern')).toBe(false);
+    expect(namesNothing('Boulder County')).toBe(false);
+    // And a name that is nothing but a qualifier in front of one is nothing: the
+    // qualifier is what said which university, so without it there is no
+    // university left to name.
+    expect(namesNothing('Severnyi University')).toBe(true);
+  });
+
+  it('is false of anything else', () => {
+    expect(namesNothing('OpenAI')).toBe(false);
+    expect(namesNothing('Christa Pike')).toBe(false);
+    expect(namesNothing('Northern Bridge')).toBe(false);
+    expect(namesNothing('The Guardian of the Galaxy')).toBe(false);
+  });
+});
+
+describe('isPartialName', () => {
+  it('is true of a word that could be the end of a longer name', () => {
+    // "Pike" on its own is the same person as "Christa Pike", and resolving it
+    // needs a word that could name a thing rather than a sort of thing.
+    expect(isPartialName('pike')).toBe(true);
+    expect(isPartialName('trump')).toBe(true);
+  });
+
+  it('is false of a name that is more than one word', () => {
+    // "Christa Pike" is a whole name, not a short one, and folding it onto
+    // "Tennessee Christa Pike" would put the right Entity on the wrong row.
+    expect(isPartialName('christa pike')).toBe(false);
+    expect(isPartialName('northern bridge')).toBe(false);
+  });
+
+  it('is false of a word that names a sort of thing or nothing', () => {
+    // "Bridge", "University" and "County" head thousands of names each. Matching
+    // one of them onto whichever fuller name happens to exist is not a
+    // resolution, it is a coincidence.
+    for (const head of ['bridge', 'university', 'county', 'academy', 'company']) {
+      expect(isPartialName(head), head).toBe(false);
+    }
+    // Nor a word English does not capitalise, or one too short to be one.
+    expect(isPartialName('the')).toBe(false);
+    expect(isPartialName('bbc')).toBe(false);
+    expect(isPartialName('fl')).toBe(false);
+  });
+});
+
+describe('isFullerNameFor', () => {
+  it('is true of a surname and the full name that ends in it', () => {
+    expect(isFullerNameFor('christa pike', 'pike')).toBe(true);
+    expect(isFullerNameFor('donald trump', 'trump')).toBe(true);
+  });
+
+  it('is false for anything that is not the same words at the end', () => {
+    // Matching on a prefix rather than a suffix is what would turn every place
+    // name ending in a common word into one Entity.
+    expect(isFullerNameFor('pike hinson', 'pike')).toBe(false);
+    expect(isFullerNameFor('pike', 'pike')).toBe(false);
+    expect(isFullerNameFor('pike', 'christa pike')).toBe(false);
+  });
+
+  it('is false for a name that is not one a person goes by', () => {
+    // "OpenAI" ends "ChatGPT OpenAI" and "Pac Man OpenAI", which are two names an
+    // Article put side by side rather than one name. Resolving onto either would
+    // lose the most-mentioned Entity in the corpus, and two words an Article
+    // happened to set together is not a reason to.
+    expect(isFullerNameFor('chatgpt openai', 'openai')).toBe(false);
+    expect(isFullerNameFor('pac man openai', 'openai')).toBe(false);
+    expect(isFullerNameFor('northern bridge', 'bridge')).toBe(false);
+  });
+
+  it('is false for a longer name that is nobody’s whole name', () => {
+    // "Tennessee Christa Pike" carries "Christa Pike" and is a headline's
+    // adjective in front of it.
+    expect(isFullerNameFor('tennessee christa pike', 'christa pike')).toBe(false);
+  });
+});
+
+describe('theOnlyFullerName', () => {
+  it('is the one fuller name when there is one', () => {
+    expect(theOnlyFullerName(['christa pike'], 'pike')).toBe('christa pike');
+    // And the tightest of several, because the longer one is an adjective in
+    // front of it.
+    expect(theOnlyFullerName(['tennessee christa pike', 'christa pike'], 'pike')).toBe(
+      'christa pike',
+    );
+  });
+
+  it('is nothing rather than a guess', () => {
+    // Two people a surname might be, and nothing in the spelling says which.
+    expect(theOnlyFullerName(['jay martin', 'michel martin'], 'martin')).toBeUndefined();
+    // And a name no stored name is the whole of keeps its own row.
+    expect(theOnlyFullerName(['jay martin'], 'pike')).toBeUndefined();
+    expect(theOnlyFullerName([], 'pike')).toBeUndefined();
   });
 });
 

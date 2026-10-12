@@ -106,6 +106,36 @@ Every labelled pair is measured, on the corpus widened by the two Topics recorde
 at the end of this file — so the numbers before and after this rule changed are
 over the same families and the same Topics, and the comparison is like for like.
 
+### What Entity canonicalisation did to it
+
+`pnpm cluster:benchmark` reads the Entities the corpus already holds, so a change to
+extraction (ADR-0031) is measured by re-extracting every Article's Entities from the
+stored text over a copy of the corpus. Both numbers below are that replay, run once
+under the old rules and once under the new, so they are like for like:
+
+| | Entity canonicalisation (ADR-0031) |
+| --- | --- |
+| recall | **48.3%** → **44.8%** |
+| precision | **71.4%** → **69.4%** |
+| Entity-only ceiling | **83.7%** → **81.6%** |
+| Entities over the corpus | 3,757 → 3,646 |
+| different-event families sharing no Entity at all | 3 of 49 → **6 of 49** |
+
+The ticket predicted about two points of recall gained and the direction is the
+other way. One recall family and one precision family move, and ADR-0031 names both
+and why: folding `Australian` into `Australia` makes the country an Entity many more
+Stories carry and so worth less, and an Article that named one person both ways now
+counts them once rather than twice. Both families sat within a few points of the
+Entity floor, and one different-event family rose over it because dropping an
+unshared head noun shortens that Story's norm.
+
+The replay is not the corpus the stored rows came from, and the difference is worth
+stating: replaying the *old* rules over the same 1,804 Articles reproduces the stored
+Entity set exactly — 6,536 links and 3,757 rows — and scores 48.3% against the 51.7%
+recorded above, because the replay reads Articles in id order rather than the order
+the feeds delivered them and the first-arrival rule then decides a different name and
+kind for a handful of rows. Nothing above compares a replay against a stored corpus.
+
 ### What it was, and what it is
 
 The rule this replaced divided the shared Entities by the **larger** of the two

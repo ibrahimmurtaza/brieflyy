@@ -586,7 +586,10 @@ Four of the six have a directory of their own, and two do not:
 
 - **Ingest** — `ingest/`. Polls every Source a Topic names, extracts Entities,
   collapses near-duplicate Articles into Stories, then hands the cycle to
-  Cluster formation.
+  Cluster formation. An extracted name is canonicalised before it is stored — a
+  prefix, a demonym and a shortening are folded away, and an outlet, a feed's own
+  labels and a head noun on its own are not Entities at all — so that one thing
+  written several ways is one row (ADR-0008, ADR-0031).
 - **Brief** — no directory: it is `services/brief-plan-service.ts`,
   `services/brief-snapshot-renderer.ts`, `services/scheduled-brief-service.ts` and
   `services/brief-status-routes.ts`, plus `repos/brief-*-repo.ts` and
