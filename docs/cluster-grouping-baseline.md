@@ -135,13 +135,16 @@ makes them weigh less, and every cosine compresses downwards. The migrated corpu
 reaches the same 51.7% / 71.4% at **0.20 / 0.08** instead, which is a different rule
 rather than a shifted constant, and which is not adopted — ADR-0031 says why.
 
-The ticket predicted about two points of recall gained and the direction is the other
-way. One recall family and one precision family move. ADR-0031 names the recall
-family and explains it: folding `Australian` into `Australia` makes the country an
-Entity many more Stories carry and so worth less, and both families sat within a few
-points of the Entity floor. One different-event family rose over it because dropping an
-unshared head noun shortens that Story's norm. The second recall family's original
-explanation was wrong and has been retracted there.
+The ticket predicted about two points of recall gained. Ablating each fold shows the
+folds cost **no recall at all** and exactly one precision family — the recall drop in
+the table above is the replay, not the change, because a re-extraction with every fold
+disabled still scores 48.3%. The demonym fold is the whole of that one family:
+`Australian` → `Australia` merges a rare Entity into a common one, which lowers the
+country's IDF weight and takes down every different-event pair whose overlap is only
+it. Partial-name resolution and qualifier stripping measure free. So the floor is not
+wrong and the demonym fold is — ADR-0031 says so, and leaves the decision to whoever
+owns the ticket. One different-event family rose over the Entity floor because
+dropping an unshared head noun shortens that Story's norm.
 
 The replay is not the corpus the stored rows came from, and the difference is worth
 stating: replaying the *old* rules over the same 1,804 Articles reproduces the stored

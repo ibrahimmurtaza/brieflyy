@@ -42,10 +42,9 @@ A row whose name names nothing keeps its row and its key. Nothing extracts such 
 Over the same corpus, with every Article's Entities re-extracted from the stored text under the old rules and the new ones so the two are compared like for like: **recall 48.3% → 44.8%, precision 71.4% → 69.4%**, Entity-only ceiling 83.7% → 81.6%. The ticket predicted roughly two points of recall gained, and the direction is the other way. One recall family and one precision family move, and both are explained rather than mysterious:
 
 - The Adidas/White Fox family falls from 0.462 to 0.438, across the Entity floor of 0.45. Folding `Australian` into `Australia` was the point, and it means the country is now carried by many more Stories, so it weighs less — the pair's whole overlap is now one Entity that has just become common.
-- The Tennessee prison family falls from 0.492 to 0.342. This one is **not** explained and the explanation first offered for it was wrong. A merge cannot lower a cosine — merging two coordinates keeps the mass and shortens the vector, which raises it — so the cause is something else in that family's stories. It has not been isolated.
 - The Man City appeal family rises from 0.443 to 0.535, over the floor. `Prime` was a generic head noun standing alone; removing an unshared Entity from one side shortens that side's norm and raises the cosine, which is the same dilution working in the direction that costs precision.
 
-The Entity vocabulary itself is measurably better: the different-event families that share **no Entity at all** go from three of forty-nine to six, and the Entity-only precision ceiling moves one family in the wrong direction because one pair became identical as an Entity vector.
+The Entity vocabulary itself is measurably better: the different-event families that share **no Entity at all** go from three of forty-nine to six, and the Entity-only precision ceiling moves one family in the wrong direction because one pair became identical as an Entity vector. The ablation below shows both of those are replay-against-replay measurements and what they are worth; the short version is that the folds cost no recall, and one precision family.
 
 ### What a boot costs on its own
 
@@ -77,6 +76,25 @@ Sweeping the Entity floor against the signature floor over the whole grid on bot
 | 65.5% | **53.1%** | 44.9% |
 
 So the shipped point (0.45 Entity / 0.04 signature) is the **one place on the grid where the migrated corpus reads worse than the stored one**, and it reads worse there because 0.45 is set for the old partition: folding makes Entities more common, IDF makes them weigh less, every cosine compresses downwards, and a floor chosen against the old distribution sits too high on the new one.
+
+### Which fold costs it, and which does not
+
+The frontier is the shape; the question is which fold moved it. Ablating each fold and re-extracting the same 1,804 Articles under each, all at the shipped 0.45 / 0.04:
+
+| | recall | precision |
+| --- | --- | --- |
+| every fold on | 48.3% | 69.4% |
+| demonym fold off | 48.3% | **71.4%** |
+| demonym and partial resolution off | 48.3% | **71.4%** |
+| every fold off | 48.3% | **71.4%** |
+
+Two things fall out, and the first one corrects the section above.
+
+**The recall drop from the stored corpus is the replay, not the folds.** With every fold disabled the re-extraction still scores 48.3%, against the 51.7% the stored rows score. The stored rows were built in feed-arrival order; a replay reads Articles in id order, and first-arrival then decides a different name for a handful of rows. That is the same artefact the replay caveat below describes, and it was not applied to the migration-only comparison until now. So the folds cost **no recall at all**, and the framing of "one recall family moves" above is wrong: nothing moves, and what looked like a recall regression was the measurement.
+
+**The demonym fold is the only thing that costs anything: one precision family.** Partial-name resolution is benchmark-free — the rows are identical with it on and off — and qualifier stripping costs nothing either. The mechanism is the compression described above, isolated to the one fold that merges a rare Entity into a common one: `Australian` into `Australia` raises the country's document frequency and lowers its IDF weight, and every different-event pair whose whole overlap is that country falls with it. Narrowing the fold by position does not help, because the merge that does the damage is the standalone one.
+
+So the remedy is not a different floor. It is to **drop the demonym fold** and leave `ENTITY_SIMILARITY_FLOOR` and `SIGNATURE_SIMILARITY_FLOOR` where they are — at which point the shipped point scores the stored corpus's precision exactly. That is not done here, because it removes an acceptance criterion from the ticket that asked for the fold and belongs to whoever owns that decision.
 
 The migrated corpus reaches the shipped operating point — 51.7% recall, 71.4% precision — at **0.20 / 0.08** instead, over 4,184 clusters with a largest of 5, against the shipped 4,281 and 6. That is a *different rule*, not a shifted constant: at 0.20 the Entity cosine is doing almost nothing and the signature is doing the separating, so the safety of the grouping becomes the safety of `StorySignature`. It is not adopted here, because picking the best cell of a 48-cell grid measured against 78 families is how a benchmark gets fitted rather than satisfied, and no corpus has yet been ingested under the new rules to check it against. It is recorded because the alternative is leaving a threshold that is measurably wrong for the partition now shipping.
 
