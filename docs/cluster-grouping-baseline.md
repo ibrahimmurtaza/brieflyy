@@ -70,33 +70,50 @@ and NASA — which is free precision and tells you nothing.
 
 ## The baseline
 
-Measured on the corpus this repository was developed against — 12 live Topics
-following 22 Sources, 1,804 Articles and 1,618 Stories, window ending
+Measured on the corpus this repository was developed against — 1,804 Articles
+across 22 Sources forming 1,618 Stories, held by 14 live Topics, window ending
 2026-10-09T13:52Z — running the rule in `src/domain/cluster-grouping.ts`, which is
 the rule `ClusterFormationService` runs:
 
 ```
 cluster grouping benchmark
   rule      entity overlap of at least 0.5 of the larger set, grouped by transitive closure
-  corpus    12 topics, window ending 2026-10-09T13:52:30.766Z
+  corpus    14 topics, window ending 2026-10-09T13:52:30.766Z
 
-  recall      28.6%  8 of 28 same-event pairs end up in one Cluster (69 topic observations)
-  precision   35.4%  17 of 48 different-event pairs stay apart (135 topic observations)
+  recall      31.0%  9 of 29 same-event pairs end up in one Cluster (85 topic observations)
+  precision   36.7%  18 of 49 different-event pairs stay apart (151 topic observations)
 
-  clusters    3470 over 12 topics holding 1546 stories
+  clusters    4049 over 14 topics holding 1618 stories
   largest     13 stories in one Cluster
-  singletons  93.7%  3250 of 3470 clusters hold one Story
+  singletons  93.5%  3786 of 4049 clusters hold one Story
 ```
 
-Two labelled pairs could not be measured on that corpus and are printed by the run
-rather than counted: the Sky News and Ars Technica reports of the Russian plague
-death, because no live Topic follows both outlets, and the two Nature
-`Daily briefing` issues, because no live Topic follows Nature. Both are in the
-set, and both become measurable the moment a Topic follows the Sources they need.
+Every labelled pair is measured. That took widening the corpus: the Topics that
+followed Ars Technica alongside Sky News, and Nature at all, had been removed,
+and a removed Topic cannot be un-removed — `remove()` sets `removed_at`, and
+re-adding mints a new Topic with a new slug. So two were added through
+`DrizzleTopicRepo`, the repository the application writes with, carrying the
+source lists those ones had:
+
+| Topic | Follows | What it unblocked |
+| --- | --- | --- |
+| `world-news-broad` | arstechnica, bbc-news, npr-news, sky-news, the-guardian | the Sky News and Ars Technica reports of the Russian plague death |
+| `natural-sciences` | nature, scientific-american | the two issues of Nature's `Daily briefing` |
+
+Before that, 79 of the 81 labelled families could be measured and two could not,
+and the run printed them by name. It also widened the denominator behind every
+other verdict: the corpus went from 12 live Topics holding 1,546 Stories to 14
+holding 1,618, and the topic observations behind the two ratios rose from 69 to 85
+and from 135 to 151. Both moves changed the numbers rather than only the coverage,
+which is the point of doing this before #118 rather than after.
+
+The corpus is a development database rather than a fixture, so its shape is not
+reproducible from this repository. What it holds is written here so that a later
+run knows what it is being compared against.
 
 ### What the number says
 
-The rule finds about one same-event family in four and welds about two
+The rule finds about one same-event family in three and welds about two
 different-event families in three. Those are the two halves of one failure: the
 threshold is half of the *larger* Entity set, so a detailed Story can never join a
 concise one about the same event, and two Stories that share two Entities out of
@@ -104,7 +121,7 @@ three are linked whether or not they are about the same thing. Grouping is then
 transitive, so a chain of individually reasonable links produces Clusters of ten
 and thirteen Stories that are not about one thing at all.
 
-93.7% of Clusters holding one Story is the same fact seen from the other side: the
+93.5% of Clusters holding one Story is the same fact seen from the other side: the
 rule is refusing to group almost everything, and what it does group is a mixture.
 
 ### Against the figures quoted in ticket #117
@@ -113,15 +130,14 @@ The ticket quotes a baseline of recall ~20.9%, precision ~96.1%, largest Cluster
 and singletons ~93%. This run does not reproduce three of the four, and the
 differences are worth stating rather than rounding away:
 
-- **Singletons 93.7% against 93%** matches, and is the one figure that did not
+- **Singletons 93.5% against 93%** matches, and is the one figure that did not
   move.
 - **Largest Cluster 13 against 10** is a bigger cluster than the ticket's. It is
-  the number that depends most on which Topics are live: this run groups the 12
-  Topics that have not been removed, and a wider window or a Topic following more
-  Sources produces longer chains.
-- **Recall 28.6% against 20.9%** is close and moves with which pairs are in the
+  the number that depends most on which Topics are live: a wider window, a Topic
+  following more Sources, or simply more Topics produces longer chains.
+- **Recall 31.0% against 20.9%** is close, and moves with which pairs are in the
   set — eight points of it is whether a family has one Entity in common or two.
-- **Precision 35.4% against 96.1%** does not come close, and it is the number
+- **Precision 36.7% against 96.1%** does not come close, and it is the number
   the definition matters most for. Two reports that share Entities are merged by
   this rule whether they are one event or two, so a negative set built out of
   shared Entities and recurring-column boilerplate — which is what the same ticket
