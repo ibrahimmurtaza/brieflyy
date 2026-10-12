@@ -302,6 +302,107 @@ CREATE INDEX stories_source_idx ON stories (source_id);
 CREATE INDEX stories_published_idx ON stories (last_published_at);
 `;
 
+/**
+ * A database from before a name's leading qualifier, transliteration and demonym
+ * were folded away: `canonical_key` is there and unique, and holds what the older
+ * fold derived from the same names, so a boot that re-derives it moves rows that
+ * already have one.
+ */
+const PRE_CANONICALISATION_SQL = `
+CREATE TABLE sources (
+  id TEXT PRIMARY KEY NOT NULL,
+  slug TEXT NOT NULL,
+  name TEXT NOT NULL,
+  homepage_url TEXT NOT NULL,
+  feed_url TEXT,
+  last_polled_at INTEGER,
+  last_success_at INTEGER
+);
+CREATE UNIQUE INDEX sources_slug_unique ON sources (slug);
+CREATE TABLE articles (
+  id TEXT PRIMARY KEY NOT NULL,
+  source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+  external_id TEXT NOT NULL,
+  url TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  published_at INTEGER NOT NULL,
+  ingested_at INTEGER NOT NULL,
+  signature TEXT NOT NULL DEFAULT '{}',
+  story_id TEXT
+);
+CREATE TABLE entities (
+  id TEXT PRIMARY KEY NOT NULL,
+  canonical_name TEXT NOT NULL,
+  canonical_key TEXT NOT NULL,
+  kind TEXT NOT NULL
+);
+CREATE UNIQUE INDEX entities_canonical_name_unique ON entities (canonical_name);
+CREATE UNIQUE INDEX entities_canonical_key_unique ON entities (canonical_key);
+CREATE TABLE article_entities (
+  article_id TEXT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+  entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX article_entities_pk ON article_entities (article_id, entity_id);
+CREATE INDEX article_entities_entity_idx ON article_entities (entity_id);
+`;
+
+/**
+ * A populated database from before a name was canonicalised, holding one Article
+ * per Entity so every link that has to survive the merge has one to be.
+ */
+function seededCanonicalisationDatabase(
+  rows: readonly (readonly [string, string, string, string])[],
+): Database.Database {
+  const driver = createInMemorySqliteDriver();
+  driver.exec(PRE_CANONICALISATION_SQL);
+  driver
+    .prepare(`INSERT INTO sources (id, slug, name, homepage_url) VALUES (?, ?, ?, ?)`)
+    .run('src-1', 'outlet', 'Outlet', 'https://example.com');
+  rows.forEach(([id, name, key, kind], index) => {
+    driver
+      .prepare(
+        `INSERT INTO articles (id, source_id, external_id, url, title, body, published_at, ingested_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        `a-${index + 1}`,
+        'src-1',
+        `ext-${index + 1}`,
+        'https://example.com/x',
+        'Headline',
+        WIRE_COPIES[0]!.body,
+        1000,
+        1000,
+      );
+    driver
+      .prepare(`INSERT INTO entities (id, canonical_name, canonical_key, kind) VALUES (?, ?, ?, ?)`)
+      .run(id, name, key, kind);
+    driver
+      .prepare(`INSERT INTO article_entities (article_id, entity_id) VALUES (?, ?)`)
+      .run(`a-${index + 1}`, id);
+  });
+  return driver;
+}
+
+/** Every Entity a database holds, read back the way the pipeline reads them. */
+function keyedEntities(
+  driver: Database.Database,
+): { id: string; canonical_name: string; canonical_key: string }[] {
+  return driver
+    .prepare(`SELECT id, canonical_name, canonical_key FROM entities ORDER BY id`)
+    .all() as { id: string; canonical_name: string; canonical_key: string }[];
+}
+
+/** Every Article-Entity link, which is what a merge has to keep pointing somewhere. */
+function linksOf(
+  driver: Database.Database,
+): { article_id: string; entity_id: string }[] {
+  return driver
+    .prepare(`SELECT article_id, entity_id FROM article_entities ORDER BY article_id`)
+    .all() as { article_id: string; entity_id: string }[];
+}
+
 function foreignKeys(
   driver: Database.Database,
   table: string,
@@ -1680,6 +1781,150 @@ describe('applySchema', () => {
       { article_id: 'a-1', entity_id: 'ent-1' },
       { article_id: 'a-2', entity_id: 'ent-1' },
     ]);
+  });
+
+  it('re-keys a row whose name now folds differently', () => {
+    // The stored identity of an Entity is derived from its name, so a build that
+    // changes what a name folds to has to change what the row is keyed on. Without
+    // this the next Article that writes the country reaches for a row the
+    // migration has not made, and the two are two Entities again.
+    const driver = seededCanonicalisationDatabase([
+      ['ent-1', 'Israeli', 'israeli', 'place'],
+    ]);
+
+    applySchema(driver);
+
+    expect(keyedEntities(driver)).toEqual([
+      { id: 'ent-1', canonical_name: 'Israeli', canonical_key: 'israel' },
+    ]);
+  });
+
+  it('merges the two rows the demonym fold makes one thing, repointing every Article', () => {
+    const driver = seededCanonicalisationDatabase([
+      ['ent-1', 'Israel', 'israel', 'place'],
+      ['ent-2', 'Israeli', 'israeli', 'place'],
+    ]);
+
+    // Two rows for one thing is what the unique index on the key cannot be made
+    // against, and the two Articles behind them have to end up on one row rather
+    // than one of them losing its links.
+    expect(() => applySchema(driver)).not.toThrow();
+
+    expect(keyedEntities(driver)).toEqual([
+      { id: 'ent-1', canonical_name: 'Israel', canonical_key: 'israel' },
+    ]);
+    expect(linksOf(driver)).toEqual([
+      { article_id: 'a-1', entity_id: 'ent-1' },
+      { article_id: 'a-2', entity_id: 'ent-1' },
+    ]);
+  });
+
+  it('resolves a partial name onto the full one it is the end of', () => {
+    const driver = seededCanonicalisationDatabase([
+      ['ent-1', 'Pike', 'pike', 'concept'],
+      ['ent-2', 'Christa Pike', 'christa pike', 'person'],
+    ]);
+
+    applySchema(driver);
+
+    // The full name is the one a User reads, so it is the row that stands; the
+    // Article that only said "Pike" still reaches the person it named.
+    expect(keyedEntities(driver)).toEqual([
+      { id: 'ent-2', canonical_name: 'Christa Pike', canonical_key: 'christa pike' },
+    ]);
+    expect(linksOf(driver)).toEqual([
+      { article_id: 'a-1', entity_id: 'ent-2' },
+      { article_id: 'a-2', entity_id: 'ent-2' },
+    ]);
+  });
+
+  it('keeps a row whose name names nothing, rather than merging two of them into one', () => {
+    // An outlet is not extracted as an Entity any more, but the Articles already
+    // naming one are still pointing at its row. Two outlets both fold to nothing,
+    // and giving them the same empty key would merge an outlet that was named 43
+    // times into one that was named once — so each keeps a row of its own.
+    const driver = seededCanonicalisationDatabase([
+      ['ent-1', 'BBC', 'bbc', 'org'],
+      ['ent-2', 'Reuters', 'reuters', 'org'],
+    ]);
+
+    expect(() => applySchema(driver)).not.toThrow();
+
+    expect(keyedEntities(driver)).toEqual([
+      { id: 'ent-1', canonical_name: 'BBC', canonical_key: 'bbc' },
+      { id: 'ent-2', canonical_name: 'Reuters', canonical_key: 'reuters' },
+    ]);
+    expect(linksOf(driver)).toEqual([
+      { article_id: 'a-1', entity_id: 'ent-1' },
+      { article_id: 'a-2', entity_id: 'ent-2' },
+    ]);
+  });
+
+  it('leaves a name that only ends in another name on its own row', () => {
+    // "South Africa" ends in "Africa" and is not a person, so it is not that
+    // country's shorter name written in full. The ingest path knows the difference
+    // and the migration has to know it too, or a boot would merge the country
+    // into one of the places in it — and the two would then never be told apart
+    // again.
+    const driver = seededCanonicalisationDatabase([
+      ['ent-1', 'Africa', 'africa', 'place'],
+      ['ent-2', 'South Africa', 'south africa', 'place'],
+    ]);
+
+    applySchema(driver);
+
+    expect(keyedEntities(driver)).toEqual([
+      { id: 'ent-1', canonical_name: 'Africa', canonical_key: 'africa' },
+      { id: 'ent-2', canonical_name: 'South Africa', canonical_key: 'south africa' },
+    ]);
+    expect(linksOf(driver)).toEqual([
+      { article_id: 'a-1', entity_id: 'ent-1' },
+      { article_id: 'a-2', entity_id: 'ent-2' },
+    ]);
+  });
+
+  it('keeps an unkeyed row whose name names nothing on a key of its own', () => {
+    // A database from before Entities carried a key at all has none for its
+    // outlets, and two of them fold to nothing the same way. An empty key is not a
+    // key, so each takes its own id: unique, not a name, and so nothing can be
+    // folded onto it or collide with it.
+    const driver = createInMemorySqliteDriver();
+    driver.exec(PRE_ENTITY_KEY_SQL);
+    driver
+      .prepare(`INSERT INTO sources (id, slug, name, homepage_url) VALUES (?, ?, ?, ?)`)
+      .run('src-1', 'outlet', 'Outlet', 'https://example.com');
+    for (const [id, name] of [
+      ['ent-1', 'BBC'],
+      ['ent-2', 'Reuters'],
+    ] as const) {
+      driver
+        .prepare(`INSERT INTO entities (id, canonical_name, kind) VALUES (?, ?, ?)`)
+        .run(id, name, 'org');
+    }
+
+    applySchema(driver);
+
+    expect(keyedEntities(driver)).toEqual([
+      { id: 'ent-1', canonical_name: 'BBC', canonical_key: 'ent-1' },
+      { id: 'ent-2', canonical_name: 'Reuters', canonical_key: 'ent-2' },
+    ]);
+  });
+
+  it('is a no-op when the entity keys run twice', () => {
+    const driver = seededCanonicalisationDatabase([
+      ['ent-1', 'Israel', 'israel', 'place'],
+      ['ent-2', 'Israeli', 'israeli', 'place'],
+      ['ent-3', 'BBC', 'bbc', 'org'],
+      ['ent-4', 'Pike', 'pike', 'concept'],
+    ]);
+    applySchema(driver);
+    const afterFirst = { entities: keyedEntities(driver), links: linksOf(driver) };
+
+    expect(() => applySchema(driver)).not.toThrow();
+
+    expect({ entities: keyedEntities(driver), links: linksOf(driver) }).toEqual(
+      afterFirst,
+    );
   });
 
   it('widens velocity to a real number so a fractional rate survives', () => {

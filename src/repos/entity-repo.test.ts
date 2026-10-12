@@ -81,6 +81,71 @@ describe('DrizzleEntityRepo', () => {
     expect(tinyco.id).not.toBe(acme.id);
   });
 
+  it('resolves a partial name to the full one the database already holds', async () => {
+    // "Pike" is the same person as "Christa Pike", and the two Articles share
+    // nothing to match on unless the name resolves. Two rows for one person are
+    // two Entities that never overlap with anything, which is the whole mechanism
+    // clustering rests on.
+    const { db, driver } = createTestDb();
+    const repo = new DrizzleEntityRepo(db);
+    const full = await repo.upsertByKey({
+      entity: extracted('Christa Pike filed the report.', 'Christa Pike'),
+      id: 'ent-full',
+    });
+    const partial = await repo.upsertByKey({
+      entity: extracted('Pike declined to comment. Pike filed the report.', 'Pike'),
+      id: 'ent-partial',
+    });
+
+    expect(partial.id).toBe(full.id);
+    expect(
+      driver.prepare(`SELECT canonical_name, canonical_key FROM entities`).all(),
+    ).toEqual([{ canonical_name: 'Christa Pike', canonical_key: 'christa pike' }]);
+  });
+
+  it('lets the full name take over the row a partial one already made', async () => {
+    // The same resolution whichever of the two an Article happens to name first,
+    // or the database would hold both shapes for one person and the outcome would
+    // depend on the order the corpus was ingested in.
+    const { db, driver } = createTestDb();
+    const repo = new DrizzleEntityRepo(db);
+    const partial = await repo.upsertByKey({
+      entity: extracted('Pike declined to comment. Pike filed the report.', 'Pike'),
+      id: 'ent-partial',
+    });
+    const full = await repo.upsertByKey({
+      entity: extracted('Christa Pike filed the report.', 'Christa Pike'),
+      id: 'ent-full',
+    });
+
+    // The row the partial made, re-keyed: the name a User reads is still the
+    // first form an outlet wrote, which is what the glossary says it is.
+    expect(full.id).toBe(partial.id);
+    expect(
+      driver.prepare(`SELECT id, canonical_name, canonical_key FROM entities`).all(),
+    ).toEqual([
+      { id: 'ent-partial', canonical_name: 'Pike', canonical_key: 'christa pike' },
+    ]);
+  });
+
+  it('keeps two names that share only a head noun apart', async () => {
+    // "Northern Bridge", "Severn Bridge" and a bare "Bridge" are three things.
+    // Resolving the head noun onto whichever fuller name arrived first would be a
+    // coincidence rather than a resolution, so a head noun names nothing on its
+    // own and resolves to nothing.
+    const { db } = createTestDb();
+    const repo = new DrizzleEntityRepo(db);
+    const northern = await repo.upsertByKey({
+      entity: extracted('Northern Bridge reopened. Northern Bridge is open.', 'Northern Bridge'),
+      id: 'ent-northern',
+    });
+    const severn = await repo.upsertByKey({
+      entity: extracted('Severn Bridge reopened. Severn Bridge is open.', 'Severn Bridge'),
+      id: 'ent-severn',
+    });
+    expect(severn.id).not.toBe(northern.id);
+  });
+
   it('looks up by id', async () => {
     const { db } = createTestDb();
     const repo = new DrizzleEntityRepo(db);

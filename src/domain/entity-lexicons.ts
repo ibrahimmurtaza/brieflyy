@@ -585,13 +585,13 @@ export const GIVEN_NAMES: ReadonlySet<string> = new Set([
   'andrea', 'andrew', 'angela', 'anna', 'anne', 'antoine', 'antonio', 'aria',
   'arjun', 'ashley', 'barbara', 'benjamin', 'bernard', 'bettina', 'bianca',
   'bruno', 'carlos', 'carla', 'catherine', 'charles', 'chiara', 'chris',
-  'christina', 'claire', 'clara', 'daniel', 'david', 'diana', 'diego', 'divya',
-  'dmitri', 'donna', 'douglas', 'edward', 'elena', 'elias', 'elisa', 'elise',
+  'christina', 'christa', 'claire', 'clara', 'daniel', 'david', 'diana', 'diego', 'divya',
+  'dmitri', 'donald', 'donna', 'douglas', 'edward', 'elena', 'elias', 'elisa', 'elise',
   'eliza', 'ella', 'elsa', 'emily', 'emma', 'erik', 'esther', 'eugene', 'eva',
   'felix', 'fiona', 'frances', 'francis', 'frank', 'gabriel', 'gabriela',
   'geoffrey', 'george', 'graham', 'hanna', 'hans', 'harold', 'helen', 'henri',
   'henry', 'hugo', 'ian', 'ibrahim', 'ines', 'irene', 'isabel', 'ivan', 'jack',
-  'jacob', 'james', 'jane', 'janet', 'jason', 'jean', 'jeffrey', 'jennifer',
+  'jacob', 'jagtar', 'jake', 'jay', 'james', 'jane', 'janet', 'jason', 'jean', 'jeffrey', 'jennifer',
   'jessica', 'joan', 'joel', 'john', 'jonathan', 'josef', 'joseph', 'juan',
   'judith', 'julia', 'julie', 'karen', 'karl', 'kate', 'katherine', 'kavita',
   'keith', 'kevin', 'laura', 'laurent', 'lee', 'liam', 'linda', 'lucas',
@@ -793,4 +793,346 @@ export const DETERMINERS: ReadonlySet<string> = new Set([
   'their',
   'these',
   'this',
+]);
+
+/**
+ * Words an outlet puts in front of the name it is really about.
+ *
+ * A headline names what happened and then who it happened to, and a section
+ * names its column above the story. "Fired OpenAI" is OpenAI, "Exclusive Guardian
+ * Australia" is the Guardian's Australia feed, and "Former Riverton Labs" is
+ * Riverton Labs — so two Articles about one thing that were written with and
+ * without the prefix share nothing to be matched on unless the prefix comes off.
+ *
+ * The list is narrow on purpose. A rule that dropped any leading verb would take
+ * "General Motors" down to "Motors", and nothing in the spelling of a word says
+ * whether it is qualifying the name behind it or is the first half of the name.
+ * What is here is what was measured: the reporting verbs headlines lead with, the
+ * words a column or a section prints above a story, and the transliterated
+ * qualifiers — `Pivnichyi Northern Bridge` and `Kyiv Northern Bridge` are one
+ * bridge and each carries the word its own writer used to say which side of it.
+ *
+ * Only ever dropped from the front, and only while something is left to name.
+ */
+export const LEADING_QUALIFIERS: ReadonlySet<string> = new Set([
+  // The verb a headline leads with.
+  'acquires',
+  'acquired',
+  'acquiring',
+  'banned',
+  'bans',
+  'blocked',
+  'blocks',
+  'boots',
+  'bought',
+  'buys',
+  'exits',
+  'fired',
+  'fires',
+  'firing',
+  'hired',
+  'hires',
+  'hiring',
+  'joins',
+  'ousted',
+  'ousts',
+  'poached',
+  'poaches',
+  'quits',
+  'sacked',
+  'sacks',
+  'sold',
+  'sells',
+  'suing',
+  'sues',
+  'sued',
+  'unveiled',
+  'unveils',
+  // The column or the section the story is filed under.
+  'analysis',
+  'briefing',
+  'breaking',
+  'commentary',
+  'editorial',
+  'exclusive',
+  'explainer',
+  'interview',
+  'opinion',
+  'update',
+  'updates',
+  // The adjective that says which of several same-named things this is.
+  'former',
+  // Transliterated qualifiers. Nothing in the spelling says what these are, which
+  // is why they are written down rather than worked out.
+  'kyiv',
+  'pivdennyi',
+  'pivnichyi',
+  'pravoberezhnyi',
+  'severnyi',
+  'vostochnyi',
+  'zapadnyi',
+]);
+
+/**
+ * A nationality folded onto the country it belongs to.
+ *
+ * "Israeli" and "Israel" are one thing written two ways, and were two Entities
+ * that never overlapped. The country is the target rather than a code, because a
+ * code is not a name an outlet writes and `America` has to stay `America`.
+ */
+export const DEMONYMS: ReadonlyMap<string, string> = new Map([
+  ['afghan', 'afghanistan'],
+  ['african', 'africa'],
+  ['algerian', 'algeria'],
+  ['american', 'america'],
+  ['argentine', 'argentina'],
+  ['argentinian', 'argentina'],
+  ['asian', 'asia'],
+  ['australian', 'australia'],
+  ['austrian', 'austria'],
+  ['belgian', 'belgium'],
+  ['bolivian', 'bolivia'],
+  ['brazilian', 'brazil'],
+  ['british', 'britain'],
+  ['bulgarian', 'bulgaria'],
+  ['burmese', 'myanmar'],
+  ['canadian', 'canada'],
+  ['chilean', 'chile'],
+  ['chinese', 'china'],
+  ['colombian', 'colombia'],
+  ['croatian', 'croatia'],
+  ['cuban', 'cuba'],
+  ['cypriot', 'cyprus'],
+  ['czech', 'czechia'],
+  ['danish', 'denmark'],
+  ['egyptian', 'egypt'],
+  ['english', 'england'],
+  ['estonian', 'estonia'],
+  ['european', 'europe'],
+  ['filipino', 'philippines'],
+  ['finnish', 'finland'],
+  ['french', 'france'],
+  ['german', 'germany'],
+  ['ghanaian', 'ghana'],
+  ['greek', 'greece'],
+  ['hungarian', 'hungary'],
+  ['icelandic', 'iceland'],
+  ['indian', 'india'],
+  ['indonesian', 'indonesia'],
+  ['iranian', 'iran'],
+  ['iraqi', 'iraq'],
+  ['irish', 'ireland'],
+  ['israeli', 'israel'],
+  ['italian', 'italy'],
+  ['jamaican', 'jamaica'],
+  ['japanese', 'japan'],
+  ['jordanian', 'jordan'],
+  ['kenyan', 'kenya'],
+  ['korean', 'korea'],
+  ['lebanese', 'lebanon'],
+  ['libyan', 'libya'],
+  ['malaysian', 'malaysia'],
+  ['mexican', 'mexico'],
+  ['moroccan', 'morocco'],
+  ['nepalese', 'nepal'],
+  ['nigerian', 'nigeria'],
+  ['norwegian', 'norway'],
+  ['pakistani', 'pakistan'],
+  ['palestinian', 'palestine'],
+  ['peruvian', 'peru'],
+  ['polish', 'poland'],
+  ['portuguese', 'portugal'],
+  ['romanian', 'romania'],
+  ['russian', 'russia'],
+  ['saudi', 'saudi arabia'],
+  ['scottish', 'scotland'],
+  ['senegalese', 'senegal'],
+  ['serbian', 'serbia'],
+  ['somali', 'somalia'],
+  ['spanish', 'spain'],
+  ['sudanese', 'sudan'],
+  ['swedish', 'sweden'],
+  ['swiss', 'switzerland'],
+  ['syrian', 'syria'],
+  ['tanzanian', 'tanzania'],
+  ['thai', 'thailand'],
+  ['tunisian', 'tunisia'],
+  ['turkish', 'turkey'],
+  ['ugandan', 'uganda'],
+  ['ukrainian', 'ukraine'],
+  ['vietnamese', 'vietnam'],
+  ['welsh', 'wales'],
+  ['zambian', 'zambia'],
+  ['zimbabwean', 'zimbabwe'],
+]);
+
+/**
+ * The outlets.
+ *
+ * An outlet is named in every Article it published, so an Entity for one is a hub
+ * rather than a name: "BBC" was attached to 43 Articles and matched every one of
+ * them, which is a link between unrelated Stories that costs the same as any
+ * other. It is also what a newsletter of a User's own is named, and a newsletter
+ * appears in most of a User's Topics.
+ *
+ * They are named rather than read off the Source registry because a registry only
+ * holds the Sources Brieflyy polls, and an outlet Brieflyy does not poll is still
+ * an outlet in the text it wrote.
+ */
+export const PUBLISHER_NAMES: ReadonlySet<string> = new Set([
+  'al jazeera',
+  'ap',
+  'ars technica',
+  'associated press',
+  'associated press news',
+  'axios',
+  'bbc',
+  'bbc news',
+  'bbc science environment',
+  'bloomberg',
+  'breitbart',
+  'cnbc',
+  'cnn',
+  'der spiegel',
+  'dw',
+  'economist',
+  'engadget',
+  'espn',
+  'financial times',
+  'forbes',
+  'fox business',
+  'fox news',
+  'guardian',
+  'guardian australia',
+  'guardian environment',
+  'hacker news',
+  'huffpost',
+  'independent',
+  'jerusalem post',
+  'marketwatch',
+  'nature',
+  'new york times',
+  'new yorker',
+  'npr',
+  'physorg',
+  'politico',
+  'politico europe',
+  'quanta magazine',
+  'reuters',
+  'science news',
+  'scientific american',
+  'sky news',
+  'techcrunch',
+  'telegraph',
+  'the atlantic',
+  'the economist',
+  'the hill',
+  'the independent',
+  'the new york times',
+  'the telegraph',
+  'the times',
+  'the verge',
+  'the washington post',
+  'times',
+  'times of india',
+  'usa today',
+  'verge',
+  'vice',
+  'wall street journal',
+  'washington post',
+  'wired',
+  'wsj',
+  'yahoo',
+]);
+
+/**
+ * The labels a feed stamps on an item rather than text a Source wrote.
+ *
+ * The same failure as an outlet and a smaller one: these are in every Article of
+ * the feed that stamps them, so they link nothing but each other. `Points` and
+ * `Comments` are cut out of the text with the rest of the feed's bookkeeping
+ * (see `stripFeedMetadata`); they are here as well because the rule that reads
+ * them does not know they were bookkeeping.
+ */
+export const FEED_FURNITURE: ReadonlySet<string> = new Set([
+  'advertisement',
+  'article',
+  'comments',
+  'comment',
+  'daily briefing',
+  'feed',
+  'hn',
+  'permalink',
+  'points',
+  'rss',
+  'sponsored',
+  'submitted',
+  'thread',
+  'url',
+  'urls',
+]);
+
+/**
+ * Head nouns that name a sort of thing rather than one of them.
+ *
+ * Standalone, they are in most of the Articles about the sort: "University" in
+ * every report about a campus, "County" in every report about a local election.
+ * They dilute the overlap two Stories are compared on without identifying
+ * anything, and the Entity that identifies the report — the institution, the
+ * county — is still extracted because its key is more than this one word.
+ */
+export const GENERIC_HEAD_NOUNS: ReadonlySet<string> = new Set([
+  'academy',
+  'agency',
+  'airport',
+  'association',
+  'avenue',
+  'bank',
+  'board',
+  'briefing',
+  'bridge',
+  'bureau',
+  'campus',
+  'centre',
+  'center',
+  'church',
+  'city',
+  'college',
+  'commission',
+  'committee',
+  'company',
+  'corporation',
+  'council',
+  'county',
+  'court',
+  'department',
+  'district',
+  'foundation',
+  'federation',
+  'group',
+  'hospital',
+  'institute',
+  'institution',
+  'laboratory',
+  'library',
+  'ministry',
+  'museum',
+  'office',
+  'organisation',
+  'organization',
+  'party',
+  'place',
+  'prime',
+  'province',
+  'region',
+  'republic',
+  'school',
+  'society',
+  'square',
+  'station',
+  'street',
+  'team',
+  'trust',
+  'union',
+  'university',
 ]);

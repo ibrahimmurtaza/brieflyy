@@ -106,6 +106,53 @@ Every labelled pair is measured, on the corpus widened by the two Topics recorde
 at the end of this file — so the numbers before and after this rule changed are
 over the same families and the same Topics, and the comparison is like for like.
 
+### What Entity canonicalisation did to it
+
+`pnpm cluster:benchmark` reads the Entities the corpus already holds, so a change to
+extraction (ADR-0031) is measured two ways: over the rows the corpus holds once
+`reconcileEntityKeys` has run, and over a replay in which every Article's Entities are
+re-extracted from the stored text over a copy. The replay is the worst case and is not
+what a user meets first.
+
+| | stored rows | after the migration | after re-extraction |
+| --- | --- | --- | --- |
+| recall | 51.7% | **48.3%** | **44.8%** |
+| precision | 71.4% | **69.4%** | **69.4%** |
+| Entity-only ceiling | 83.7% (8 of 49 identical) | 81.6% (**9 of 49**) | 81.6% (9 of 49) |
+| Entities / links | 3,757 / 6,536 | 3,689 / 6,440 | 3,646 / 6,224 |
+| different-event families sharing no Entity at all | 3 of 49 | — | **6 of 49** |
+
+The migration alone takes the first recall point: on this corpus it merges 68 rows,
+collapses 96 duplicate links and re-keys 91, with no new Article at all.
+
+Sweeping the Entity floor against the signature floor over the whole grid on the
+stored rows and on the migrated rows, the migrated frontier is at or above the stored
+one at **eight of the nine recall levels the two share**, and reaches a recall level
+(72.4%) the stored corpus cannot. The shipped point — 0.45 / 0.04 — is the one place
+on that grid where the migrated corpus reads worse, and it reads worse there because
+0.45 was set against the old distribution: folding makes Entities more common, IDF
+makes them weigh less, and every cosine compresses downwards. The migrated corpus
+reaches the same 51.7% / 71.4% at **0.20 / 0.08** instead, which is a different rule
+rather than a shifted constant, and which is not adopted — ADR-0031 says why.
+
+The ticket predicted about two points of recall gained. Ablating each fold shows the
+folds cost **no recall at all** and exactly one precision family — the recall drop in
+the table above is the replay, not the change, because a re-extraction with every fold
+disabled still scores 48.3%. The demonym fold is the whole of that one family:
+`Australian` → `Australia` merges a rare Entity into a common one, which lowers the
+country's IDF weight and takes down every different-event pair whose overlap is only
+it. Partial-name resolution and qualifier stripping measure free. So the floor is not
+wrong and the demonym fold is — ADR-0031 says so, and leaves the decision to whoever
+owns the ticket. One different-event family rose over the Entity floor because
+dropping an unshared head noun shortens that Story's norm.
+
+The replay is not the corpus the stored rows came from, and the difference is worth
+stating: replaying the *old* rules over the same 1,804 Articles reproduces the stored
+Entity set exactly — 6,536 links and 3,757 rows — and scores 48.3% against the 51.7%
+recorded above, because the replay reads Articles in id order rather than the order
+the feeds delivered them and the first-arrival rule then decides a different name and
+kind for a handful of rows. Every replay figure above is replay against replay.
+
 ### What it was, and what it is
 
 The rule this replaced divided the shared Entities by the **larger** of the two

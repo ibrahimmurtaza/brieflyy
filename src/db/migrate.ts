@@ -4,7 +4,13 @@ import { tableExists, type SqliteDriver } from './client.js';
 import { applyArchiveIndex } from './archive-index.js';
 import { backfillStoryStates } from './story-state.js';
 import { extractSignature } from '../domain/extract.js';
-import { canonicalEntityKey } from '../domain/entity-extraction.js';
+import {
+  canonicalEntityKey,
+  isFullerNameFor,
+  isPartialName,
+  namesNothing,
+  theOnlyFullerName,
+} from '../domain/entity-extraction.js';
 import { articleText } from '../domain/feed-text.js';
 import {
   encodeSignature,
@@ -1077,53 +1083,153 @@ function signatureOfArticle(title: string, body: string) {
 }
 
 /**
- * Give Entities that predate the key column the key their name already says.
- *
- * The key is what two spellings of one name are matched on, and it is derived
- * from the name rather than written by the outlet, so a row that has a name has
- * everything its key needs. An older build could hold two rows for one thing â€”
- * "Acme Corp" and "Acme" were different names to it, and both are the same key
- * now â€” so the loser of such a pair is merged into the winner: its Articles are
- * repointed and the row goes. Leaving both would fail the unique index, and
- * leaving one un-keyed would mean the next mention of that name inserts a third.
- *
- * The key is derived with the same function the pipeline derives it with, so the
- * two cannot disagree â€” and a later change to the fold therefore changes what a
- * later boot writes into an older database, which is the one way this can write
- * a value the build that wrote it would not have written. A row whose name folds
- * to nothing at all takes its own id as its key: that keeps it addressable and
- * keeps the index creatable, and an id is not a name, so nothing else can collide
- * with it or be folded onto it.
- *
- * This runs before the DDL rather than with the other backfills, because the
- * index the DDL creates is unique and a database holding two rows for one name
- * cannot have it until the two are one row.
+ * One Entity row as the reconciliation holds it while it works: which row, and
+ * the identity its name has now.
  */
-function backfillEntityKeys(driver: SqliteDriver): void {
+interface StoredEntity {
+  readonly id: string;
+  readonly key: string;
+}
+
+/**
+ * Bring every stored Entity's identity up to what the pipeline now derives.
+ *
+ * An Entity's identity is a function of its name, so a build that changes what a
+ * name folds to has to change what the rows are keyed on — otherwise the next
+ * Article that writes the name reaches for a row the database does not have, and
+ * the two are two Entities that never overlap. Nothing about the shape changes,
+ * which is why this is a boot-time reconciliation rather than a column migration:
+ * there is no new column to add and no index to rebuild, only rows whose stored
+ * key has fallen behind the rule.
+ *
+ * It runs before the DDL rather than with the other backfills, because the index
+ * the DDL creates is unique and a database holding two rows for one name cannot
+ * have it until the two are one row. Three things happen, in this order:
+ *
+ * - **Rows whose names now fold alike are made one.** "Israel" and "Israeli" were
+ *   two rows and are one key; the loser of such a pair is merged into the winner,
+ *   its Articles repointed and the row dropped, which is the only thing that keeps
+ *   the unique index creatable.
+ * - **Rows whose name is a partial of a fuller one already stored are made one.**
+ *   The same resolution the ingest path makes, run over rows rather than over one
+ *   Article, because a corpus can hold the short name and the long one in
+ *   whichever order it was polled in and the stored shape has to come out the
+ *   same either way.
+ * - **Everything else is re-keyed** to what its name folds to.
+ *
+ * A row whose name names nothing — an outlet, a feed's own labels, a head noun on
+ * its own — keeps its row and its key. Nothing extracts such a name any more, but
+ * the Articles that already named one are still pointing at its row, and deleting
+ * it would take those links with it. Its key is unique already, so it cannot
+ * collide with anything; a legacy row that has no key at all takes its own id,
+ * which is not a name and so cannot be folded onto by anything.
+ *
+ * The key is derived with the same functions the pipeline derives it with, so the
+ * two cannot disagree — and a later change to the fold therefore changes what a
+ * later boot writes into an older database, which is the one way this can write a
+ * value the build that wrote it would not have written.
+ */
+function reconcileEntityKeys(driver: SqliteDriver): void {
   if (!tableExists(driver, 'entities')) return;
   if (!hasColumn(driver, 'entities', 'canonical_key')) return;
-  const unkeyed = driver
-    .prepare(
-      `SELECT id, canonical_name FROM entities WHERE canonical_key = '' ORDER BY id`,
-    )
-    .all() as { id: string; canonical_name: string }[];
-  const keeperOf = new Map<string, string>();
-  const key = driver.prepare(`UPDATE entities SET canonical_key = ? WHERE id = ?`);
+  const stored = driver
+    .prepare(`SELECT id, canonical_name, canonical_key FROM entities ORDER BY id`)
+    .all() as readonly { id: string; canonical_name: string; canonical_key: string }[];
+
   const repoint = driver.prepare(
     `UPDATE OR IGNORE article_entities SET entity_id = ? WHERE entity_id = ?`,
   );
   const drop = driver.prepare(`DELETE FROM entities WHERE id = ?`);
-  for (const row of unkeyed) {
-    const name = canonicalEntityKey(row.canonical_name);
-    const derived = name.length > 0 ? name : row.id;
-    const keeper = keeperOf.get(derived);
-    if (!keeper) {
-      keeperOf.set(derived, row.id);
-      key.run(derived, row.id);
+  const rekey = driver.prepare(`UPDATE entities SET canonical_key = ? WHERE id = ?`);
+
+  /**
+   * The identity each row's name has now.
+   *
+   * A name that names nothing has none, and is left with whatever key it arrived
+   * holding rather than given one derived from nothing — the fold runs once per
+   * row here rather than per comparison, because the rows are sorted by it.
+   */
+  const identityById = new Map<string, string>();
+  for (const row of stored) {
+    identityById.set(
+      row.id,
+      namesNothing(row.canonical_name)
+        ? row.canonical_key.length > 0
+          ? row.canonical_key
+          : row.id
+        : canonicalEntityKey(row.canonical_name),
+    );
+  }
+
+  /**
+   * One row stands for a name, and the rows still standing are keyed by id.
+   *
+   * The row that is already keyed the way the name now folds wins, because that
+   * is the spelling the fold produces: "Israel" over "Israeli", whose key is the
+   * one the fold moves. Failing that the fullest name does, because the name a
+   * User reads is a real outlet's spelling and "Christa Pike" is more of one than
+   * "Pike" — and failing that the first id, so the outcome does not depend on the
+   * order SQLite happens to return rows in.
+   */
+  const live = new Map<string, StoredEntity>();
+  const ordered = [...stored].sort((a, b) => {
+    const identityA = identityById.get(a.id) ?? '';
+    const identityB = identityById.get(b.id) ?? '';
+    const folded =
+      Number(b.canonical_key === identityB) - Number(a.canonical_key === identityA);
+    if (folded !== 0) return folded;
+    return (
+      b.canonical_name.length - a.canonical_name.length || a.id.localeCompare(b.id)
+    );
+  });
+  for (const row of ordered) {
+    const identity = identityById.get(row.id) ?? '';
+    const standing = live.get(identity);
+    if (standing === undefined) {
+      live.set(identity, { id: row.id, key: identity });
       continue;
     }
-    repoint.run(keeper, row.id);
+    repoint.run(standing.id, row.id);
     drop.run(row.id);
+  }
+
+  // A partial name is the same thing as the fullest name already stored that it
+  // is the end of.
+  const resolved = new Set<string>();
+  for (const entity of [...live.values()]) {
+    if (!isPartialName(entity.key)) continue;
+    const fuller = theOnlyFullerName(
+      [...live.values()].map((other) => other.key),
+      entity.key,
+    );
+    if (fuller === undefined) continue;
+    const keeper = live.get(fuller);
+    if (keeper === undefined) continue;
+    resolved.add(entity.key);
+    live.delete(entity.key);
+    repoint.run(keeper.id, entity.id);
+    drop.run(entity.id);
+  }
+
+  // And the other way round, for a database polled in the order that leaves the
+  // full name standing beside the partial one it is the end of.
+  for (const [key, entity] of [...live]) {
+    const last = key.split(' ').pop() ?? '';
+    if (last === key || resolved.has(last)) continue;
+    if (!isFullerNameFor(key, last)) continue;
+    const partial = live.get(last);
+    if (partial === undefined) continue;
+    live.delete(last);
+    repoint.run(entity.id, partial.id);
+    drop.run(partial.id);
+  }
+
+  // Last, so that every merge is done before any key is written: the index is
+  // unique, and re-keying a row onto a key another row is about to stop holding
+  // would fail against the row that has not been dropped yet.
+  const storedKeyById = new Map(stored.map((row) => [row.id, row.canonical_key]));
+  for (const [key, entity] of live) {
+    if (storedKeyById.get(entity.id) !== key) rekey.run(key, entity.id);
   }
 }
 
@@ -1136,7 +1242,7 @@ export function applySchema(driver: SqliteDriver): void {
   applyRetiredColumns(driver);
   // Ahead of the DDL, and unlike the backfills below, because the index the DDL
   // creates is unique: it cannot be made while two rows are one Entity.
-  backfillEntityKeys(driver);
+  reconcileEntityKeys(driver);
   driver.exec(SCHEMA_SQL);
   rebuildNonUniqueIndexes(driver);
   // Recreate any index the rebuilds dropped with their tables.
