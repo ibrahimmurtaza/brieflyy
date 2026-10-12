@@ -2,31 +2,71 @@
  * How a Topic's Stories are split into the groups that become Clusters.
  *
  * This is the rule rather than the machinery around it. `ClusterFormationService`
- * reads the Stories and the Entities and calls it; the benchmark calls the same
- * function over a real corpus, so what the benchmark measures is what the
- * application runs rather than a second implementation of it that drifts.
+ * reads the Stories and calls it; the benchmark calls the same function over a
+ * real corpus, so what the benchmark measures is what the application runs rather
+ * than a second implementation of it that drifts.
  *
  * The rule is two steps, and they are two decisions rather than one:
  *
- * - **Similarity**: two Stories are scored by the cosine between their Entity
- *   vectors, where an Entity's weight is how rare it is across the Topic's
- *   Stories (its inverse document frequency) times what its kind is worth. An
- *   Entity most Stories name is worth almost nothing; a rare one is worth a lot.
+ * - **Similarity**: two Stories are scored twice over, once by the cosine between
+ *   their Entity vectors — where an Entity's weight is how rare it is across the
+ *   Topic's Stories (its inverse document frequency) times what its kind is worth,
+ *   so an Entity most Stories name is worth almost nothing and a rare one a lot —
+ *   and once by their Story signatures, which is the signal that tells two reports
+ *   about the same company apart (ADR-0007).
  * - **Linkage**: the most similar pair of Stories is merged first, and a merge
- *   only happens when every member of the resulting Cluster already meets
- *   {@link SIMILARITY_FLOOR} with every other member of it.
+ *   only happens when every member of the resulting Cluster clears *both* floors
+ *   with every other member of it.
  *
  * The second step is what stops a chain of individually reasonable links
  * running away into one Cluster: a Story can only join a Cluster it is similar
  * to all of, so a hub that is a bit like everything is left on its own.
+ *
+ * Both floors are stated in one {@link MergeThresholds} rather than one at a
+ * time, because a rule reading two signals cannot be described by one number and a
+ * caller passing a bare one cannot say which of the two they meant.
  */
 
+import { signatureSimilarity, type StorySignature } from './story-signature.js';
 import type { EntityId, EntityKind } from './types.js';
 
 /** An Entity as grouping sees it: which thing it is, and what kind of thing. */
 export interface GroundedEntity {
   readonly id: EntityId;
   readonly kind: EntityKind;
+}
+
+/**
+ * A Story as grouping sees it: the Entities it names, and the text it carries.
+ *
+ * Read in one go rather than through two callbacks because the rule compares two
+ * representations of the same Story, and a caller passing one of them by position
+ * and the other by id can hand it two different Stories' readings and get a
+ * grouping nobody could have meant.
+ *
+ * `signature` is whatever the caller reads for this Story in this Topic, so long
+ * as it is a signature: the one the Story was formed from, or one taken over its
+ * Articles. Grouping does not know or care which, because both are the same thing
+ * to it — how alike two Stories are as text.
+ */
+export interface GroundedStory {
+  readonly entities: readonly GroundedEntity[];
+  readonly signature: StorySignature;
+}
+
+/**
+ * The two floors a merge has to clear, stated separately.
+ *
+ * A merge happens only where a pair clears both, so neither floor can be moved
+ * by passing the other: a caller lowering the Entity cosine to widen the rule has
+ * still left the signature floor where the rule ships it, and a caller loosening
+ * the signature gate has not widened the cosine at all.
+ */
+export interface MergeThresholds {
+  /** How alike two Stories' Entity vectors have to be, as a share of 0 to 1. */
+  readonly entity: number;
+  /** How much two Stories' signatures have to agree, as a share of 0 to 1. */
+  readonly signature: number;
 }
 
 /**
@@ -48,26 +88,76 @@ export const ENTITY_KIND_WEIGHTS: Readonly<Record<EntityKind, number>> = {
 };
 
 /**
- * How similar two Stories have to be before they can end up in one Cluster, as
- * a share of the weighted Entity vectors they are represented by.
+ * How similar two Stories' Entity vectors have to be before they can end up in one
+ * Cluster, as a share of the weighted vectors they are represented by.
  *
  * Chosen against the benchmark rather than by taste, and the whole neighbourhood
  * behaves alike: `docs/cluster-grouping-baseline.md` carries the measured
  * frontier this sits on. Half a cosine is "these two Articles are largely about
  * the same named things", which is the question a Cluster answers.
  */
-export const SIMILARITY_FLOOR = 0.45;
+export const ENTITY_SIMILARITY_FLOOR = 0.45;
+
+/**
+ * How much two Stories' signatures have to agree before they can end up in one
+ * Cluster.
+ *
+ * An order of magnitude below the Entity floor, and deliberately not the same
+ * number: the two are measured on different things and their margins are not
+ * comparable, so tuning one to the other would be borrowing a constant rather than
+ * reading a distribution. Measured on the same labelled families the Entity floor
+ * was chosen from, where it takes precision from 59.2% to 71.4% at no cost to
+ * recall at all — and where, unlike `STORY_MATCH_THRESHOLD`, same-event pairs run
+ * as low as 0.024, so this is not that threshold's neighbourhood. The plateau
+ * between 0.02 and 0.04 is why the value is where it is rather than the size of
+ * the improvement: `docs/adr/0030` carries the table it was picked from.
+ */
+export const SIGNATURE_SIMILARITY_FLOOR = 0.04;
+
+/**
+ * The floors the rule runs at, as one link.
+ *
+ * Kept as a value rather than written out at each call site, because the two
+ * floors were measured against each other — the Entity floor chosen with the gate
+ * in place, the signature floor for the gain it adds on top of it — and a rule
+ * reading one without the other is not the rule either was measured as.
+ */
+export const SHIPPED_MERGE_THRESHOLD: MergeThresholds = {
+  entity: ENTITY_SIMILARITY_FLOOR,
+  signature: SIGNATURE_SIMILARITY_FLOOR,
+};
 
 /**
  * The floors the rule is meant to be read at, and the range over which the
  * largest Cluster is claimed to stay bounded.
  *
- * A range rather than one number because the bound is a claim about the rule
- * rather than about the number: `docs/cluster-grouping-baseline.md` records the
- * largest Cluster measured at every floor in it. Outside it the floor is not
- * what this rule was measured at, and the benchmark is how to find out.
+ * A grid rather than a line through the neighbourhood, because the bound is a
+ * claim about the rule over both of its floors and a diagonal walk would attribute
+ * every movement to neither of them: holding one floor still and moving the other
+ * is what says which floor is doing the work. A grid makes the Entity floor's
+ * effect and the signature floor's separately readable, and a reader who moves
+ * only one of them afterwards can find where that lands.
+ *
+ * `docs/cluster-grouping-baseline.md` records the largest Cluster measured at
+ * every pair in it. Outside the grid the rule is not what this was measured at,
+ * and the benchmark is how to find out.
  */
-export const SHIPPED_SIMILARITY_FLOORS: readonly number[] = [0.4, 0.45, 0.5];
+export const SHIPPED_MERGE_THRESHOLDS: readonly MergeThresholds[] = [
+  { entity: 0.4, signature: 0.03 },
+  { entity: 0.4, signature: 0.04 },
+  { entity: 0.4, signature: 0.05 },
+  SHIPPED_MERGE_THRESHOLD,
+  { entity: 0.45, signature: 0.03 },
+  { entity: 0.45, signature: 0.05 },
+  { entity: 0.5, signature: 0.03 },
+  { entity: 0.5, signature: 0.04 },
+  { entity: 0.5, signature: 0.05 },
+];
+
+/** The two floors as one fixed-width string, so a report and a failure name both. */
+export function describeThresholds(thresholds: MergeThresholds): string {
+  return `${thresholds.entity.toFixed(2)}/${thresholds.signature.toFixed(2)}`;
+}
 
 /**
  * How much of its Entities two Stories must have in common to be in the same
@@ -163,48 +253,67 @@ export function similarityBetween(
 /**
  * Split Stories into the groups that become Clusters.
  *
- * Similarity decides how alike two Stories are and {@link SIMILARITY_FLOOR}
- * decides how alike is enough; the linkage below decides which Clusters those
- * pairs make. Comparison is against every other Story rather than against the
- * one immediately before it in time, because comparing only neighbours would
- * make the grouping a function of when things happened to arrive — one Story
- * landing between two related ones would pull them apart. The order merges go in
- * is by descending similarity and then by position, so the same set of Stories
- * always forms the same Clusters.
+ * A merge happens only where a pair clears both {@link MergeThresholds}, and the
+ * floor decides how alike is enough on each of the two signals: the cosine
+ * answers whether two Stories are about the same named things, and the signature
+ * answers whether they are about the same thing. The linkage below then decides
+ * which Clusters those pairs make. Comparison is against every other Story rather
+ * than against the one immediately before it in time, because comparing only
+ * neighbours would make the grouping a function of when things happened to arrive
+ * — one Story landing between two related ones would pull them apart. The order
+ * merges go in is by descending Entity similarity and then by position, so the
+ * same set of Stories always forms the same Clusters: the cosine picks which pair
+ * to consider first, and the signature only ever refuses one.
+ *
+ * A Story whose signature says nothing is never merged on the strength of its
+ * Entities, the same way one naming no Entity is never merged. Reading nothing is
+ * not evidence of anything, and a gate exists to hold two Stories apart — failing
+ * it open would leave the corpus's unsigned rows grouping by the one signal the
+ * gate was added to check them on.
  *
  * Groups come back in the order their first member appeared.
  */
-export function groupByEntitySimilarity<T>(
+export function groupIntoClusters<T>(
   items: readonly T[],
-  entitiesOf: (item: T, index: number) => readonly GroundedEntity[],
-  options: { readonly floor?: number } = {},
+  readOf: (item: T, index: number) => GroundedStory,
+  options: { readonly thresholds?: MergeThresholds } = {},
 ): readonly (readonly T[])[] {
   if (items.length === 0) return [];
-  const floor = options.floor ?? SIMILARITY_FLOOR;
-  const entitySets = items.map(entitiesOf);
+  const thresholds = options.thresholds ?? SHIPPED_MERGE_THRESHOLD;
+  const readings = items.map(readOf);
+  const entitySets = readings.map((reading) => reading.entities);
   const inverseDocumentFrequency = inverseDocumentFrequencies(entitySets);
 
-  const scored = new Map<string, number>();
-  const scoreOf = (i: number, j: number): number => {
-    const key = i < j ? `${i}:${j}` : `${j}:${i}`;
-    const known = scored.get(key);
-    if (known !== undefined) return known;
-    const score = similarityBetween(
-      entitySets[i]!,
-      entitySets[j]!,
-      inverseDocumentFrequency,
-    );
-    scored.set(key, score);
-    return score;
+  /** A score per pair, worked out once however many times it is asked for. */
+  const perPair = (score: (i: number, j: number) => number): ((i: number, j: number) => number) => {
+    const known = new Map<string, number>();
+    return (i, j) => {
+      const key = i < j ? `${i}:${j}` : `${j}:${i}`;
+      const read = known.get(key);
+      if (read !== undefined) return read;
+      const scored = score(i, j);
+      known.set(key, scored);
+      return scored;
+    };
   };
+
+  const entityScoreOf = perPair((i, j) =>
+    similarityBetween(entitySets[i]!, entitySets[j]!, inverseDocumentFrequency),
+  );
+  const signatureScoreOf = perPair((i, j) =>
+    signatureSimilarity(readings[i]!.signature, readings[j]!.signature),
+  );
+  const clearsBothFloors = (i: number, j: number): boolean =>
+    entityScoreOf(i, j) >= thresholds.entity &&
+    signatureScoreOf(i, j) >= thresholds.signature;
 
   // Most similar pair first. Ties break on position so the order is the same on
   // every run rather than the one the sort happened to produce.
   const candidates: { readonly i: number; readonly j: number; readonly score: number }[] = [];
   for (let i = 0; i < items.length; i++) {
     for (let j = i + 1; j < items.length; j++) {
-      const score = scoreOf(i, j);
-      if (score >= floor) candidates.push({ i, j, score });
+      if (!clearsBothFloors(i, j)) continue;
+      candidates.push({ i, j, score: entityScoreOf(i, j) });
     }
   }
   candidates.sort((a, b) => b.score - a.score || a.i - b.i || a.j - b.j);
@@ -230,8 +339,10 @@ export function groupByEntitySimilarity<T>(
     const into = members[left]!;
     const from = members[right]!;
     // Every member of the resulting Cluster, not just the pair being merged:
-    // this is the difference between a Cluster and a chain of links.
-    if (from.some((to) => into.some((existing) => scoreOf(existing, to) < floor))) {
+    // this is the difference between a Cluster and a chain of links. Both floors
+    // apply to every one of those pairs, because a Story that reads unlike the
+    // Cluster it would join has not been shown to belong to it either.
+    if (from.some((to) => into.some((existing) => !clearsBothFloors(existing, to)))) {
       continue;
     }
     into.push(...from);

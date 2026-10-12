@@ -32,12 +32,17 @@ import {
 import { createDatabase, type Db } from '../db/client.js';
 import { articles, sources, stories } from '../db/schema.js';
 import {
-  SIMILARITY_FLOOR,
-  SHIPPED_SIMILARITY_FLOORS,
-  groupByEntitySimilarity,
+  ENTITY_SIMILARITY_FLOOR,
+  SHIPPED_MERGE_THRESHOLD,
+  SHIPPED_MERGE_THRESHOLDS,
+  SIGNATURE_SIMILARITY_FLOOR,
+  groupIntoClusters,
   type GroundedEntity,
+  type GroundedStory,
+  type MergeThresholds,
 } from '../domain/cluster-grouping.js';
 import { clusterWindowStart } from '../domain/cluster-window.js';
+import { EMPTY_SIGNATURE, type StorySignature } from '../domain/story-signature.js';
 import type { StoryId, Topic, TopicId } from '../domain/types.js';
 import { readRequiredString } from '../env.js';
 import { DrizzleArticleRepo } from '../repos/article-repo.js';
@@ -77,20 +82,31 @@ async function main(): Promise<number> {
         topicId: topic.id,
         storyIds,
         grounding,
-        groundingByStoryId: new Map(storyIds.map((id, index) => [id, grounding[index]!])),
+        // The signature each Story carries, which is the one it was formed from —
+        // the same reading `ClusterFormationService` groups on, read here so the
+        // gate measured is the gate that runs.
+        signatures: inWindow.map((story) => story.signature),
+        // Both readings keyed by Story, in one map, so the ceilings and the
+        // margins cannot be handed one Story's Entities and another's signature.
+        readingByStoryId: new Map(
+          storyIds.map((id, index) => [
+            id,
+            { entities: grounding[index]!, signature: inWindow[index]!.signature },
+          ]),
+        ),
       });
     }
 
     const grouped: GroupedTopic[] = reads.map((read) => ({
       topicId: read.topicId,
-      // The shipped floor carries no marker, so the report's own numbers and
+      // The shipped thresholds carry no marker, so the report's own numbers and
       // the sweep's are read off one grouping rather than two copies.
       clusters: groupTopic(read, undefined),
     }));
-    for (const floor of SHIPPED_SIMILARITY_FLOORS) {
-      if (floor === SIMILARITY_FLOOR) continue;
+    for (const thresholds of SHIPPED_MERGE_THRESHOLDS) {
+      if (thresholds === SHIPPED_MERGE_THRESHOLD) continue;
       for (const read of reads) {
-        grouped.push({ topicId: read.topicId, floor, clusters: groupTopic(read, floor) });
+        grouped.push({ topicId: read.topicId, thresholds, clusters: groupTopic(read, thresholds) });
       }
     }
 
@@ -102,12 +118,13 @@ async function main(): Promise<number> {
     const report = evaluateClusterGrouping({
       grouped,
       resolution,
-      groundingOf: (storyId) => groundingForStory(reads, storyId),
+      readingOf: (storyId) => readingForStory(reads, storyId),
+      signatureFloor: SIGNATURE_SIMILARITY_FLOOR,
     });
 
     process.stdout.write(
       formatClusterReport(report, {
-        rule: `IDF-weighted cosine over Entities at a floor of ${SIMILARITY_FLOOR}, merged most-similar first with an all-pairs floor`,
+        rule: `IDF-weighted cosine over Entities at a floor of ${ENTITY_SIMILARITY_FLOOR} and a Story signature floor of ${SIGNATURE_SIMILARITY_FLOOR}, merged most-similar first with an all-pairs floor over both`,
         corpus: `${reads.length} topics, window ending ${now.toISOString()}`,
       }),
     );
@@ -168,50 +185,57 @@ function corpusNow(db: Db): Date {
  * Grouped on the Entities of the Articles in scope — which is
  * `groundingByStoryInScope`, the read the service groups with too, rather than a
  * second copy of it — over the Stories in the order they were read, so the
- * Entities at an index are the ones belonging to the Story at that index.
+ * Entities at an index are the ones belonging to the Story at that index. The
+ * signature comes off the same Story at the same index, so the two cannot
+ * disagree about which Story they are describing.
  */
 function groupTopic(
   read: TopicRead,
-  floor: number | undefined,
+  thresholds: MergeThresholds | undefined,
 ): readonly (readonly StoryId[])[] {
-  return groupByEntitySimilarity(
+  return groupIntoClusters(
     read.storyIds,
-    (_storyId, index) => read.grounding[index]!,
-    floor === undefined ? {} : { floor },
+    (_storyId, index) => ({
+      entities: read.grounding[index]!,
+      signature: read.signatures[index]!,
+    }),
+    thresholds === undefined ? {} : { thresholds },
   );
 }
 
-/** One Topic's Stories and their Entities, read once and grouped at several floors. */
+/** One Topic's Stories and how each of them reads, read once and grouped several times. */
 interface TopicRead {
   readonly topicId: TopicId;
   readonly storyIds: readonly StoryId[];
   readonly grounding: readonly (readonly GroundedEntity[])[];
+  /** The signature each Story carries, by the same position as the grounding. */
+  readonly signatures: readonly StorySignature[];
   /**
-   * The same grounding keyed by Story, for the precision ceiling.
+   * Both readings keyed by Story, for the ceilings and the margins.
    *
-   * Built here rather than searched per pair because the rule reads the Entities
-   * by position while the ceiling reads them by id, and the two must not be
-   * able to disagree about which Entities a Story carries.
+   * The rule reads them by position and everything downstream reads them by id, so
+   * the keyed copy is built here in one pass rather than searched per pair: two
+   * lookups over one map cannot disagree about which Story they are describing.
    */
-  readonly groundingByStoryId: ReadonlyMap<StoryId, readonly GroundedEntity[]>;
+  readonly readingByStoryId: ReadonlyMap<StoryId, GroundedStory>;
 }
 
 /**
- * The Entities a Story carries, from whichever Topic first held it.
+ * How a Story reads, from whichever Topic first held it.
  *
- * The ceiling is a property of the two Stories rather than of a Topic: a
- * Story's Entity set is the union over its Articles, and the Topics holding it
- * read those Articles alike.
+ * A property of the Story rather than of a Topic: a Story's Entity set is the
+ * union over its Articles, its signature is the one it was formed from, and the
+ * Topics holding it read those alike.
  */
-function groundingForStory(
+function readingForStory(
   reads: readonly TopicRead[],
   storyId: StoryId,
-): readonly GroundedEntity[] {
+): GroundedStory {
   for (const read of reads) {
-    const grounding = read.groundingByStoryId.get(storyId);
-    if (grounding !== undefined) return grounding;
+    const reading = read.readingByStoryId.get(storyId);
+    if (reading !== undefined) return reading;
   }
-  return [];
+  return { entities: [], signature: EMPTY_SIGNATURE };
 }
 
 /** Every labelled Article the corpus holds, read in one query. */

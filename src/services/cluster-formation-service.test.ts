@@ -9,7 +9,8 @@ import { DrizzleSourceRepo } from '../repos/source-repo.js';
 import { DrizzleStoryRepo } from '../repos/story-repo.js';
 import { DrizzleTopicRepo } from '../repos/topic-repo.js';
 import { DrizzleUserRepo } from '../repos/user-repo.js';
-import { EMPTY_SIGNATURE } from '../domain/story-signature.js';
+import { normalizeSignature } from '../domain/story-signature.js';
+import { extractSignature } from '../domain/extract.js';
 import { canonicalEntityKey } from '../domain/entity-extraction.js';
 import { CLUSTER_ACTIVE_VELOCITY_THRESHOLD } from './cluster-formation-service.js';
 import { ClusterFormationService } from './cluster-formation-service.js';
@@ -153,7 +154,10 @@ async function givenStory(
   }
   await h.storyRepo.insert({
     id: input.storyId as StoryId,
-    signature: EMPTY_SIGNATURE,
+    // The signature production writes: taken from the Article's own text, which
+    // is what the gate reads. A fixture that wrote an empty one would be testing
+    // the gate's refusal rather than the grouping it is here to hold up.
+    signature: normalizeSignature(extractSignature(input.body)),
     firstSeenAt: seenAt,
     lastSeenAt: seenAt,
     published: { first: seenAt, last: seenAt }
@@ -180,7 +184,7 @@ async function givenStory(
         publishedAt: new Date(seenAt.getTime() + outlet.hoursLater * HOUR),
         ingestedAt: seenAt,
         entities: [],
-        signature: EMPTY_SIGNATURE,
+        signature: normalizeSignature(extractSignature(input.body)),
         storyId: input.storyId as StoryId,
       },
       entityIds,
@@ -316,6 +320,70 @@ describe('ClusterFormationService', () => {
       'story-acme,story-acme-follow-up',
       'story-brandx',
     ]);
+  });
+
+  it('holds a Story out of a Cluster whose other members do not read like it', async () => {
+    // The Entities alone would let this one in: it names everything the first
+    // Cluster names and one more, a cosine of about 0.58 against each of its
+    // members and well above the shipped floor of 0.45, so the Entity rule puts
+    // all three in one Cluster. Its text is about another company and shares not
+    // one word with either member, and the second signal is what refuses the
+    // merge.
+    const h = await buildHarness();
+    await givenStory(h, {
+      storyId: 'story-acme',
+      entities: ['acme', 'foo'],
+      body: BODY.acme,
+      hoursAgo: 5,
+    });
+    await givenStory(h, {
+      storyId: 'story-acme-follow-up',
+      entities: ['acme', 'foo'],
+      body: BODY.acmeFollowUp,
+      hoursAgo: 4,
+    });
+    await givenStory(h, {
+      storyId: 'story-brandx',
+      entities: ['acme', 'foo', 'brandx'],
+      body: BODY.brandx,
+      hoursAgo: 3,
+    });
+
+    const clusters = await h.service.formClustersForTopic('topic-1');
+
+    const byStory = new Map<string, string>();
+    for (const cluster of clusters) {
+      for (const id of await storyIdsByCluster(h, cluster.id)) {
+        byStory.set(id, cluster.id);
+      }
+    }
+    expect(byStory.get('story-acme')).toBe(byStory.get('story-acme-follow-up'));
+    expect(byStory.get('story-brandx')).not.toBe(byStory.get('story-acme'));
+  });
+
+  it('leaves a Story carrying no readable text in a Cluster of its own', async () => {
+    // A feed item served as a headline with no description has a signature with
+    // nothing in it, and a Story formed from one cannot be told from another by
+    // text. Reading nothing is not evidence that two Stories are one thing, so
+    // the gate refuses rather than waving it through — the same reading as a Story
+    // naming no Entities, which also sits alone.
+    const h = await buildHarness();
+    await givenStory(h, {
+      storyId: 'story-acme',
+      entities: ['acme', 'foo'],
+      body: BODY.acme,
+      hoursAgo: 5,
+    });
+    await givenStory(h, {
+      storyId: 'story-headline-only',
+      entities: ['acme', 'foo'],
+      body: '',
+      hoursAgo: 4,
+    });
+
+    const clusters = await h.service.formClustersForTopic('topic-1');
+
+    expect(clusters).toHaveLength(2);
   });
 
   it('leaves Stories with no Entities in Clusters of their own', async () => {

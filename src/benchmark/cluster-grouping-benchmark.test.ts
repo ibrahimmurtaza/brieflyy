@@ -1,16 +1,21 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  bothSignalsPrecisionCeiling,
   evaluateClusterGrouping,
   formatClusterReport,
   entityPrecisionCeiling,
   resolveClusterPairs,
+  type ClusterGroupingReport,
+  type GroupedTopic,
   type PairResolution,
 } from './cluster-grouping-benchmark.js';
 import type { CorpusStoryRef, LabelledStoryPair } from '../testing/cluster-pair-fixtures.js';
 import { corpusRefKey } from '../testing/cluster-pair-fixtures.js';
 import type { StoryId, TopicId, EntityId } from '../domain/types.js';
-import type { GroundedEntity } from '../domain/cluster-grouping.js';
+import type { GroundedEntity, MergeThresholds } from '../domain/cluster-grouping.js';
+import { SIGNATURE_SIMILARITY_FLOOR } from '../domain/cluster-grouping.js';
+import { EMPTY_SIGNATURE, type StorySignature } from '../domain/story-signature.js';
 
 const storyA = 'story-a' as StoryId;
 const storyB = 'story-b' as StoryId;
@@ -55,17 +60,39 @@ const corpus = {
 };
 
 /**
- * The Entities each Story carries, for the families the fixture corpus names.
+ * How each Story in the fixture corpus reads, for the ceilings and the margins.
  *
- * Stories C and D are both about Kalshi and carry it alone; A and B are about
- * different things and share nothing.
+ * Stories C and D are both about Kalshi and carry it alone, so they are identical
+ * as Entity vectors; what they are not is identical as text, which is the pair
+ * shape the two ceilings are told apart on. A and B are about different things
+ * and share nothing.
  */
-const groundingOf = (storyId: StoryId): readonly GroundedEntity[] => {
-  if (storyId === storyC || storyId === storyD) return [kalshi];
-  if (storyId === storyA) return [acme, foo];
-  if (storyId === storyB) return [brandx];
-  return [];
+const readingOf = (storyId: StoryId): { entities: readonly GroundedEntity[]; signature: StorySignature } => {
+  if (storyId === storyC) return { entities: [kalshi], signature: acmeText };
+  if (storyId === storyD) return { entities: [kalshi], signature: brandxText };
+  if (storyId === storyA) return { entities: [acme, foo], signature: acmeText };
+  if (storyId === storyB) return { entities: [brandx], signature: brandxText };
+  return { entities: [], signature: EMPTY_SIGNATURE };
 };
+
+const acmeText: StorySignature = { words: ['acme', 'foo'], phrases: ['acme foo'] };
+const brandxText: StorySignature = { words: ['brandx', 'tinyco'], phrases: [] };
+
+/** Two pairs of thresholds either side of the shipped one, for the sweep. */
+const loose: MergeThresholds = { entity: 0.4, signature: 0.03 };
+const strict: MergeThresholds = { entity: 0.5, signature: 0.05 };
+
+/** Evaluate a grouping the way the runner does, over the fixture readings. */
+function evaluate(input: {
+  readonly grouped: readonly GroupedTopic[];
+  readonly resolution: PairResolution;
+}): ClusterGroupingReport {
+  return evaluateClusterGrouping({
+    ...input,
+    readingOf,
+    signatureFloor: SIGNATURE_SIMILARITY_FLOOR,
+  });
+}
 
 const kalshi: GroundedEntity = { id: 'entity-kalshi' as EntityId, kind: 'concept' };
 const acme: GroundedEntity = { id: 'entity-acme' as EntityId, kind: 'org' };
@@ -155,10 +182,9 @@ describe('evaluateClusterGrouping', () => {
   ];
 
   it('counts a same-event family the rule put together in one Topic', () => {
-    const report = evaluateClusterGrouping({
+    const report = evaluate({
       grouped: together,
       resolution: resolutionOf(sets, corpus),
-      groundingOf,
     });
 
     expect(report.recall.correct).toBe(1);
@@ -166,10 +192,9 @@ describe('evaluateClusterGrouping', () => {
   });
 
   it('keeps a family out of the denominator when no Topic holds both Stories', () => {
-    const report = evaluateClusterGrouping({
+    const report = evaluate({
       grouped: together,
       resolution: resolutionOf(sets, corpus),
-      groundingOf,
     });
 
     expect(report.recall.families).toBe(1);
@@ -177,10 +202,9 @@ describe('evaluateClusterGrouping', () => {
   });
 
   it('counts a same-event family the rule never joined as a miss', () => {
-    const report = evaluateClusterGrouping({
+    const report = evaluate({
       grouped: apart,
       resolution: resolutionOf(sets, corpus),
-      groundingOf,
     });
 
     expect(report.recall.correct).toBe(0);
@@ -188,10 +212,9 @@ describe('evaluateClusterGrouping', () => {
   });
 
   it('counts a different-event family the rule kept apart', () => {
-    const report = evaluateClusterGrouping({
+    const report = evaluate({
       grouped: apart,
       resolution: resolutionOf(sets, corpus),
-      groundingOf,
     });
 
     expect(report.precision.correct).toBe(1);
@@ -199,10 +222,9 @@ describe('evaluateClusterGrouping', () => {
   });
 
   it('counts a different-event family welded in a single Topic as not kept apart', () => {
-    const report = evaluateClusterGrouping({
+    const report = evaluate({
       grouped: together,
       resolution: resolutionOf(sets, corpus),
-      groundingOf,
     });
 
     expect(report.precision.correct).toBe(0);
@@ -210,10 +232,9 @@ describe('evaluateClusterGrouping', () => {
   });
 
   it('reports how many Topic observations the verdicts rest on', () => {
-    const report = evaluateClusterGrouping({
+    const report = evaluate({
       grouped: together,
       resolution: resolutionOf(sets, corpus),
-      groundingOf,
     });
 
     expect(report.recall.topicObservations).toBe(2);
@@ -221,10 +242,9 @@ describe('evaluateClusterGrouping', () => {
   });
 
   it('measures the shape of the grouping over the whole corpus', () => {
-    const report = evaluateClusterGrouping({
+    const report = evaluate({
       grouped: together,
       resolution: resolveClusterPairs({ sameEvent: [], differentEvent: [] }, () => null),
-      groundingOf,
     });
 
     expect(report.topics).toBe(2);
@@ -235,52 +255,49 @@ describe('evaluateClusterGrouping', () => {
     expect(report.singletonProportion).toBeCloseTo(0.4);
   });
 
-  it('scores the shipped grouping rather than the floors swept beside it', () => {
-    // The sweep groups the same Topics again at each other floor, and a Story
-    // appears in every one of them. Counting the sweep as though it were more
-    // Topics would report one Topic as three and every ratio against it.
-    const report = evaluateClusterGrouping({
-      grouped: [
-        { topicId: topicOne, clusters: [[storyA, storyB]] },
-        { topicId: topicOne, floor: 0.4, clusters: [[storyA], [storyB]] },
-        { topicId: topicOne, floor: 0.5, clusters: [[storyA], [storyB]] },
-      ],
-resolution: resolutionOf(
-        { sameEvent: [pair(ref('bbc', '1'), ref('guardian', '1'))], differentEvent: [] },
-        corpus,
-      ),
-      groundingOf,
+  it('scores the shipped grouping rather than the thresholds swept beside it', () => {
+      // The sweep groups the same Topics again at each other pair of floors, and a
+      // Story appears in every one of them. Counting the sweep as though it were
+      // more Topics would report one Topic as three and every ratio against it.
+      const report = evaluate({
+        grouped: [
+          { topicId: topicOne, clusters: [[storyA, storyB]] },
+          { topicId: topicOne, thresholds: loose, clusters: [[storyA], [storyB]] },
+          { topicId: topicOne, thresholds: strict, clusters: [[storyA], [storyB]] },
+        ],
+        resolution: resolutionOf(
+          { sameEvent: [pair(ref('bbc', '1'), ref('guardian', '1'))], differentEvent: [] },
+          corpus,
+        ),
+      });
+
+      expect(report.topics).toBe(1);
+      expect(report.stories).toBe(2);
+      expect(report.clusters).toBe(1);
+      expect(report.recall.correct).toBe(1);
     });
 
-    expect(report.topics).toBe(1);
-    expect(report.stories).toBe(2);
-    expect(report.clusters).toBe(1);
-    expect(report.recall.correct).toBe(1);
-  });
-
-  it('measures the largest Cluster at each floor swept beside the shipped one', () => {
-    const report = evaluateClusterGrouping({
+it('measures the largest Cluster at each pair of thresholds swept beside the shipped one', () => {
+    const report = evaluate({
       grouped: [
         { topicId: topicOne, clusters: [[storyA], [storyB]] },
-        { topicId: topicOne, floor: 0.4, clusters: [[storyA, storyB, storyC]] },
-        { topicId: topicOne, floor: 0.5, clusters: [[storyA], [storyB], [storyC]] },
+        { topicId: topicOne, thresholds: loose, clusters: [[storyA, storyB, storyC]] },
+        { topicId: topicOne, thresholds: strict, clusters: [[storyA], [storyB], [storyC]] },
       ],
       resolution: resolveClusterPairs({ sameEvent: [], differentEvent: [] }, () => null),
-      groundingOf,
     });
 
-    expect(report.largestByFloor).toEqual([
-      { floor: 0.4, largestCluster: 3, clusters: 1 },
-      { floor: 0.5, largestCluster: 1, clusters: 3 },
+    expect(report.largestByThresholds).toEqual([
+      { thresholds: loose, largestCluster: 3, clusters: 1 },
+      { thresholds: strict, largestCluster: 1, clusters: 3 },
     ]);
     expect(report.largestCluster).toBe(1);
   });
 
   it('says it measured nothing rather than reporting a ratio over no pairs', () => {
-    const report = evaluateClusterGrouping({
+    const report = evaluate({
       grouped: together,
       resolution: resolveClusterPairs({ sameEvent: [], differentEvent: [] }, () => null),
-      groundingOf,
     });
 
     expect(report.recall.ratio).toBeNull();
@@ -298,7 +315,7 @@ describe('entityPrecisionCeiling', () => {
       corpus,
     );
 
-    const ceiling = entityPrecisionCeiling(resolution.differentEvent, groundingOf);
+    const ceiling = entityPrecisionCeiling(resolution.differentEvent, readingOf);
 
     expect(ceiling.identical).toBe(1);
     expect(ceiling.ceiling).toBe(0);
@@ -310,36 +327,73 @@ describe('entityPrecisionCeiling', () => {
       corpus,
     );
 
-    const ceiling = entityPrecisionCeiling(resolution.differentEvent, groundingOf);
+    const ceiling = entityPrecisionCeiling(resolution.differentEvent, readingOf);
 
     expect(ceiling.identical).toBe(0);
     expect(ceiling.ceiling).toBe(1);
   });
 
   it('says nothing could be measured rather than reporting a ceiling over no pairs', () => {
-    const ceiling = entityPrecisionCeiling([], groundingOf);
+    const ceiling = entityPrecisionCeiling([], readingOf);
 
     expect(ceiling.ceiling).toBeNull();
     expect(ceiling.families).toBe(0);
   });
 
-  it('reports a bound on Entity grouping, and says a second signal can pass it', () => {
-    // The report line has to stop a reader taking this as the ceiling on the
-    // application: a Story also carries a signature, and the families this
-    // counts as identical Entities are not identical as text.
-    const report = evaluateClusterGrouping({
+  it('reports a bound on Entity grouping beside one for the rule that reads both', () => {
+    // Two bounds, each named for the representations it is a bound on: the
+    // Entity-only figure is not the ceiling on the application, and a reader
+    // holding only that one will read a precision under it as a rule left to tune
+    // rather than as the price of the second signal.
+    const report = evaluate({
       grouped: [{ topicId: topicOne, clusters: [[storyA], [storyB]] }],
       resolution: resolutionOf(
         { sameEvent: [], differentEvent: [pair(ref('bbc', '2'), ref('cnbc', '2'))] },
         corpus,
       ),
-      groundingOf,
     });
 
     const text = formatClusterReport(report, { rule: 'r', corpus: 'c' });
 
     expect(text).toContain('for a rule reading Entities only');
-    expect(text).toContain('can go above this');
+    expect(text).toContain('for a rule reading Entities and signature');
+    expect(report.ceilings.map((bound) => bound.ceiling.ceiling)).toEqual([0, 1]);
+  });
+});
+
+describe('bothSignalsPrecisionCeiling', () => {
+  it('separates a family that is identical as Entities and plainly different as text', () => {
+    // This is the family the Entity-only ceiling cannot reach, and the reason the
+    // second signal is worth a threshold of its own: C and D name exactly the same
+    // Entity, so their cosine is exactly 1, and their signatures share nothing.
+    const resolution = resolutionOf(
+      { sameEvent: [], differentEvent: [pair(ref('bbc', '2'), ref('cnbc', '2'))] },
+      corpus,
+    );
+
+    const ceiling = bothSignalsPrecisionCeiling(resolution.differentEvent, readingOf);
+
+    expect(ceiling.identical).toBe(0);
+    expect(ceiling.ceiling).toBe(1);
+  });
+
+  it('counts a family identical in both representations as one no threshold can separate', () => {
+    const identicalText = (storyId: StoryId): typeof acmeText => acmeText;
+    const resolution = resolutionOf(
+      { sameEvent: [], differentEvent: [pair(ref('bbc', '2'), ref('cnbc', '2'))] },
+      corpus,
+    );
+
+    const ceiling = bothSignalsPrecisionCeiling(resolution.differentEvent, (storyId) => ({
+      entities: [kalshi],
+      signature: identicalText(storyId),
+    }));
+
+    expect(ceiling.identical).toBe(1);
+    expect(ceiling.ceiling).toBe(0);
+    expect(ceiling.unseparable).toEqual([
+      'bbc: bbc headline 2 | cnbc: cnbc headline 2',
+    ]);
   });
 });
 
@@ -349,10 +403,9 @@ describe('formatClusterReport', () => {
       sameEvent: [pair(ref('bbc', '1'), ref('guardian', '1'))],
       differentEvent: [pair(ref('bbc', '2'), ref('cnbc', '2'))],
     };
-    const report = evaluateClusterGrouping({
+    const report = evaluate({
       grouped: [{ topicId: topicOne, clusters: [[storyA, storyB], [storyC], [storyD]] }],
       resolution: resolutionOf(sets, corpus),
-      groundingOf,
     });
 
     const text = formatClusterReport(report, {
@@ -371,25 +424,64 @@ describe('formatClusterReport', () => {
   });
 
   it('prints a ratio it cannot compute as the absence of a measurement', () => {
-    const report = evaluateClusterGrouping({
-      grouped: [],
-      resolution: resolveClusterPairs({ sameEvent: [], differentEvent: [] }, () => null),
-      groundingOf,
+      const report = evaluate({
+        grouped: [],
+        resolution: resolveClusterPairs({ sameEvent: [], differentEvent: [] }, () => null),
+      });
+
+      const text = formatClusterReport(report, { rule: 'r', corpus: 'c' });
+
+      expect(text).toContain('n/a (nothing observed)');
+      expect(text).toContain('n/a (nothing grouped)');
+    });
+
+it('prints the signature floor beside the range each label scores across', () => {
+    // The floor is the second number fitted to these families, so the report
+    // carries the distribution it was read from rather than the constant alone:
+    // a reader can see at once that the two labels overlap, and that this is a
+    // gate and not a separator.
+    const report = evaluate({
+      grouped: [{ topicId: topicOne, clusters: [[storyA], [storyB], [storyC], [storyD]] }],
+      resolution: resolutionOf(
+        {
+          sameEvent: [pair(ref('bbc', '1'), ref('guardian', '1'))],
+          differentEvent: [pair(ref('bbc', '2'), ref('cnbc', '2'))],
+        },
+        corpus,
+      ),
     });
 
     const text = formatClusterReport(report, { rule: 'r', corpus: 'c' });
 
-    expect(text).toContain('n/a (nothing observed)');
-    expect(text).toContain('n/a (nothing grouped)');
+    expect(text).toContain(
+      `signature   ${SIGNATURE_SIMILARITY_FLOOR.toFixed(2)}  the floor a merge's two signatures clear`,
+    );
+    expect(text).toContain('same-event families score 0.000 to 0.000');
+    expect(text).toContain('different-event families score 0.000 to 0.000');
+  });
+
+  it('prints each swept pair of thresholds as both floors rather than one number', () => {
+    const report = evaluate({
+      grouped: [
+        { topicId: topicOne, clusters: [[storyA], [storyB]] },
+        { topicId: topicOne, thresholds: loose, clusters: [[storyA, storyB]] },
+        { topicId: topicOne, thresholds: strict, clusters: [[storyA], [storyB]] },
+      ],
+      resolution: resolveClusterPairs({ sameEvent: [], differentEvent: [] }, () => null),
+    });
+
+    const text = formatClusterReport(report, { rule: 'r', corpus: 'c' });
+
+    expect(text).toContain('at 0.40/0.03');
+    expect(text).toContain('at 0.50/0.05');
   });
 
   it('is the same text for the same numbers, so two runs diff', () => {
     const build = () =>
       formatClusterReport(
-        evaluateClusterGrouping({
+        evaluate({
 grouped: [{ topicId: topicOne, clusters: [[storyA], [storyB]] }],
           resolution: resolveClusterPairs({ sameEvent: [], differentEvent: [] }, () => null),
-          groundingOf,
         }),
         { rule: 'r', corpus: 'c' },
       );
