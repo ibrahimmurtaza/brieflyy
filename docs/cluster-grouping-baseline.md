@@ -192,7 +192,7 @@ At 0.04 precision rises 12 points with no loss of recall. Only two of the 49 are
 identical in *both* representations, so the ceiling for a rule reading both is
 **95.9%**. This is a calibration measurement rather than something
 `pnpm cluster:benchmark` prints — the shipped command groups with Entities alone.
-It is [#119](https://github.com/ibrahimmurtaza/brieflyy/issues/119), not this
+It is [#126](https://github.com/ibrahimmurtaza/brieflyy/issues/126), not this
 rule, because it adds a signal the ticket did not ask for and fits a second
 threshold to the same 78 families.
 

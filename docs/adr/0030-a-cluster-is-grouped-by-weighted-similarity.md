@@ -86,7 +86,7 @@ same corpus, gating a merge on a signature floor alongside the Entity cosine tak
 precision to **71.4% at 0.04** and **85.7% at 0.10**, the first at no cost to
 recall at all. Only two of the 49 are identical in *both* representations, so the
 ceiling for a rule reading both is 95.9%. That work is not in this ADR; it is
-[#119](https://github.com/ibrahimmurtaza/brieflyy/issues/119), and the threshold
+[#126](https://github.com/ibrahimmurtaza/brieflyy/issues/126), and the threshold
 it wants is a second parameter fitted to the same 78 labelled families, which is
 the reason it is a ticket rather than a constant here.
 

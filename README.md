@@ -117,7 +117,7 @@ the precision a rule reading only Entities can reach: eight of its 49
 different-event pairs name exactly the same Entities, so their cosine is exactly
 1 and no threshold separates them. It is labelled as an Entity-only bound
 because it is one — a rule reading the Story signature as well clears it, which
-is [#119](https://github.com/ibrahimmurtaza/brieflyy/issues/119) rather than
+is [#126](https://github.com/ibrahimmurtaza/brieflyy/issues/126) rather than
 this rule. And the **at** lines regroup every Topic at each floor in
 `SHIPPED_SIMILARITY_FLOORS` and print the largest Cluster, so the claim that the
 all-pairs floor bounds Cluster size is a measurement rather than an assertion —
