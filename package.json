@@ -23,7 +23,8 @@
     "db:migrate": "tsx src/db/migrate.ts",
     "db:push": "drizzle-kit push",
     "ingest:check-feeds": "tsx src/ingest/check-feeds.ts",
-    "cluster:benchmark": "tsx src/benchmark/run-cluster-benchmark.ts"
+    "cluster:benchmark": "tsx src/benchmark/run-cluster-benchmark.ts",
+    "cluster:sweep": "tsx scripts/cluster-sweep.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.0",

@@ -72,6 +72,7 @@ pnpm db:generate         # writes SQL into ./drizzle that nothing here applies
 pnpm db:push             # drizzle's own diff; drops the Archive index. See below
 pnpm ingest:check-feeds  # poll every registry feed live; non-zero if one is not ingestible
 pnpm cluster:benchmark   # score Cluster grouping against the labelled pairs, over DATABASE_URL
+pnpm cluster:sweep       # the same corpus at every pair of floors on a grid, for the frontier
 ```
 
 `pnpm db:migrate` is the command that applies DDL, and it is the one the "Changing
@@ -110,6 +111,16 @@ all read off the corpus rather than off the clock, so two runs diff. It exits
 non-zero when a labelled pair cannot be resolved, because a report that quietly
 dropped pairs reads as a better rule than it is. `docs/cluster-grouping-baseline.md`
 records what the current rule scores and exactly how each number is defined.
+
+`pnpm cluster:sweep` is that corpus measured at every pair of floors on a grid rather
+than only at the shipped ones, which is how `docs/cluster-grouping-baseline.md`'s
+tables can be regenerated and how a floor found to be wrong for the corpus can be
+seen to be wrong. It takes the same argument `pnpm cluster:benchmark` takes from
+`DATABASE_URL`, so a copy of a database can be swept before and after a migration and
+the two frontiers compared. The grid is wider than the shipped floors on purpose: a
+sweep that stopped at the shipped answer could not disagree with it. It reads no
+`DATABASE_URL` fallback for the same reason the benchmark is not in `pnpm verify` — the
+frontier is a claim about a real corpus.
 
 It also prints the numbers that bound what grouping can do, rather than leaving
 them to be discovered by disappointment. Two **ceilings**, each labelled with the
@@ -631,6 +642,7 @@ purpose, and each is reached by something other than a request:
 | `src/verify/` | `pnpm secrets:check`, and `pnpm verify` |
 | `src/ingest/check-feeds.ts` | `pnpm ingest:check-feeds` |
 | `src/benchmark/` | `pnpm cluster:benchmark`, and its scoring suite |
+| `scripts/cluster-sweep.ts` | `pnpm cluster:sweep` |
 | `src/ingest/test-constants.ts` | the ingest suites |
 | `src/testing/`, `src/app-wiring.ts` | the suites |
 

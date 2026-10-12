@@ -42,11 +42,44 @@ A row whose name names nothing keeps its row and its key. Nothing extracts such 
 Over the same corpus, with every Article's Entities re-extracted from the stored text under the old rules and the new ones so the two are compared like for like: **recall 48.3% → 44.8%, precision 71.4% → 69.4%**, Entity-only ceiling 83.7% → 81.6%. The ticket predicted roughly two points of recall gained, and the direction is the other way. One recall family and one precision family move, and both are explained rather than mysterious:
 
 - The Adidas/White Fox family falls from 0.462 to 0.438, across the Entity floor of 0.45. Folding `Australian` into `Australia` was the point, and it means the country is now carried by many more Stories, so it weighs less — the pair's whole overlap is now one Entity that has just become common.
-- The Tennessee prison family falls from 0.492 to 0.342. One Article named the person both ways and now counts them once instead of twice. The double count was the reason it scored at all.
+- The Tennessee prison family falls from 0.492 to 0.342. This one is **not** explained and the explanation first offered for it was wrong. A merge cannot lower a cosine — merging two coordinates keeps the mass and shortens the vector, which raises it — so the cause is something else in that family's stories. It has not been isolated.
 - The Man City appeal family rises from 0.443 to 0.535, over the floor. `Prime` was a generic head noun standing alone; removing an unshared Entity from one side shortens that side's norm and raises the cosine, which is the same dilution working in the direction that costs precision.
 
 The Entity vocabulary itself is measurably better: the different-event families that share **no Entity at all** go from three of forty-nine to six, and the Entity-only precision ceiling moves one family in the wrong direction because one pair became identical as an Entity vector.
 
-Re-extraction is not the same as the corpus the stored rows came from — replaying the old rules over the same 1,804 Articles and 6,536 links reproduces the stored Entity set exactly and scores 48.3% against the 51.7% the baseline records, because the replay reads Articles in id order rather than the order the feeds delivered them, and the first-arrival rule then decides a different name and kind for a handful of rows. Every figure above is replay against replay.
+### What a boot costs on its own
+
+Re-extraction is the worst case and it is not what a user meets first. The migration runs on every boot over the rows the corpus already holds, and on this corpus it merges 68 rows, collapses 96 duplicate links and re-keys 91 — with no new Article at all. Three states of the same 1,804 Articles:
+
+| | stored rows | after the migration | after re-extraction |
+| --- | --- | --- | --- |
+| recall | 51.7% | 48.3% | 44.8% |
+| precision | 71.4% | 69.4% | 69.4% |
+| Entity-only ceiling | 83.7% (8 of 49 identical) | 81.6% (9 of 49) | 81.6% (9 of 49) |
+| Entities / links | 3757 / 6536 | 3689 / 6440 | 3646 / 6224 |
+
+The migration alone takes the first recall point.
+
+### The frontier, and where the shipped floor sits on it
+
+Sweeping the Entity floor against the signature floor over the whole grid on both the stored rows and the migrated rows, the migrated corpus's frontier is at or above the stored one's at **eight of the nine recall levels the two share**, and reaches a recall level (72.4%) the stored corpus cannot. At matched recall:
+
+| recall | stored, best precision | migrated, best precision |
+| --- | --- | --- |
+| 72.4% | — | **38.8%** |
+| 69.0% | 40.8% | **55.1%** |
+| 62.1% | 53.1% | **59.2%** |
+| 58.6% | 63.3% | 63.3% |
+| 51.7% | 71.4% | 71.4% |
+| 48.3% | 71.4% | **73.5%** |
+| 44.8% | 71.4% | **77.6%** |
+| 41.4% | 77.6% | 77.6% |
+| 65.5% | **53.1%** | 44.9% |
+
+So the shipped point (0.45 Entity / 0.04 signature) is the **one place on the grid where the migrated corpus reads worse than the stored one**, and it reads worse there because 0.45 is set for the old partition: folding makes Entities more common, IDF makes them weigh less, every cosine compresses downwards, and a floor chosen against the old distribution sits too high on the new one.
+
+The migrated corpus reaches the shipped operating point — 51.7% recall, 71.4% precision — at **0.20 / 0.08** instead, over 4,184 clusters with a largest of 5, against the shipped 4,281 and 6. That is a *different rule*, not a shifted constant: at 0.20 the Entity cosine is doing almost nothing and the signature is doing the separating, so the safety of the grouping becomes the safety of `StorySignature`. It is not adopted here, because picking the best cell of a 48-cell grid measured against 78 families is how a benchmark gets fitted rather than satisfied, and no corpus has yet been ingested under the new rules to check it against. It is recorded because the alternative is leaving a threshold that is measurably wrong for the partition now shipping.
+
+Re-extraction is not the same as the corpus the stored rows came from — replaying the old rules over the same 1,804 Articles and 6,536 links reproduces the stored Entity set exactly and scores 48.3% against the 51.7% the baseline records, because the replay reads Articles in id order rather than the order the feeds delivered them, and the first-arrival rule then decides a different name and kind for a handful of rows. Every replay figure above is replay against replay.
 
 Related: [[0008]], which this extends and whose four deliberate omissions it closes; [[0030]], whose Entity cosine is what the folds move; and [[0017]], which cut a feed's bookkeeping out of the text once, where this keeps a second copy of the same judgement in the rules that read it.
