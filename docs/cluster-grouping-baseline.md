@@ -138,13 +138,14 @@ rather than a shifted constant, and which is not adopted — ADR-0031 says why.
 The ticket predicted about two points of recall gained. Ablating each fold shows the
 folds cost **no recall at all** and exactly one precision family — the recall drop in
 the table above is the replay, not the change, because a re-extraction with every fold
-disabled still scores 48.3%. The demonym fold is the whole of that one family:
-`Australian` → `Australia` merges a rare Entity into a common one, which lowers the
-country's IDF weight and takes down every different-event pair whose overlap is only
-it. Partial-name resolution and qualifier stripping measure free. So the floor is not
-wrong and the demonym fold is — ADR-0031 says so, and leaves the decision to whoever
-owns the ticket. One different-event family rose over the Entity floor because
-dropping an unshared head noun shortens that Story's norm.
+disabled still scores 48.3%. The whole of that one family was the *standalone* demonym
+fold: `Australian` → `Australia` merges a rare Entity into a common one, which lowers
+the country's IDF weight and takes down every different-event pair whose overlap is
+only it. The fold now stops at a demonym that modifies a noun — `Libyan National Army`
+→ `libya national army` — which creates a rare Entity instead of inflating a common one,
+and that restores the stored corpus's precision exactly at the shipped floor. Partial-
+name resolution and qualifier stripping measure free. The Entity floor is not wrong and
+needs no change; the bare demonym was.
 
 The replay is not the corpus the stored rows came from, and the difference is worth
 stating: replaying the *old* rules over the same 1,804 Articles reproduces the stored
