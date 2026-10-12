@@ -31,14 +31,19 @@ import {
 } from './cluster-grouping-benchmark.js';
 import { createDatabase, type Db } from '../db/client.js';
 import { articles, sources, stories } from '../db/schema.js';
-import { groupByEntityOverlap, STORY_OVERLAP_THRESHOLD } from '../domain/cluster-grouping.js';
+import {
+  SIMILARITY_FLOOR,
+  SHIPPED_SIMILARITY_FLOORS,
+  groupByEntitySimilarity,
+  type GroundedEntity,
+} from '../domain/cluster-grouping.js';
 import { clusterWindowStart } from '../domain/cluster-window.js';
-import type { StoryId, Topic } from '../domain/types.js';
+import type { StoryId, Topic, TopicId } from '../domain/types.js';
 import { readRequiredString } from '../env.js';
 import { DrizzleArticleRepo } from '../repos/article-repo.js';
 import { DrizzleStoryRepo } from '../repos/story-repo.js';
 import { DrizzleTopicRepo } from '../repos/topic-repo.js';
-import { entityIdsByStoryInScope } from '../services/cluster-formation-service.js';
+import { groundingByStoryInScope } from '../services/cluster-formation-service.js';
 import {
   corpusRefKey,
   DIFFERENT_EVENT_PAIRS,
@@ -57,12 +62,36 @@ async function main(): Promise<number> {
     const topics = (await topicRepo.listAll()).filter(
       (topic) => topic.sourceIds.length > 0,
     );
-    const grouped: GroupedTopic[] = [];
+    // Read each Topic once and group it at every shipped floor: the sweep is a
+    // claim about the rule over a real corpus, and re-reading the Entities per
+    // floor would measure the database rather than the rule.
+    const reads: TopicRead[] = [];
     for (const topic of topics) {
-      grouped.push({
-        topicId: topic.id,
-        clusters: await groupTopic(topic, storyRepo, articleRepo, now),
+      const inWindow = await storyRepo.listBySourceIdsInWindow({
+        sourceIds: topic.sourceIds,
+        windowStart: clusterWindowStart(now, topic.clusterWindowDays),
       });
+      const storyIds = inWindow.map((story) => story.id);
+      const grounding = await groundingByStoryInScope(topic, inWindow, articleRepo);
+      reads.push({
+        topicId: topic.id,
+        storyIds,
+        grounding,
+        groundingByStoryId: new Map(storyIds.map((id, index) => [id, grounding[index]!])),
+      });
+    }
+
+    const grouped: GroupedTopic[] = reads.map((read) => ({
+      topicId: read.topicId,
+      // The shipped floor carries no marker, so the report's own numbers and
+      // the sweep's are read off one grouping rather than two copies.
+      clusters: groupTopic(read, undefined),
+    }));
+    for (const floor of SHIPPED_SIMILARITY_FLOORS) {
+      if (floor === SIMILARITY_FLOOR) continue;
+      for (const read of reads) {
+        grouped.push({ topicId: read.topicId, floor, clusters: groupTopic(read, floor) });
+      }
     }
 
     const storyIdByRef = readStoryIdsByRef(db);
@@ -70,12 +99,16 @@ async function main(): Promise<number> {
       { sameEvent: SAME_EVENT_PAIRS, differentEvent: DIFFERENT_EVENT_PAIRS },
       (ref) => storyIdByRef.get(corpusRefKey(ref.source, ref.externalId)) ?? null,
     );
-    const report = evaluateClusterGrouping({ grouped, resolution });
+    const report = evaluateClusterGrouping({
+      grouped,
+      resolution,
+      groundingOf: (storyId) => groundingForStory(reads, storyId),
+    });
 
     process.stdout.write(
       formatClusterReport(report, {
-        rule: `entity overlap of at least ${STORY_OVERLAP_THRESHOLD} of the larger set, grouped by transitive closure`,
-        corpus: `${grouped.length} topics, window ending ${now.toISOString()}`,
+        rule: `IDF-weighted cosine over Entities at a floor of ${SIMILARITY_FLOOR}, merged most-similar first with an all-pairs floor`,
+        corpus: `${reads.length} topics, window ending ${now.toISOString()}`,
       }),
     );
 
@@ -130,30 +163,55 @@ function corpusNow(db: Db): Date {
 }
 
 /**
- * Form one Topic's Clusters the way the application does: the Stories its own
- * window and its own Sources reach, grouped on the Entities of the Articles in
- * scope — which is `entityIdsByStoryInScope`, the read the service groups with
- * too, rather than a second copy of it.
+ * Form one Topic's Clusters the way the application does.
+ *
+ * Grouped on the Entities of the Articles in scope — which is
+ * `groundingByStoryInScope`, the read the service groups with too, rather than a
+ * second copy of it — over the Stories in the order they were read, so the
+ * Entities at an index are the ones belonging to the Story at that index.
  */
-async function groupTopic(
-  topic: Topic,
-  storyRepo: DrizzleStoryRepo,
-  articleRepo: DrizzleArticleRepo,
-  now: Date,
-): Promise<readonly StoryId[][]> {
-  const inWindow = await storyRepo.listBySourceIdsInWindow({
-    sourceIds: topic.sourceIds,
-    windowStart: clusterWindowStart(now, topic.clusterWindowDays),
-  });
-  const entityIdsByStory = await entityIdsByStoryInScope(
-    topic,
-    inWindow,
-    articleRepo,
+function groupTopic(
+  read: TopicRead,
+  floor: number | undefined,
+): readonly (readonly StoryId[])[] {
+  return groupByEntitySimilarity(
+    read.storyIds,
+    (_storyId, index) => read.grounding[index]!,
+    floor === undefined ? {} : { floor },
   );
-  return groupByEntityOverlap(
-    inWindow,
-    (_story, index) => entityIdsByStory[index]!,
-  ).map((group) => group.map((story) => story.id));
+}
+
+/** One Topic's Stories and their Entities, read once and grouped at several floors. */
+interface TopicRead {
+  readonly topicId: TopicId;
+  readonly storyIds: readonly StoryId[];
+  readonly grounding: readonly (readonly GroundedEntity[])[];
+  /**
+   * The same grounding keyed by Story, for the precision ceiling.
+   *
+   * Built here rather than searched per pair because the rule reads the Entities
+   * by position while the ceiling reads them by id, and the two must not be
+   * able to disagree about which Entities a Story carries.
+   */
+  readonly groundingByStoryId: ReadonlyMap<StoryId, readonly GroundedEntity[]>;
+}
+
+/**
+ * The Entities a Story carries, from whichever Topic first held it.
+ *
+ * The ceiling is a property of the two Stories rather than of a Topic: a
+ * Story's Entity set is the union over its Articles, and the Topics holding it
+ * read those Articles alike.
+ */
+function groundingForStory(
+  reads: readonly TopicRead[],
+  storyId: StoryId,
+): readonly GroundedEntity[] {
+  for (const read of reads) {
+    const grounding = read.groundingByStoryId.get(storyId);
+    if (grounding !== undefined) return grounding;
+  }
+  return [];
 }
 
 /** Every labelled Article the corpus holds, read in one query. */

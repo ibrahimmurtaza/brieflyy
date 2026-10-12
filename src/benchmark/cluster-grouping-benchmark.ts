@@ -14,7 +14,8 @@
  * a database and so a change to the rule moves the numbers without moving this.
  */
 
-import type { StoryId, TopicId } from '../domain/types.js';
+import type { EntityId, StoryId, TopicId } from '../domain/types.js';
+import type { GroundedEntity } from '../domain/cluster-grouping.js';
 import type { CorpusStoryRef, LabelledStoryPair } from '../testing/cluster-pair-fixtures.js';
 
 /** Which of the two sets a pair belongs to. */
@@ -147,6 +148,15 @@ function describeRef(ref: CorpusStoryRef): string {
 export interface GroupedTopic {
   readonly topicId: TopicId;
   readonly clusters: readonly (readonly StoryId[])[];
+  /** The floor these Clusters were formed at, when they were not the shipped one. */
+  readonly floor?: number;
+}
+
+/** How large the biggest Cluster got at one floor, over the whole corpus. */
+export interface FloorReading {
+  readonly floor: number;
+  readonly largestCluster: number;
+  readonly clusters: number;
 }
 
 /** A tally over a set of pairs, with the ratio its numbers say. */
@@ -167,6 +177,56 @@ export interface PairScore {
   readonly unshared: readonly string[];
 }
 
+/**
+ * How high precision can go on a set of labelled pairs, whatever the rule.
+ *
+ * Two Stories naming the same Entities score a cosine of exactly 1 — their
+ * vectors are the same vector — so no floor below 1 can hold them apart and no
+ * amount of tuning reaches a family like that. Counting those pairs separately
+ * is what separates "the rule is not tuned yet" from "this negative is not
+ * separable by Entity at all", and the two call for opposite responses: one is
+ * a change to the rule, the other is a change to what the rule reads.
+ *
+ * Only pairs some Topic holds both Stories for are counted, so the ceiling and
+ * the measured precision are over the same families.
+ */
+export function precisionCeiling(
+  differentEvent: readonly ResolvedStoryPair[],
+  groundingOf: (storyId: StoryId) => readonly GroundedEntity[],
+): PrecisionCeiling {
+  const separable: string[] = [];
+  const unseparable: string[] = [];
+  for (const pair of differentEvent) {
+    const left = new Set(groundingOf(pair.leftStoryId).map((entity) => entity.id));
+    const right = new Set(groundingOf(pair.rightStoryId).map((entity) => entity.id));
+    const namedTheSame = left.size === right.size && [...left].every((id) => right.has(id));
+    (namedTheSame ? unseparable : separable).push(pair.name);
+  }
+  const families = differentEvent.length;
+  const identical = unseparable.length;
+  return {
+    families,
+    identical,
+    ceiling: families === 0 ? null : (families - identical) / families,
+    unseparable,
+    separable,
+  };
+}
+
+/** What `precisionCeiling` found, and which families each half was. */
+export interface PrecisionCeiling {
+  /** Different-event families the ceiling is over. */
+  readonly families: number;
+  /** How many of them name exactly the same Entities as one another. */
+  readonly identical: number;
+  /** `(families - identical) / families`, or null when there are no families. */
+  readonly ceiling: number | null;
+  /** The families no floor below 1 can keep apart. */
+  readonly unseparable: readonly string[];
+  /** The families a rule could in principle keep apart. */
+  readonly separable: readonly string[];
+}
+
 export interface ClusterGroupingReport {
   readonly topics: number;
   /** How many distinct Stories the rule grouped across those Topics. */
@@ -181,6 +241,16 @@ export interface ClusterGroupingReport {
   readonly recall: PairScore;
   /** Different-event pairs the rule kept apart. */
   readonly precision: PairScore;
+  /**
+   * The highest precision this labelled set allows, whatever the rule does.
+   *
+   * Reported beside the measured precision so the gap between the two reads as
+   * what it is: a rule left to tune, or Entities that cannot tell two Stories
+   * apart however they are compared.
+   */
+  readonly precisionCeiling: PrecisionCeiling;
+  /** The largest Cluster at every floor the rule ships, so the bound is measured. */
+  readonly largestByFloor: readonly FloorReading[];
 }
 
 /**
@@ -198,6 +268,15 @@ export interface ClusterGroupingReport {
 export function evaluateClusterGrouping(input: {
   readonly grouped: readonly GroupedTopic[];
   readonly resolution: PairResolution;
+  /**
+   * What each Story names, for the precision ceiling.
+   *
+   * Required rather than optional because a ceiling of zero over a real negative
+   * set is a false reading rather than an absence: without it the report would
+   * print no ceiling line and the reader would take the precision beside it as
+   * the best any rule could do.
+   */
+  readonly groundingOf: (storyId: StoryId) => readonly GroundedEntity[];
 }): ClusterGroupingReport {
   const clusterOf = new Map<TopicId, Map<StoryId, number>>();
   const distinctStories = new Set<StoryId>();
@@ -206,6 +285,10 @@ export function evaluateClusterGrouping(input: {
   let singletons = 0;
 
   for (const topic of input.grouped) {
+    // Only the shipped grouping carries the report's headline numbers; the
+    // floors swept alongside it are read for their largest Cluster below, and
+    // counting them here would report a Topic's Story as three separate ones.
+    if (topic.floor !== undefined) continue;
     const byStory = new Map<StoryId, number>();
     topic.clusters.forEach((members, index) => {
       clusters += 1;
@@ -254,8 +337,26 @@ export function evaluateClusterGrouping(input: {
     };
   };
 
+  // Every floor the runner also grouped at, so the bound is a number read off
+  // the corpus rather than a claim about the rule.
+  const largestByFloor: FloorReading[] = [];
+  for (const floor of new Set(input.grouped.map((topic) => topic.floor))) {
+    if (floor === undefined) continue;
+    let floorLargest = 0;
+    let floorClusters = 0;
+    for (const topic of input.grouped) {
+      if (topic.floor !== floor) continue;
+      floorClusters += topic.clusters.length;
+      for (const members of topic.clusters) {
+        floorLargest = Math.max(floorLargest, members.length);
+      }
+    }
+    largestByFloor.push({ floor, largestCluster: floorLargest, clusters: floorClusters });
+  }
+  largestByFloor.sort((a, b) => a.floor - b.floor);
+
   return {
-    topics: input.grouped.length,
+    topics: clusterOf.size,
     stories: distinctStories.size,
     clusters,
     largestCluster,
@@ -263,6 +364,8 @@ export function evaluateClusterGrouping(input: {
     singletonProportion: clusters === 0 ? null : singletons / clusters,
     recall: measure(input.resolution.sameEvent, 'same-event'),
     precision: measure(input.resolution.differentEvent, 'different-event'),
+    precisionCeiling: precisionCeiling(input.resolution.differentEvent, input.groundingOf),
+    largestByFloor,
   };
 }
 
@@ -281,6 +384,7 @@ export function formatClusterReport(
     score.ratio === null ? 'n/a (nothing observed)' : `${(score.ratio * 100).toFixed(1)}%`;
   const share = (value: number | null) =>
     value === null ? 'n/a (nothing grouped)' : `${(value * 100).toFixed(1)}%`;
+  const ceiling = report.precisionCeiling;
 
   const lines = [
     'cluster grouping benchmark',
@@ -289,10 +393,19 @@ export function formatClusterReport(
     '',
     `  recall      ${percent(report.recall)}  ${report.recall.correct} of ${report.recall.families} same-event pairs end up in one Cluster (${report.recall.topicObservations} topic observations)`,
     `  precision   ${percent(report.precision)}  ${report.precision.correct} of ${report.precision.families} different-event pairs stay apart (${report.precision.topicObservations} topic observations)`,
+    ...(ceiling.ceiling === null
+      ? []
+      : [
+          `  ceiling     ${(ceiling.ceiling * 100).toFixed(1)}%  ${ceiling.families - ceiling.identical} of ${ceiling.families} are separable; ${ceiling.identical} name identical Entities and score a cosine of exactly 1`,
+        ]),
     '',
     `  clusters    ${report.clusters} over ${report.topics} topics holding ${report.stories} stories`,
     `  largest     ${report.largestCluster} stories in one Cluster`,
     `  singletons  ${share(report.singletonProportion)}  ${report.singletons} of ${report.clusters} clusters hold one Story`,
+    ...report.largestByFloor.map(
+      (reading) =>
+        `  at ${reading.floor.toFixed(2)}   largest ${reading.largestCluster} stories in one Cluster over ${reading.clusters} clusters`,
+    ),
   ];
   return `${lines.join('\n')}\n`;
 }

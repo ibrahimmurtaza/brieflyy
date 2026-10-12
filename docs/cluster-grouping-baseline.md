@@ -22,9 +22,11 @@ family six do rests on six.
 | --- | --- |
 | **recall** | Same-event families the rule put in one Cluster, over the same-event families it could measure. |
 | **precision** | Different-event families it kept apart, over the different-event families it could measure. |
+| **ceiling** | The precision this negative set allows whatever rule is run: the different-event families that do **not** name identical Entities. |
 | **clusters** | Every Cluster formed across every live Topic, counting a Story once per Topic it is in scope for. |
 | **largest** | The most Stories any one of them holds. |
 | **singletons** | The share of Clusters holding exactly one Story. |
+| **at *f*** | The largest Cluster when every Topic is grouped again at floor *f*, over the shipped floors. |
 
 A family no live Topic holds both Stories for is left out of the denominator and
 printed by name, because it is a gap in what the corpus can say rather than a
@@ -72,28 +74,122 @@ and NASA — which is free precision and tells you nothing.
 
 Measured on the corpus this repository was developed against — 1,804 Articles
 across 22 Sources forming 1,618 Stories, held by 14 live Topics, window ending
-2026-10-09T13:52Z — running the rule in `src/domain/cluster-grouping.ts`, which is
-the rule `ClusterFormationService` runs:
+2026-10-09T13:52:30.766Z — running the rule in `src/domain/cluster-grouping.ts`,
+which is the rule `ClusterFormationService` runs:
 
 ```
 cluster grouping benchmark
-  rule      entity overlap of at least 0.5 of the larger set, grouped by transitive closure
+  rule      IDF-weighted cosine over Entities at a floor of 0.45, merged most-similar first with an all-pairs floor
   corpus    14 topics, window ending 2026-10-09T13:52:30.766Z
 
-  recall      31.0%  9 of 29 same-event pairs end up in one Cluster (85 topic observations)
-  precision   36.7%  18 of 49 different-event pairs stay apart (151 topic observations)
+  recall      51.7%  15 of 29 same-event pairs end up in one Cluster (85 topic observations)
+  precision   59.2%  29 of 49 different-event pairs stay apart (151 topic observations)
+  ceiling     83.7%  41 of 49 are separable; 8 name identical Entities and score a cosine of exactly 1
 
-  clusters    4049 over 14 topics holding 1618 stories
-  largest     13 stories in one Cluster
-  singletons  93.5%  3786 of 4049 clusters hold one Story
+  clusters    4162 over 14 topics holding 1618 stories
+  largest     7 stories in one Cluster
+  singletons  92.5%  3848 of 4162 clusters hold one Story
+  at 0.40   largest 7 stories in one Cluster over 4034 clusters
+  at 0.50   largest 5 stories in one Cluster over 4228 clusters
 ```
 
-Every labelled pair is measured. That took widening the corpus: the Topics that
-followed Ars Technica alongside Sky News, and Nature at all, had been removed,
-and a removed Topic cannot be un-removed — `remove()` sets `removed_at`, and
-re-adding mints a new Topic with a new slug. So two were added through
-`DrizzleTopicRepo`, the repository the application writes with, carrying the
-source lists those ones had:
+Every labelled pair is measured, on the corpus widened by the two Topics recorded
+at the end of this file — so the numbers before and after this rule changed are
+over the same families and the same Topics, and the comparison is like for like.
+
+### What it was, and what it is
+
+The rule this replaced divided the shared Entities by the **larger** of the two
+sets and then took the transitive closure of that relation. Against the same
+labelled set:
+
+| | Overlap + closure (ADR-0006) | Similarity + constrained linkage (ADR-0030) |
+| --- | --- | --- |
+| recall | 31.0% | **51.7%** |
+| precision | 36.7% | **59.2%** |
+| largest Cluster | 13 Stories | **7 Stories** |
+| singletons | 93.5% | 92.5% |
+
+Both halves of the failure moved, and they were one failure. Dividing by the
+larger set meant a detailed Story could never join a concise one about the same
+event; closure on top of that meant a chain of individually reasonable links ran
+away into Clusters of thirteen that are not about one thing.
+
+The single-linkage bound is worth stating on its own, because it is not a
+threshold problem. Measured side by side on this corpus, with the shipped rule on
+one side and the same similarity under single linkage on the other — a
+calibration measurement rather than something `pnpm cluster:benchmark` prints,
+since the shipped command groups with the constrained linkage:
+
+| floor | largest, constrained | largest, single linkage |
+| --- | --- | --- |
+| 0.05 | 14 | 378 |
+| 0.10 | 12 | 340 |
+| 0.20 | 8 | 239 |
+| 0.30 | 7 | 65 |
+| **0.45** | **7** | **19** |
+| 0.50 | 5 | 12 |
+
+No value of the threshold changes what is on the right, because every link in
+such a chain clears it. The all-pairs floor is what stops it, and at the shipped
+floor it holds the largest Cluster at 7 where single linkage would reach 19.
+
+### Why the floor is 0.45
+
+Measured over a range wider than the shipped one, on the same corpus. The rows
+in **bold** are the shipped floors, which `pnpm cluster:benchmark` regroups at and
+prints as its `at` lines; the rest were measured the same way and are here to show
+what the neighbourhood does, which is why they are reproduced by no command.
+
+| floor | recall | precision | clusters | largest | singletons |
+| --- | --- | --- | --- | --- | --- |
+| **0.40** | 55.2% | 49.0% | 4034 | 7 | 89.9% |
+| **0.45** | **51.7%** | **59.2%** | **4162** | **7** | **92.5%** |
+| **0.50** | 44.8% | 59.2% | 4228 | 5 | 93.7% |
+| 0.55 | 34.5% | 61.2% | 4298 | 5 | 95.3% |
+| 0.60 | 24.1% | 61.2% | 4332 | 5 | 96.1% |
+
+The neighbourhood is flat, which is the reason to be comfortable in it rather
+than the reason to pick a point in it. 0.45 is where recall is still above half
+and precision is already at the value 0.50 holds; past 0.50 precision stops
+moving and recall falls away, which is the trade being made rather than a
+measurement.
+
+`SHIPPED_SIMILARITY_FLOORS` is the range over which the largest Cluster is
+claimed to stay bounded, and that claim is measured rather than asserted — the
+`at` lines in the report are the benchmark regrouping every Topic at each one.
+The shipped floor is 0.45, so its own largest Cluster is the headline `largest`
+line rather than one of the `at` lines.
+
+### What this does not reach
+
+**Precision is capped at 83.7% on this negative set, and the cap is arithmetic.**
+Eight of the 49 different-event families name exactly the same Entities as one
+another, so their cosine is exactly 1.0 and no floor below 1 separates them. The
+benchmark computes and prints this ceiling, which is the difference between a
+rule that has not been tuned yet and a negative that Entities cannot tell apart.
+
+Ticket #118 asked for precision above 90% and quoted a baseline of 96.1%. That
+target is not reachable against a negative set built the way #117 built it, and
+#117 said so when it closed, warning whoever took #118 that its precision
+criteria were written against a baseline that does not reproduce. The recall
+target was reachable and is exceeded: 20.9% quoted, 31.0% measured, 51.7% now.
+
+**Recall is capped by Entity extraction, not by the grouping rule.** Six of the
+29 same-event families share no Entity at all — two reports of one event where
+one outlet's extractor found nothing the other's did — so no similarity function
+over Entities can join them and the ceiling from extraction alone is 79.3%. More
+than half of real event families still come back split. The lever is
+`src/domain/entity-extraction.ts`, not this rule.
+
+### The two Topics this corpus was widened by
+
+Every labelled pair is measurable, and that took widening the corpus: the Topics
+that followed Ars Technica alongside Sky News, and Nature at all, had been
+removed, and a removed Topic cannot be un-removed — `remove()` sets
+`removed_at`, and re-adding mints a new Topic with a new slug. So two were added
+through `DrizzleTopicRepo`, the repository the application writes with, carrying
+the source lists those ones had:
 
 | Topic | Follows | What it unblocked |
 | --- | --- | --- |
@@ -103,49 +199,8 @@ source lists those ones had:
 Before that, 79 of the 81 labelled families could be measured and two could not,
 and the run printed them by name. It also widened the denominator behind every
 other verdict: the corpus went from 12 live Topics holding 1,546 Stories to 14
-holding 1,618, and the topic observations behind the two ratios rose from 69 to 85
-and from 135 to 151. Both moves changed the numbers rather than only the coverage,
-which is the point of doing this before #118 rather than after.
+holding 1,618.
 
 The corpus is a development database rather than a fixture, so its shape is not
 reproducible from this repository. What it holds is written here so that a later
 run knows what it is being compared against.
-
-### What the number says
-
-The rule finds about one same-event family in three and welds about two
-different-event families in three. Those are the two halves of one failure: the
-threshold is half of the *larger* Entity set, so a detailed Story can never join a
-concise one about the same event, and two Stories that share two Entities out of
-three are linked whether or not they are about the same thing. Grouping is then
-transitive, so a chain of individually reasonable links produces Clusters of ten
-and thirteen Stories that are not about one thing at all.
-
-93.5% of Clusters holding one Story is the same fact seen from the other side: the
-rule is refusing to group almost everything, and what it does group is a mixture.
-
-### Against the figures quoted in ticket #117
-
-The ticket quotes a baseline of recall ~20.9%, precision ~96.1%, largest Cluster 10
-and singletons ~93%. This run does not reproduce three of the four, and the
-differences are worth stating rather than rounding away:
-
-- **Singletons 93.5% against 93%** matches, and is the one figure that did not
-  move.
-- **Largest Cluster 13 against 10** is a bigger cluster than the ticket's. It is
-  the number that depends most on which Topics are live: a wider window, a Topic
-  following more Sources, or simply more Topics produces longer chains.
-- **Recall 31.0% against 20.9%** is close, and moves with which pairs are in the
-  set — eight points of it is whether a family has one Entity in common or two.
-- **Precision 36.7% against 96.1%** does not come close, and it is the number
-  the definition matters most for. Two reports that share Entities are merged by
-  this rule whether they are one event or two, so a negative set built out of
-  shared Entities and recurring-column boilerplate — which is what the same ticket
-  asks for — cannot score 96%. A set of easy negatives would, because almost
-  nothing shares Entities with anything.
-
-**Issue #118 states its acceptance criteria against the ticket's quoted figures**
-("precision 96.1% to ~94.6%", "precision above 90%"). Those are not reachable
-from this baseline, so whoever picks that ticket up should read the numbers above
-rather than the ones in the ticket body, and should decide whether its precision
-target means what it says.

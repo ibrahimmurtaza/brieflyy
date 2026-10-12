@@ -20,7 +20,7 @@ ticket number on its own says nothing about whether the code is there.
 | 04 | DeliveryTime picker & welcome email | done | `src/domain/timezone.ts`, `src/onboarding/welcome-email.ts`, `GET /settings/delivery` |
 | 05 | Single-source ingest + Story dedup | done | `src/ingest/ingest-service.ts`, `src/domain/story-signature.ts`, `src/domain/feed-text.ts`, ADR-0017 |
 | 06 | Full source registry ingest | done | `src/ingest/registry-ingest-service.ts`, `src/ingest/ingest-scheduler.ts`, ADR-0003 |
-| 07 | Cluster formation & extractive summary | done | `src/services/cluster-formation-service.ts`, ADR-0005, ADR-0006 |
+| 07 | Cluster formation & extractive summary | done | `src/services/cluster-formation-service.ts`, ADR-0005, ADR-0030 |
 | 08 | LivingBrief in-app | done | `GET /topics/:slug` in `src/pages/routes.ts` |
 | 09 | Feedback signals | done | `src/services/feedback-service.ts`, ADR-0004 |
 | 10 | BriefPlan + scheduled BriefSnapshot | done | `src/services/brief-plan-service.ts`, `src/services/scheduled-brief-service.ts`, ADR-0011 |
@@ -110,6 +110,17 @@ all read off the corpus rather than off the clock, so two runs diff. It exits
 non-zero when a labelled pair cannot be resolved, because a report that quietly
 dropped pairs reads as a better rule than it is. `docs/cluster-grouping-baseline.md`
 records what the current rule scores and exactly how each number is defined.
+
+It also prints two numbers that bound what the rule can do, rather than leaving
+them to be discovered by disappointment. The **ceiling** is the precision the
+negative set allows whatever rule is run: eight of its 49 different-event pairs
+name exactly the same Entities, so their cosine is exactly 1 and no threshold
+separates them. And the **at** lines regroup every Topic at each floor in
+`SHIPPED_SIMILARITY_FLOORS` and print the largest Cluster, so the claim that the
+all-pairs floor bounds Cluster size is a measurement rather than an assertion —
+the shipped floor itself is the headline `largest` line rather than one of them.
+Recall is bounded from above the same way — by what Entity extraction finds, not
+by the grouping rule — and both bounds are written up in `docs/adr/0030`.
 
 `pnpm typecheck` covers `src/`, which is where the unit tests live, and not
 `tests/e2e/`: `tsconfig.json` includes only `src/**/*.ts`, and Playwright compiles
@@ -708,19 +719,19 @@ counted.
 pnpm test
 ```
 
-The suite is 101 test files across `src/` holding 1,719 cases — Vitest prints the
+The suite is 102 test files across `src/` holding 1,744 cases — Vitest prints the
 live figure at the end of every run. `docs-agreement.test.ts` checks the file
 count and cannot check the case count without running the suite it lives in, so
 that one number is worth reading off a run rather than trusting.
 
-The layout is **81 of the 144 modules** under `src/` having a sibling test file of
-the same name. The other 63 are reached by a suite named for what it covers rather
+The layout is **82 of the 144 modules** under `src/` having a sibling test file of
+the same name. The other 62 are reached by a suite named for what it covers rather
 than for one module — `repos/oauth-repos.test.ts` over four repositories,
 `pages/topic-page.test.ts` over the routes that render a Topic — and some are
 test-only helpers, entrypoints and the two modules whose behaviour is a shape
 rather than a decision (`src/env.ts`, `src/db/schema.ts`). A module without a
 sibling file is not a module without a test; both numbers are here because "one per
-module" was the claim once and sixty-three of them had none.
+module" was the claim once and sixty-two of them had none.
 
 Alongside the behavioural suites, eight
 of the files are guards that fail the build when the shape of the system drifts.

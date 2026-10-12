@@ -1,5 +1,9 @@
 import type { Clock } from '../domain/clock.js';
-import { groupByEntityOverlap, sharedEntityCount } from '../domain/cluster-grouping.js';
+import {
+  groupByEntitySimilarity,
+  sharedEntityCount,
+  type GroundedEntity,
+} from '../domain/cluster-grouping.js';
 import { bulletsFrom, oneLinerFrom } from '../domain/cluster-text.js';
 import { clusterWindowStart } from '../domain/cluster-window.js';
 import type {
@@ -62,23 +66,27 @@ export interface ClusterFormationServiceDeps {
 /**
  * The Entities grouping sees for each of a Topic's Stories.
  *
+ * Each Entity arrives with its kind as well as its id, because grouping weighs
+ * an Entity by what kind of thing it is and not only by how rare it is — see
+ * `ENTITY_KIND_WEIGHTS`.
+ *
  * Exported rather than kept as a method because the benchmark reads it too, and
  * a second copy of "which Articles of this Story are in scope for this Topic"
  * would drift from the one that runs — which is exactly what the benchmark
  * exists to catch.
  */
-export async function entityIdsByStoryInScope(
+export async function groundingByStoryInScope(
   topic: Topic,
   stories: readonly Story[],
   articleRepo: ArticleRepo,
-): Promise<readonly (readonly EntityId[])[]> {
+): Promise<readonly (readonly GroundedEntity[])[]> {
   const perStory = await Promise.all(
     stories.map(async (story) => {
       const articles = await articleRepo.listByStory(story.id);
       return articles.filter((a) => topic.sourceIds.includes(a.sourceId));
     }),
   );
-  return entityIdsOf(perStory);
+  return groundingOf(perStory);
 }
 
 export class ClusterFormationService {
@@ -169,15 +177,15 @@ export class ClusterFormationService {
     stories: readonly Story[],
   ): Promise<readonly (readonly Story[])[]> {
     if (stories.length === 0) return [];
-    const entityIdsByStory = await entityIdsByStoryInScope(
+    const groundingByStory = await groundingByStoryInScope(
       topic,
       stories,
       this.deps.articleRepo,
     );
 
-    const groups = groupByEntityOverlap(
+    const groups = groupByEntitySimilarity(
       stories,
-      (_story, index) => entityIdsByStory[index]!,
+      (_story, index) => groundingByStory[index]!,
     );
     return groups.map((group) =>
       [...group].sort((a, b) => a.lastSeenAt.getTime() - b.lastSeenAt.getTime()),
@@ -251,16 +259,20 @@ export class ClusterFormationService {
  *
  * A Story's Entities are the ones its Articles name, and an Article with none
  * contributes nothing rather than an empty set that would overlap everything.
+ * The kind is carried through with the id because grouping weighs the two
+ * together.
  */
-function entityIdsOf(
+function groundingOf(
   perStory: readonly (readonly Article[])[],
-): readonly (readonly EntityId[])[] {
+): readonly (readonly GroundedEntity[])[] {
   return perStory.map((articles) => {
-    const ids = new Set<EntityId>();
+    const grounding = new Map<EntityId, GroundedEntity>();
     for (const article of articles) {
-      for (const entity of article.entities) ids.add(entity.id);
+      for (const entity of article.entities) {
+        grounding.set(entity.id, { id: entity.id, kind: entity.kind });
+      }
     }
-    return [...ids];
+    return [...grounding.values()];
   });
 }
 
