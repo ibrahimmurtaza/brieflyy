@@ -15,7 +15,7 @@ Storing a signature only helps if the rows that predate the column are given one
 
 `'{}'` is kept as the marker for a row that was never signed, distinct from a signature that was taken and found nothing: an Article whose body was empty has been read, and saying so is different from saying nothing has looked at it.
 
-The Story's signature is set once, by the Article that created the Story, and does not grow as copies arrive. A Story whose identity shifted every time another copy landed would be a different Story each time, and the copies that were the reason it existed would not match it.
+The Story's signature is set once, by the Article that created the Story, and does not grow as copies arrive. A Story whose identity shifted every time another copy landed would be a different Story each time, and the copies that were the reason it existed would not match it. That is also why the Cluster grouping gate reads the signature the Story carries rather than one taken over its Articles: a union was measured against the same labelled families and costs recall at the floor that holds it in place, because it widens both sides of the comparison without widening their overlap. See [[0030-a-cluster-is-grouped-by-similarity-and-gated-on-the-signature]].
 
 The dedup window is measured from an Article's publication time, not from the poll that delivered it, and a Story records the publication range of the Articles in it. Measuring from the poll meant that a feed re-listing a month-old article folded it into whatever was being reported this week; the window is a fact about when the reporting happened, and a Story from a later window is a later Story.
 

@@ -2,14 +2,20 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ENTITY_KIND_WEIGHTS,
-  SHIPPED_SIMILARITY_FLOORS,
-  SIMILARITY_FLOOR,
-  groupByEntitySimilarity,
+  ENTITY_SIMILARITY_FLOOR,
+  SHIPPED_MERGE_THRESHOLD,
+  SHIPPED_MERGE_THRESHOLDS,
+  SIGNATURE_SIMILARITY_FLOOR,
+  describeThresholds,
+  groupIntoClusters,
   inverseDocumentFrequencies,
   sharedEntityCount,
   similarityBetween,
   type GroundedEntity,
+  type GroundedStory,
+  type MergeThresholds,
 } from './cluster-grouping.js';
+import { EMPTY_SIGNATURE, type StorySignature } from './story-signature.js';
 import type { EntityId, EntityKind } from './types.js';
 
 let entityCount = 0;
@@ -20,34 +26,51 @@ function entity(kind: EntityKind = 'org'): GroundedEntity {
   return { id: `entity-${entityCount}` as EntityId, kind };
 }
 
-/** The group each Story index ended up in, as a list of indexes. */
 /**
- * Group the Stories at these Entity sets, reported as the indexes each Cluster
- * holds.
+ * The text every fixture carries unless it is the text under test.
  *
- * The items handed to the rule are the indexes themselves, so what comes back is
- * already the membership a test asserts on — no recovering it by identity, which
- * would pass just as well for two Stories carrying the same Entities and so
- * could not tell those two apart.
+ * A pair of Stories holding the same words scores a signature similarity of 1, so
+ * the gate never speaks in a test about Entities — which is the point: those tests
+ * were written to hold the Entity rule on its own, and a signature shared by
+ * everything keeps them holding that rather than something else.
  */
+const SAME_TEXT: StorySignature = { words: ['acme', 'foo'], phrases: ['acme foo'] };
+
+/** A signature over these words, with no phrases in it. */
+function text(...words: string[]): StorySignature {
+  return { words, phrases: [] };
+}
+
+/** Group these readings, reported as the indexes each Cluster holds. */
 function groupsOf(
-  entitySets: readonly (readonly GroundedEntity[])[],
-  floor?: number,
+  readings: readonly GroundedStory[],
+  thresholds?: MergeThresholds,
 ): readonly (readonly number[])[] {
-  const stories = entitySets.map((_entities, index) => index);
-  return groupByEntitySimilarity(
+  const stories = readings.map((_reading, index) => index);
+  return groupIntoClusters(
     stories,
-    (story, index) => entitySets[story]!,
-    floor === undefined ? {} : { floor },
+    (story) => readings[story]!,
+    thresholds === undefined ? {} : { thresholds },
   );
 }
 
-/** The most Stories any one Cluster holds. */
+/** Group Stories carrying these Entity sets, every one of them saying the same. */
+function groupsOfEntities(
+  entitySets: readonly (readonly GroundedEntity[])[],
+  thresholds?: MergeThresholds,
+): readonly (readonly number[])[] {
+  return groupsOf(
+    entitySets.map((entities) => ({ entities, signature: SAME_TEXT })),
+    thresholds,
+  );
+}
+
+/** The most Stories any one Cluster holds, out of Stories saying the same. */
 function largestClusterOf(
   entitySets: readonly (readonly GroundedEntity[])[],
-  floor?: number,
+  thresholds?: MergeThresholds,
 ): number {
-  return Math.max(0, ...groupsOf(entitySets, floor).map((group) => group.length));
+  return Math.max(0, ...groupsOfEntities(entitySets, thresholds).map((g) => g.length));
 }
 
 /**
@@ -146,7 +169,7 @@ describe('similarityBetween', () => {
     // nothing to compare against. Sharing it is not evidence of one event.
     expect(
       similarityBetween([common, asideA], [common, asideB], frequencies),
-    ).toBeLessThan(SIMILARITY_FLOOR);
+    ).toBeLessThan(ENTITY_SIMILARITY_FLOOR);
   });
 
   it('scores two Stories with nothing in common as nothing rather than dividing by nothing', () => {
@@ -173,7 +196,7 @@ describe('similarityBetween', () => {
 
     expect(
       similarityBetween([core], [core, ...aside], frequencies),
-    ).toBeGreaterThan(SIMILARITY_FLOOR);
+    ).toBeGreaterThan(ENTITY_SIMILARITY_FLOOR);
   });
 
   it('reads the kind of an Entity as well as how rare it is', () => {
@@ -202,14 +225,14 @@ describe('similarityBetween', () => {
   });
 });
 
-describe('groupByEntitySimilarity', () => {
+describe('groupIntoClusters', () => {
   it('groups Stories sharing a rare Entity and splits two sharing only a common one', () => {
     const common = entity();
     const rare = entity();
     const first = entity();
     const second = entity();
 
-    const groups = groupsOf([
+    const groups = groupsOfEntities([
       [common, rare],
       [common, rare],
       [common, first],
@@ -229,7 +252,7 @@ describe('groupByEntitySimilarity', () => {
     const sharedLeft = entity();
     const sharedRight = entity();
 
-    const groups = groupsOf([
+    const groups = groupsOfEntities([
       [left, sharedLeft],
       [left, sharedRight, right, sharedLeft],
       [right, sharedRight],
@@ -249,7 +272,7 @@ describe('groupByEntitySimilarity', () => {
     const filler = entity();
     const filler2 = entity();
 
-    const groups = groupsOf([
+    const groups = groupsOfEntities([
       [a, b],
       [a, b, filler],
       [a, b, filler, filler2],
@@ -275,13 +298,15 @@ describe('groupByEntitySimilarity', () => {
     const membership = (groups: readonly (readonly number[])[]): string[] =>
       groups.map((group) => group.join(',')).sort();
 
-    expect(membership(groupsOf([...sets].reverse()))).toEqual(membership(groupsOf(sets)));
+    expect(membership(groupsOfEntities([...sets].reverse()))).toEqual(
+      membership(groupsOfEntities(sets)),
+    );
   });
 
   it('leaves a Story with no Entities in a Cluster of its own', () => {
     const shared = entity();
 
-    const groups = groupsOf([[shared], [], [shared]]);
+    const groups = groupsOfEntities([[shared], [], [shared]]);
 
     expect(groups).toContainEqual([0, 2]);
     expect(groups).toContainEqual([1]);
@@ -291,27 +316,97 @@ describe('groupByEntitySimilarity', () => {
     expect(groupsOf([])).toEqual([]);
   });
 
-  it('reads the floor it was given rather than only the one it ships', () => {
+  it('reads the thresholds it was given rather than only the ones it ships', () => {
     const one = entity();
     const two = entity();
 
-    expect(groupsOf([[one], [one, two]], 0.99)).toHaveLength(2);
-    expect(groupsOf([[one], [one, two]], 0.1)).toHaveLength(1);
+    expect(groupsOfEntities([[one], [one, two]], { entity: 0.99, signature: 0 })).toHaveLength(
+      2,
+    );
+    expect(groupsOfEntities([[one], [one, two]], { entity: 0.1, signature: 0 })).toHaveLength(1);
   });
 
-  it('keeps the largest Cluster bounded at every floor the rule ships', () => {
+  it('keeps the largest Cluster bounded at every set of thresholds the rule ships', () => {
     const run = pairsOfLinks(60);
 
-    for (const floor of SHIPPED_SIMILARITY_FLOORS) {
+    for (const thresholds of SHIPPED_MERGE_THRESHOLDS) {
       expect(
-        largestClusterOf(run, floor),
-        `floor ${floor} let a Cluster run away`,
+        largestClusterOf(run, thresholds),
+        `thresholds ${describeThresholds(thresholds)} let a Cluster run away`,
       ).toBeLessThanOrEqual(2);
     }
   });
+
+  it('joins two Stories naming the same Entities only when their signatures agree too', () => {
+    // The two hardest different-event pairs on the benchmark's negative set are
+    // exactly this shape: the same Entity vector, so a cosine of exactly 1, and
+    // two reports about different things. Entities alone cannot tell them apart.
+    const shared = entity();
+
+    const apart = groupsOf([
+      { entities: [shared], signature: text('acme', 'foo', 'unveiled') },
+      { entities: [shared], signature: text('ruling', 'overturns', 'appeal') },
+    ]);
+    const together = groupsOf([
+      { entities: [shared], signature: text('acme', 'foo', 'unveils') },
+      { entities: [shared], signature: text('acme', 'foo', 'unveil') },
+    ]);
+
+    expect(apart).toHaveLength(2);
+    expect(together).toContainEqual([0, 1]);
+  });
+
+  it('holds a Story out of a Cluster whose members do not read like it', () => {
+    // The first two agree on both signals, so they merge first. The third reads
+    // like the first and shares its Entities, and not at all like the second — so
+    // the merge the rule refuses is the one putting it in with the pair.
+    const shared = entity();
+    const other = entity();
+
+    const groups = groupsOf([
+      { entities: [shared], signature: text('acme', 'foo', 'launch') },
+      { entities: [shared], signature: text('acme', 'foo', 'launch') },
+      { entities: [shared, other], signature: text('acme', 'quarterly', 'earnings') },
+    ]);
+
+    expect(groups).toContainEqual([0, 1]);
+    expect(groups).toContainEqual([2]);
+  });
+
+  it('leaves a Story carrying no signature in a Cluster of its own', () => {
+    // An unreadable signature is not evidence that two Stories are one thing, so
+    // the gate refuses rather than waving it through: the same reading as a Story
+    // carrying no Entities, which also sits alone.
+    const shared = entity();
+
+    const groups = groupsOf([
+      { entities: [shared], signature: text('acme', 'foo') },
+      { entities: [shared], signature: EMPTY_SIGNATURE },
+    ]);
+
+    expect(groups).toContainEqual([0]);
+    expect(groups).toContainEqual([1]);
+  });
+
+  it('moves only the floor a caller named, leaving the other where the rule ships it', () => {
+    const shared = entity();
+    const readings = [
+      { entities: [shared], signature: text('acme', 'foo', 'unveiled') },
+      { entities: [shared], signature: text('ruling', 'overturns', 'appeal') },
+    ];
+
+    // Lifting the signature floor alone joins them, and the Entity floor is
+    // untouched by it: lowering that one alone does not.
+    expect(groupsOf(readings, { ...SHIPPED_MERGE_THRESHOLD, signature: 0 })).toContainEqual([
+      0, 1,
+    ]);
+    expect(
+      groupsOf(readings, { ...SHIPPED_MERGE_THRESHOLD, entity: 0 }),
+    ).not.toContainEqual([0, 1]);
+  });
 });
 
-describe('the weights and the floor the rule ships', () => {
+describe('the weights and the floors the rule ships', () => {
   it('counts a place as half of what an actor or a thing counts', () => {
     expect(ENTITY_KIND_WEIGHTS.place).toBe(0.5);
     expect(ENTITY_KIND_WEIGHTS.person).toBe(1);
@@ -320,13 +415,36 @@ describe('the weights and the floor the rule ships', () => {
     expect(ENTITY_KIND_WEIGHTS.concept).toBe(1);
   });
 
-  it('floors similarity at a number a cosine can sit either side of', () => {
-    expect(SIMILARITY_FLOOR).toBeGreaterThan(0);
-    expect(SIMILARITY_FLOOR).toBeLessThan(1);
+  it('floors both similarities at a number one can sit either side of', () => {
+    expect(ENTITY_SIMILARITY_FLOOR).toBeGreaterThan(0);
+    expect(ENTITY_SIMILARITY_FLOOR).toBeLessThan(1);
+    expect(SIGNATURE_SIMILARITY_FLOOR).toBeGreaterThan(0);
+    expect(SIGNATURE_SIMILARITY_FLOOR).toBeLessThan(1);
   });
 
-  it('ships the floor among the floors it is measured across', () => {
-    expect(SHIPPED_SIMILARITY_FLOORS).toContain(SIMILARITY_FLOOR);
+  it('runs at the two floors it ships, and both of them at once', () => {
+    // Two Stories identical as Entity vectors and plainly different as text: the
+    // hardest negative the labelled set has, and the one the Entity floor alone
+    // cannot touch — dropping it to nothing joins them, dropping only the
+    // signature floor does not, and what ships keeps them apart.
+    const shared = entity();
+
+    const readings = [
+      { entities: [shared], signature: text('acme', 'foo', 'unveiled', 'seattle') },
+      { entities: [shared], signature: text('ruling', 'overturns', 'appeal', 'tribunal') },
+    ];
+
+    expect(groupsOf(readings)).not.toContainEqual([0, 1]);
+    expect(
+      groupsOf(readings, { ...SHIPPED_MERGE_THRESHOLD, entity: 0 }),
+    ).not.toContainEqual([0, 1]);
+    expect(groupsOf(readings, { ...SHIPPED_MERGE_THRESHOLD, signature: 0 })).toContainEqual([
+      0, 1,
+    ]);
+  });
+
+  it('ships the thresholds among the ones it is measured across', () => {
+    expect(SHIPPED_MERGE_THRESHOLDS).toContain(SHIPPED_MERGE_THRESHOLD);
   });
 });
 

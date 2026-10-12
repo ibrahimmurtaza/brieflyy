@@ -22,11 +22,12 @@ family six do rests on six.
 | --- | --- |
 | **recall** | Same-event families the rule put in one Cluster, over the same-event families it could measure. |
 | **precision** | Different-event families it kept apart, over the different-event families it could measure. |
-| **ceiling** | The precision a rule reading **Entities only** can reach: the different-event families that do not name identical Entities. Not a bound on the application — see "What this does not reach". |
+| **signature** | The signature floor a merge has to clear, and the range each label's families score across. Printed because the floor is a second number fitted to the same families, and a reader is owed the distribution it was read from rather than the constant alone. |
+| **ceiling** | The precision a rule can reach reading the representations named beside it: Entities only, or Entities and signature. The second is the bound on the shipped rule; the first is not, and the two are printed together so neither is read as the other. |
 | **clusters** | Every Cluster formed across every live Topic, counting a Story once per Topic it is in scope for. |
 | **largest** | The most Stories any one of them holds. |
 | **singletons** | The share of Clusters holding exactly one Story. |
-| **at *f*** | The largest Cluster when every Topic is grouped again at floor *f*, over the shipped floors. |
+| **at *e*/*s*** | The largest Cluster when every Topic is grouped again at Entity floor *e* and signature floor *s*, over the shipped pairs. |
 
 A family no live Topic holds both Stories for is left out of the denominator and
 printed by name, because it is a gap in what the corpus can say rather than a
@@ -79,19 +80,26 @@ which is the rule `ClusterFormationService` runs:
 
 ```
 cluster grouping benchmark
-  rule      IDF-weighted cosine over Entities at a floor of 0.45, merged most-similar first with an all-pairs floor
+  rule      IDF-weighted cosine over Entities at a floor of 0.45 and a Story signature floor of 0.04, merged most-similar first with an all-pairs floor over both
   corpus    14 topics, window ending 2026-10-09T13:52:30.766Z
 
   recall      51.7%  15 of 29 same-event pairs end up in one Cluster (85 topic observations)
-  precision   59.2%  29 of 49 different-event pairs stay apart (151 topic observations)
-  ceiling     83.7%  for a rule reading Entities only: 8 of 49 name identical Entities and score a cosine of exactly 1
-              41 are separable by Entity. A rule reading the Story signature too can go above this.
+  precision   71.4%  35 of 49 different-event pairs stay apart (151 topic observations)
+  signature   0.04  the floor a merge's two signatures clear; same-event families score 0.024 to 0.149, different-event families score 0.000 to 1.000
+  ceiling     83.7%  for a rule reading Entities only: 8 of 49 are identical as Entity vectors, and their cosine is exactly 1
+  ceiling     95.9%  for a rule reading Entities and signature: 2 of 49 are identical as Entity vectors and in text
 
-  clusters    4162 over 14 topics holding 1618 stories
-  largest     7 stories in one Cluster
-  singletons  92.5%  3848 of 4162 clusters hold one Story
-  at 0.40   largest 7 stories in one Cluster over 4034 clusters
-  at 0.50   largest 5 stories in one Cluster over 4228 clusters
+  clusters    4281 over 14 topics holding 1618 stories
+  largest     6 stories in one Cluster
+  singletons  94.6%  4048 of 4281 clusters hold one Story
+  at 0.40/0.03   largest 6 stories in one Cluster over 4127 clusters
+  at 0.40/0.04   largest 6 stories in one Cluster over 4189 clusters
+  at 0.40/0.05   largest 5 stories in one Cluster over 4231 clusters
+  at 0.45/0.03   largest 5 stories in one Cluster over 4234 clusters
+  at 0.45/0.05   largest 5 stories in one Cluster over 4310 clusters
+  at 0.50/0.03   largest 5 stories in one Cluster over 4296 clusters
+  at 0.50/0.04   largest 5 stories in one Cluster over 4332 clusters
+  at 0.50/0.05   largest 5 stories in one Cluster over 4354 clusters
 ```
 
 Every labelled pair is measured, on the corpus widened by the two Topics recorded
@@ -104,25 +112,27 @@ The rule this replaced divided the shared Entities by the **larger** of the two
 sets and then took the transitive closure of that relation. Against the same
 labelled set:
 
-| | Overlap + closure (ADR-0006) | Similarity + constrained linkage (ADR-0030) |
-| --- | --- | --- |
-| recall | 31.0% | **51.7%** |
-| precision | 36.7% | **59.2%** |
-| largest Cluster | 13 Stories | **7 Stories** |
-| singletons | 93.5% | 92.5% |
+| | Overlap + closure (ADR-0006) | Similarity + constrained linkage (ADR-0030) | …and the signature gate |
+| --- | --- | --- | --- |
+| recall | 31.0% | **51.7%** | **51.7%** |
+| precision | 36.7% | 59.2% | **71.4%** |
+| largest Cluster | 13 Stories | 7 Stories | **6 Stories** |
+| singletons | 93.5% | 92.5% | **94.6%** |
 
 Both halves of the failure moved, and they were one failure. Dividing by the
 larger set meant a detailed Story could never join a concise one about the same
 event; closure on top of that meant a chain of individually reasonable links ran
-away into Clusters of thirteen that are not about one thing.
+away into Clusters of thirteen that are not about one thing. The signature gate
+then took twelve points of precision off the same labelled set at no cost to
+recall, which is the column on the right.
 
 The single-linkage bound is worth stating on its own, because it is not a
-threshold problem. Measured side by side on this corpus, with the shipped rule on
-one side and the same similarity under single linkage on the other — a
-calibration measurement rather than something `pnpm cluster:benchmark` prints,
-since the shipped command groups with the constrained linkage:
+threshold problem. Measured side by side on this corpus, with the same similarity
+under both linkages — a calibration measurement taken before the signature gate and
+reproduced by no command, since the shipped command groups with the constrained
+linkage:
 
-| floor | largest, constrained | largest, single linkage |
+| Entity floor | largest, constrained | largest, single linkage |
 | --- | --- | --- |
 | 0.05 | 14 | 378 |
 | 0.10 | 12 | 340 |
@@ -132,17 +142,18 @@ since the shipped command groups with the constrained linkage:
 | 0.50 | 5 | 12 |
 
 No value of the threshold changes what is on the right, because every link in
-such a chain clears it. The all-pairs floor is what stops it, and at the shipped
-floor it holds the largest Cluster at 7 where single linkage would reach 19.
+such a chain clears it. The all-pairs floor is what stops it: at 0.45 it held the
+largest Cluster at 7 where single linkage would reach 19, and with the signature
+gate in place the shipped rule now holds it at 6.
 
-### Why the floor is 0.45
+### Why the Entity floor is 0.45
 
-Measured over a range wider than the shipped one, on the same corpus. The rows
-in **bold** are the shipped floors, which `pnpm cluster:benchmark` regroups at and
-prints as its `at` lines; the rest were measured the same way and are here to show
-what the neighbourhood does, which is why they are reproduced by no command.
+Measured over a range wider than the shipped one, on the same corpus. The rows in
+**bold** are the Entity floors the rule ships, the signature floor held at 0
+throughout; the rest were measured the same way and are here to show what the
+neighbourhood does, which is why they are reproduced by no command.
 
-| floor | recall | precision | clusters | largest | singletons |
+| Entity floor | recall | precision | clusters | largest | singletons |
 | --- | --- | --- | --- | --- | --- |
 | **0.40** | 55.2% | 49.0% | 4034 | 7 | 89.9% |
 | **0.45** | **51.7%** | **59.2%** | **4162** | **7** | **92.5%** |
@@ -156,50 +167,93 @@ and precision is already at the value 0.50 holds; past 0.50 precision stops
 moving and recall falls away, which is the trade being made rather than a
 measurement.
 
-`SHIPPED_SIMILARITY_FLOORS` is the range over which the largest Cluster is
-claimed to stay bounded, and that claim is measured rather than asserted — the
-`at` lines in the report are the benchmark regrouping every Topic at each one.
-The shipped floor is 0.45, so its own largest Cluster is the headline `largest`
-line rather than one of the `at` lines.
+This table is the Entity floor read on its own, at the state the rule was in
+before the signature gate. It is kept because it is the frontier that floor was
+chosen from, and because it is the only way to see what the gate added rather
+than what the rule does: the shipped run above scores the same Entity floor with
+the gate in place.
+
+`SHIPPED_MERGE_THRESHOLDS` is the **grid** over which the largest Cluster is
+claimed to stay bounded — every pairing of three Entity floors with three
+signature floors, and the claim is measured rather than asserted, which is what
+those eight `at` lines are. A grid rather than a diagonal line through the
+neighbourhood because a line attributes every movement to neither floor: reading
+across the Entity floors at one signature floor, and down the signature floors at
+one Entity floor, is what says which of the two is doing the work. The largest
+Cluster is 6 across the whole grid and never exceeds it. The shipped pair
+(0.45/0.04) carries no `at` line of its own, so its largest Cluster is the
+headline `largest` line.
+
+### Why the signature floor is 0.04
+
+The same corpus and the same labelled families, with the Entity floor held at
+0.45 and the signature floor swept:
+
+| signature floor | recall | precision | clusters | largest | singletons |
+| --- | --- | --- | --- | --- | --- |
+| — (not used) | 51.7% | 59.2% | 4162 | 7 | 92.5% |
+| 0.01 | 51.7% | 61.2% | 4166 | 7 | 92.5% |
+| 0.02 | 55.2% | 63.3% | 4207 | 7 | 93.2% |
+| **0.03** | 51.7% | 67.3% | 4234 | 5 | 93.5% |
+| **0.04** | **51.7%** | **71.4%** | **4281** | **6** | **94.6%** |
+| **0.05** | 44.8% | 73.5% | 4310 | 5 | 94.9% |
+| 0.06 | 41.4% | 77.6% | 4342 | 5 | 95.6% |
+| 0.08 | 37.9% | 81.6% | 4386 | 5 | 96.7% |
+| 0.10 | 37.9% | 85.7% | 4428 | 4 | 97.4% |
+| 0.15 | 0.0% | 93.9% | 4534 | 3 | 99.6% |
+
+0.04 is where precision rises twelve points and recall does not move at all, and
+the plateau across 0.02–0.04 is why the neighbourhood rather than the point is the
+reassuring part: the exact value is not load-bearing. Past 0.04 precision keeps
+rising and recall falls away, and at 0.15 — the neighbourhood ADR-0007's
+`STORY_MATCH_THRESHOLD` sits in — the rule groups nothing at all. This is a
+calibration measurement rather than something `pnpm cluster:benchmark` prints,
+which sweeps the shipped pairs rather than this range.
+
+The gate reads the **Story's own signature** rather than a union over its
+Articles. That was measured rather than assumed, because a Story's signature is
+the one it was formed from and does not grow as copies arrive:
+
+| what the gate reads | same-event minimum | recall | precision |
+| --- | --- | --- | --- |
+| the Story's own signature | 0.024 | **51.7%** | **71.4%** |
+| a union over its Articles | 0.046 | 48.3% | 71.4% |
+
+The union scores the hardest same-event family *higher* — its floor of 0.046 sits
+above the whole same-event range rather than below it — and still loses a family
+of recall, because a union widens both sides of the comparison without widening
+their overlap.
 
 ### What this does not reach
 
 **Precision is capped at 83.7% for a rule reading Entities, and the cap is
 arithmetic.** Eight of the 49 different-event families name exactly the same
-Entities as one another, so their cosine is exactly 1.0 and no floor below 1
-separates them. The benchmark computes and prints this as `ceiling`, labelled
-for what it is — a bound on Entity grouping, not on the application.
+Entities as one another, so their cosine is exactly 1.0 and no Entity floor below
+1 separates them.
 
-**That is not the application's ceiling, and saying so was the mistake this
-section used to make.** A Story also carries a signature — its content words and
-key phrases (ADR-0007), documented there as the signal that tells two reports
-about the same company apart. Six of those eight families score between 0.028 and
-0.120 against each other: identical as Entity vectors, plainly different as text.
-Measured on this corpus, gating a merge on a signature floor alongside the Entity
-cosine gives:
+**It is also not the application's ceiling.** A Story carries a signature — its
+content words and key phrases (ADR-0007) — and six of those eight families score
+between 0.028 and 0.120 against each other: identical as Entity vectors, plainly
+different as text. Reading it lifts the bound to **95.9%**, because only two of
+the 49 are identical in both representations. Both figures are printed by
+`pnpm cluster:benchmark`, each labelled with the representations it is a bound
+on, so a reader who wants the Entity-only number has to choose to take it rather
+than finding it first.
 
-| signature floor | recall | precision | largest | singletons |
-| --- | --- | --- | --- | --- |
-| — (not used) | 51.7% | 59.2% | 7 | 92.5% |
-| 0.02 | 55.2% | 63.3% | 7 | 93.2% |
-| 0.03 | 51.7% | 67.3% | 5 | 93.5% |
-| **0.04** | **51.7%** | **71.4%** | 6 | 94.6% |
-| 0.05 | 44.8% | 73.5% | 5 | 94.9% |
-| 0.06 | 41.4% | 77.6% | 5 | 95.6% |
-| 0.10 | 37.9% | 85.7% | 4 | 97.4% |
+**The measured 71.4% sits below both bounds, and the gap is the price of the
+thresholds rather than a threshold left untuned.** The sweep above is what settles
+that: 0.10 buys 85.7% and costs 13.8 points of recall.
 
-At 0.04 precision rises 12 points with no loss of recall. Only two of the 49 are
-identical in *both* representations, so the ceiling for a rule reading both is
-**95.9%**. This is a calibration measurement rather than something
-`pnpm cluster:benchmark` prints — the shipped command groups with Entities alone.
-It is [#126](https://github.com/ibrahimmurtaza/brieflyy/issues/126), not this
-rule, because it adds a signal the ticket did not ask for and fits a second
-threshold to the same 78 families.
-
-Ticket #118 asked for precision above 90% and quoted a baseline of 96.1%. The
-measured baseline was 36.7%, and #117 said on close that the quoted figure did not
-reproduce. The recall target was reachable and is exceeded: 20.9% quoted, 31.0%
-measured, 51.7% now.
+**The signature is a gate, not a separator, and the printed margins say so.** Over
+these families the same-event pairs run 0.024 to 0.149 and the different-event
+pairs 0.000 to 1.000, so the two classes overlap almost completely and no
+threshold separates them. What the gate buys is precision on the negatives
+Entities cannot separate. More than half the different-event families score above
+the floor — the median is 0.061 — and those are held apart by the Entity cosine
+or not at all. This is also why the floor is not borrowed from ADR-0007: that
+threshold sits between same-story rewrites at 0.20 and unrelated reports at 0.10,
+measured on ingest fixtures, and the signature's behaviour on Cluster grouping is
+not the behaviour it was measured for.
 
 **Recall is capped at 79.3% for a rule reading Entities**, because six of the 29
 same-event families share no Entity at all — no similarity function over Entities
@@ -207,6 +261,11 @@ joins them. Five of those six clear a signature floor of 0.04 anyway, so that
 ceiling belongs to Entity extraction rather than to this rule, but it does not
 belong to the application either. More than half of real event families still
 come back split, and which lever finally moves them is open rather than settled.
+
+Ticket #118 asked for precision above 90% and quoted a baseline of 96.1%. The
+measured baseline was 36.7%, and #117 said on close that the quoted figure did not
+reproduce. The recall target was reachable and is exceeded: 20.9% quoted, 31.0%
+measured, 51.7% now, and unchanged by the gate.
 
 ### The two Topics this corpus was widened by
 

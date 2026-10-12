@@ -15,7 +15,13 @@
  */
 
 import type { EntityId, StoryId, TopicId } from '../domain/types.js';
-import type { GroundedEntity } from '../domain/cluster-grouping.js';
+import {
+  describeThresholds,
+  type GroundedEntity,
+  type GroundedStory,
+  type MergeThresholds,
+} from '../domain/cluster-grouping.js';
+import { signatureSimilarity, type StorySignature } from '../domain/story-signature.js';
 import type { CorpusStoryRef, LabelledStoryPair } from '../testing/cluster-pair-fixtures.js';
 
 /** Which of the two sets a pair belongs to. */
@@ -148,13 +154,13 @@ function describeRef(ref: CorpusStoryRef): string {
 export interface GroupedTopic {
   readonly topicId: TopicId;
   readonly clusters: readonly (readonly StoryId[])[];
-  /** The floor these Clusters were formed at, when they were not the shipped one. */
-  readonly floor?: number;
+  /** The thresholds these Clusters were formed at, when they were not the shipped ones. */
+  readonly thresholds?: MergeThresholds;
 }
 
-/** How large the biggest Cluster got at one floor, over the whole corpus. */
-export interface FloorReading {
-  readonly floor: number;
+/** How large the biggest Cluster got at one pair of thresholds, over the whole corpus. */
+export interface ThresholdReading {
+  readonly thresholds: MergeThresholds;
   readonly largestCluster: number;
   readonly clusters: number;
 }
@@ -177,39 +183,62 @@ export interface PairScore {
   readonly unshared: readonly string[];
 }
 
-/**
- * How high precision can go on a set of labelled pairs for a rule reading
- * Entities, and nothing else.
- *
- * Two Stories naming the same Entities score a cosine of exactly 1 — their
- * vectors are the same vector — so no floor below 1 holds them apart and no
- * amount of tuning reaches a family like that. Counting those pairs separately
- * separates "the rule is not tuned yet" from "this negative is not separable by
- * Entity at all".
- *
- * **This bounds a rule reading Entities, and only those.** It is not a bound on
- * what this application can do: a Story also carries a signature (its content
- * words and key phrases, ADR-0007), and six of the eight families here score
- * between 0.028 and 0.120 against each other — they are identical as Entity
- * vectors and plainly different as text. A rule reading both clears this number.
- * What this figure is good for is telling the reader that a precision below it
- * is the rule's doing, and a precision above it needs a second signal rather
- * than a different threshold.
- *
- * Only pairs some Topic holds both Stories for are counted, so the ceiling and
- * the measured precision are over the same families.
- */
-export function entityPrecisionCeiling(
+/** What a precision ceiling found, and which families each half was. */
+export interface PrecisionCeiling {
+  /** Different-event families the ceiling is over. */
+  readonly families: number;
+  /** How many of them the rule cannot tell apart at all. */
+  readonly identical: number;
+  /** `(families - identical) / families`, or null when there are no families. */
+  readonly ceiling: number | null;
+  /** The families no floor can keep apart. */
+  readonly unseparable: readonly string[];
+  /** The families such a rule could in principle keep apart. */
+  readonly separable: readonly string[];
+}
+
+/** The precision ceiling for a rule reading the representations named. */
+export interface CeilingsRead {
+  /** What the bound is a bound on, named as the report line prints it. */
+  readonly reads: 'Entities only' | 'Entities and signature';
+  /** What a family this rule cannot tell apart has to be identical in. */
+  readonly indistinguishable: string;
+  readonly ceiling: PrecisionCeiling;
+}
+
+/** Two Entity sets naming exactly the same Entities, in either order. */
+function namesTheSame(
+  left: readonly GroundedEntity[],
+  right: readonly GroundedEntity[],
+): boolean {
+  const ids = new Set(left.map((entity) => entity.id));
+  return (
+    ids.size === new Set(right.map((entity) => entity.id)).size &&
+    right.every((entity) => ids.has(entity.id))
+  );
+}
+
+/** Two signatures carrying exactly the same words and phrases, in any order. */
+function saysTheSame(left: StorySignature, right: StorySignature): boolean {
+  return (
+    namesTheSameWords(left.words, right.words) && namesTheSameWords(left.phrases, right.phrases)
+  );
+}
+
+function namesTheSameWords(left: readonly string[], right: readonly string[]): boolean {
+  const set = new Set(left);
+  return set.size === new Set(right).size && right.every((word) => set.has(word));
+}
+
+/** Split a set of pairs into the ones a rule cannot separate and the ones it could. */
+function ceilingOf(
   differentEvent: readonly ResolvedStoryPair[],
-  groundingOf: (storyId: StoryId) => readonly GroundedEntity[],
-): EntityPrecisionCeiling {
-  const separable: string[] = [];
+  indistinguishable: (pair: ResolvedStoryPair) => boolean,
+): PrecisionCeiling {
   const unseparable: string[] = [];
+  const separable: string[] = [];
   for (const pair of differentEvent) {
-    const left = new Set(groundingOf(pair.leftStoryId).map((entity) => entity.id));
-    const right = new Set(groundingOf(pair.rightStoryId).map((entity) => entity.id));
-    const namedTheSame = left.size === right.size && [...left].every((id) => right.has(id));
-    (namedTheSame ? unseparable : separable).push(pair.name);
+    (indistinguishable(pair) ? unseparable : separable).push(pair.name);
   }
   const families = differentEvent.length;
   const identical = unseparable.length;
@@ -222,18 +251,120 @@ export function entityPrecisionCeiling(
   };
 }
 
-/** What `entityPrecisionCeiling` found, and which families each half was. */
-export interface EntityPrecisionCeiling {
-  /** Different-event families the ceiling is over. */
+/**
+ * How high precision can go on a set of labelled pairs for a rule reading
+ * Entities, and nothing else.
+ *
+ * Two Stories naming the same Entities score a cosine of exactly 1 — their
+ * vectors are the same vector — so no floor below 1 holds them apart and no
+ * amount of tuning reaches a family like that. Counting those pairs separately
+ * separates "the rule is not tuned yet" from "this negative is not separable by
+ * Entity at all".
+ *
+ * **This bounds a rule reading Entities, and only those.** A rule reading the
+ * Story signature as well clears this number, and the report prints the bound for
+ * that too beside it, so the two are never read as the same bound.
+ *
+ * Only pairs some Topic holds both Stories for are counted, so the ceiling and
+ * the measured precision are over the same families.
+ */
+export function entityPrecisionCeiling(
+  differentEvent: readonly ResolvedStoryPair[],
+  readingOf: (storyId: StoryId) => GroundedStory,
+): PrecisionCeiling {
+  return ceilingOf(differentEvent, (pair) =>
+    namesTheSame(readingOf(pair.leftStoryId).entities, readingOf(pair.rightStoryId).entities),
+  );
+}
+
+/**
+ * How high precision can go for a rule reading both representations, which is
+ * what the shipped rule is.
+ *
+ * Two Stories identical in Entity vector *and* in signature are identical to
+ * every comparison the rule makes, so no threshold on either can hold them apart.
+ * The gap between this and the Entity-only ceiling is the family the second
+ * signal reaches, and the gap between this and the measured precision is what the
+ * thresholds cost.
+ */
+export function bothSignalsPrecisionCeiling(
+  differentEvent: readonly ResolvedStoryPair[],
+  readingOf: (storyId: StoryId) => GroundedStory,
+): PrecisionCeiling {
+  return ceilingOf(differentEvent, (pair) => {
+    const left = readingOf(pair.leftStoryId);
+    const right = readingOf(pair.rightStoryId);
+    return namesTheSame(left.entities, right.entities) && saysTheSame(left.signature, right.signature);
+  });
+}
+
+/**
+ * How the labelled families score on signature alone, at the floor the rule
+ * ships.
+ *
+ * Printed beside the precision it produces, because the floor is the second
+ * number fitted to these families and a reader is owed the distribution it was
+ * read from rather than the constant alone. It also answers the question a
+ * constant cannot: `STORY_MATCH_THRESHOLD` sits between same-event rewrites at
+ * 0.20 and unrelated reports at 0.10, and this does not — same-event families run
+ * as low as 0.024 here, so the two thresholds are not interchangeable.
+ */
+export interface SignatureMargins {
+  /** The floor the shipped rule gates a merge on. */
+  readonly floor: number;
+  /** The range each label's families score across, over the families measured. */
+  readonly byLabel: readonly SignatureMarginForLabel[];
+}
+
+/** The range one label's families score across. */
+export interface SignatureMarginForLabel {
+  readonly label: PairLabel;
+  /** How many families could be scored. */
   readonly families: number;
-  /** How many of them name exactly the same Entities as one another. */
-  readonly identical: number;
-  /** `(families - identical) / families`, or null when there are no families. */
-  readonly ceiling: number | null;
-  /** The families no Entity floor below 1 can keep apart. */
-  readonly unseparable: readonly string[];
-  /** The families a rule reading Entities could in principle keep apart. */
-  readonly separable: readonly string[];
+  /** The lowest score any of them reached, or null when none could be. */
+  readonly lowest: number | null;
+  readonly highest: number | null;
+}
+
+/** The labelled families of each label, after the unmeasurable ones are out. */
+export interface MeasuredFamilies {
+  readonly sameEvent: readonly ResolvedStoryPair[];
+  readonly differentEvent: readonly ResolvedStoryPair[];
+}
+
+/** How the labelled families of each label score on signature alone. */
+export function signatureMargins(input: {
+  readonly measured: MeasuredFamilies;
+  readonly readingOf: (storyId: StoryId) => GroundedStory;
+  readonly floor: number;
+}): SignatureMargins {
+  const range = (
+    label: PairLabel,
+    pairs: readonly ResolvedStoryPair[],
+  ): SignatureMarginForLabel => {
+    const scores = pairs
+      .map((pair) =>
+        signatureSimilarity(
+          input.readingOf(pair.leftStoryId).signature,
+          input.readingOf(pair.rightStoryId).signature,
+        ),
+      )
+      .sort((a, b) => a - b);
+    return {
+      label,
+      families: scores.length,
+      lowest: scores[0] ?? null,
+      highest: scores[scores.length - 1] ?? null,
+    };
+  };
+
+  return {
+    floor: input.floor,
+    byLabel: [
+      range('same-event', input.measured.sameEvent),
+      range('different-event', input.measured.differentEvent),
+    ],
+  };
 }
 
 export interface ClusterGroupingReport {
@@ -251,16 +382,19 @@ export interface ClusterGroupingReport {
   /** Different-event pairs the rule kept apart. */
   readonly precision: PairScore;
   /**
-   * The highest precision a rule reading Entities alone can reach on this set.
+   * The precision a rule reading Entities alone can reach, and the precision one
+   * reading both representations can.
    *
    * Reported beside the measured precision so a reader can tell a rule left to
-   * tune from a negative that Entities cannot separate at all. It is a bound on
-   * Entity-only grouping, not on the application: see
-   * `entityPrecisionCeiling`.
+   * tune from a negative that Entities cannot separate at all — and can tell
+   * which of the two bounds is the bound on the rule in front of them. The first
+   * is a bound on Entity-only grouping; the second is the bound on this one.
    */
-  readonly entityPrecisionCeiling: EntityPrecisionCeiling;
-  /** The largest Cluster at every floor the rule ships, so the bound is measured. */
-  readonly largestByFloor: readonly FloorReading[];
+  readonly ceilings: readonly CeilingsRead[];
+  /** How the labelled families score on signature, at the shipped floor. */
+  readonly signature: SignatureMargins;
+  /** The largest Cluster at every pair of thresholds the rule ships, so the bound is measured. */
+  readonly largestByThresholds: readonly ThresholdReading[];
 }
 
 /**
@@ -279,14 +413,16 @@ export function evaluateClusterGrouping(input: {
   readonly grouped: readonly GroupedTopic[];
   readonly resolution: PairResolution;
   /**
-   * What each Story names, for the Entity-only precision ceiling.
+   * How each Story reads, for the two ceilings and the signature margins.
    *
    * Required rather than optional because a ceiling of zero over a real negative
    * set is a false reading rather than an absence: without it the report would
-   * print no ceiling line and the reader would take the precision beside it as
-   * the best any rule could do.
+   * print no ceiling line and the reader would take the precision beside it as the
+   * best any rule could do.
    */
-  readonly groundingOf: (storyId: StoryId) => readonly GroundedEntity[];
+  readonly readingOf: (storyId: StoryId) => GroundedStory;
+  /** The signature floor this grouping was formed at, for the margins line. */
+  readonly signatureFloor: number;
 }): ClusterGroupingReport {
   const clusterOf = new Map<TopicId, Map<StoryId, number>>();
   const distinctStories = new Set<StoryId>();
@@ -296,9 +432,9 @@ export function evaluateClusterGrouping(input: {
 
   for (const topic of input.grouped) {
     // Only the shipped grouping carries the report's headline numbers; the
-    // floors swept alongside it are read for their largest Cluster below, and
+    // thresholds swept alongside it are read for their largest Cluster below, and
     // counting them here would report a Topic's Story as three separate ones.
-    if (topic.floor !== undefined) continue;
+    if (topic.thresholds !== undefined) continue;
     const byStory = new Map<StoryId, number>();
     topic.clusters.forEach((members, index) => {
       clusters += 1;
@@ -315,8 +451,9 @@ export function evaluateClusterGrouping(input: {
   const measure = (
     pairs: readonly ResolvedStoryPair[],
     label: PairLabel,
-  ): PairScore => {
+  ): { readonly score: PairScore; readonly measured: readonly ResolvedStoryPair[] } => {
     const unshared: string[] = [];
+    const measured: ResolvedStoryPair[] = [];
     const oneClusterIsCorrect = label === 'same-event';
     let correct = 0;
     let topicObservations = 0;
@@ -335,35 +472,51 @@ export function evaluateClusterGrouping(input: {
         unshared.push(pair.name);
         continue;
       }
+      measured.push(pair);
       if ((welded > 0) === oneClusterIsCorrect) correct += 1;
     }
     const families = pairs.length - unshared.length;
     return {
-      families,
-      topicObservations,
-      correct,
-      ratio: families === 0 ? null : correct / families,
-      unshared,
+      score: {
+        families,
+        topicObservations,
+        correct,
+        ratio: families === 0 ? null : correct / families,
+        unshared,
+      },
+      measured,
     };
   };
 
-  // Every floor the runner also grouped at, so the bound is a number read off
-  // the corpus rather than a claim about the rule.
-  const largestByFloor: FloorReading[] = [];
-  for (const floor of new Set(input.grouped.map((topic) => topic.floor))) {
-    if (floor === undefined) continue;
-    let floorLargest = 0;
-    let floorClusters = 0;
+  const recall = measure(input.resolution.sameEvent, 'same-event');
+  const precision = measure(input.resolution.differentEvent, 'different-event');
+
+  // Every pair of thresholds the runner also grouped at, so the bound is a number
+  // read off the corpus rather than a claim about the rule.
+  const swept = [
+    ...new Map(
+      input.grouped
+        .filter((topic) => topic.thresholds !== undefined)
+        .map((topic) => [describeThresholds(topic.thresholds!), topic.thresholds!]),
+    ).values(),
+  ].sort((a, b) => describeThresholds(a).localeCompare(describeThresholds(b)));
+  const largestByThresholds: ThresholdReading[] = [];
+  for (const thresholds of swept) {
+    let sweepLargest = 0;
+    let sweepClusters = 0;
     for (const topic of input.grouped) {
-      if (topic.floor !== floor) continue;
-      floorClusters += topic.clusters.length;
+      if (topic.thresholds !== thresholds) continue;
+      sweepClusters += topic.clusters.length;
       for (const members of topic.clusters) {
-        floorLargest = Math.max(floorLargest, members.length);
+        sweepLargest = Math.max(sweepLargest, members.length);
       }
     }
-    largestByFloor.push({ floor, largestCluster: floorLargest, clusters: floorClusters });
+    largestByThresholds.push({
+      thresholds,
+      largestCluster: sweepLargest,
+      clusters: sweepClusters,
+    });
   }
-  largestByFloor.sort((a, b) => a.floor - b.floor);
 
   return {
     topics: clusterOf.size,
@@ -372,13 +525,32 @@ export function evaluateClusterGrouping(input: {
     largestCluster,
     singletons,
     singletonProportion: clusters === 0 ? null : singletons / clusters,
-    recall: measure(input.resolution.sameEvent, 'same-event'),
-    precision: measure(input.resolution.differentEvent, 'different-event'),
-    entityPrecisionCeiling: entityPrecisionCeiling(
-      input.resolution.differentEvent,
-      input.groundingOf,
-    ),
-    largestByFloor,
+    recall: recall.score,
+    precision: precision.score,
+    ceilings: [
+      {
+        reads: 'Entities only',
+        indistinguishable: 'identical as Entity vectors, and their cosine is exactly 1',
+        ceiling: entityPrecisionCeiling(
+          input.resolution.differentEvent,
+          input.readingOf,
+        ),
+      },
+      {
+        reads: 'Entities and signature',
+        indistinguishable: 'identical as Entity vectors and in text',
+        ceiling: bothSignalsPrecisionCeiling(
+          input.resolution.differentEvent,
+          input.readingOf,
+        ),
+      },
+    ],
+    signature: signatureMargins({
+      measured: { sameEvent: recall.measured, differentEvent: precision.measured },
+      readingOf: input.readingOf,
+      floor: input.signatureFloor,
+    }),
+    largestByThresholds,
   };
 }
 
@@ -397,7 +569,10 @@ export function formatClusterReport(
     score.ratio === null ? 'n/a (nothing observed)' : `${(score.ratio * 100).toFixed(1)}%`;
   const share = (value: number | null) =>
     value === null ? 'n/a (nothing grouped)' : `${(value * 100).toFixed(1)}%`;
-  const ceiling = report.entityPrecisionCeiling;
+  const range = (measured: SignatureMarginForLabel): string =>
+    measured.lowest === null || measured.highest === null
+      ? 'n/a (nothing observed)'
+      : `${measured.lowest.toFixed(3)} to ${measured.highest.toFixed(3)}`;
 
   const lines = [
     'cluster grouping benchmark',
@@ -406,19 +581,24 @@ export function formatClusterReport(
     '',
     `  recall      ${percent(report.recall)}  ${report.recall.correct} of ${report.recall.families} same-event pairs end up in one Cluster (${report.recall.topicObservations} topic observations)`,
     `  precision   ${percent(report.precision)}  ${report.precision.correct} of ${report.precision.families} different-event pairs stay apart (${report.precision.topicObservations} topic observations)`,
-    ...(ceiling.ceiling === null
-      ? []
-      : [
-          `  ceiling     ${(ceiling.ceiling * 100).toFixed(1)}%  for a rule reading Entities only: ${ceiling.identical} of ${ceiling.families} name identical Entities and score a cosine of exactly 1`,
-          `              ${ceiling.families - ceiling.identical} are separable by Entity. A rule reading the Story signature too can go above this.`,
-        ]),
+    `  signature   ${report.signature.floor.toFixed(2)}  the floor a merge's two signatures clear; ${report.signature.byLabel.map((measured) => `${measured.label} families score ${range(measured)}`).join(', ')}`,
+    // Both bounds, one after another, because the measured precision above sits
+    // between them and a reader who has only one of them will mistake the gap for
+    // a threshold left untuned.
+    ...report.ceilings.flatMap((bound) =>
+      bound.ceiling.ceiling === null
+        ? []
+        : [
+            `  ceiling     ${(bound.ceiling.ceiling * 100).toFixed(1)}%  for a rule reading ${bound.reads}: ${bound.ceiling.identical} of ${bound.ceiling.families} are ${bound.indistinguishable}`,
+          ],
+    ),
     '',
     `  clusters    ${report.clusters} over ${report.topics} topics holding ${report.stories} stories`,
     `  largest     ${report.largestCluster} stories in one Cluster`,
     `  singletons  ${share(report.singletonProportion)}  ${report.singletons} of ${report.clusters} clusters hold one Story`,
-    ...report.largestByFloor.map(
+    ...report.largestByThresholds.map(
       (reading) =>
-        `  at ${reading.floor.toFixed(2)}   largest ${reading.largestCluster} stories in one Cluster over ${reading.clusters} clusters`,
+        `  at ${describeThresholds(reading.thresholds)}   largest ${reading.largestCluster} stories in one Cluster over ${reading.clusters} clusters`,
     ),
   ];
   return `${lines.join('\n')}\n`;

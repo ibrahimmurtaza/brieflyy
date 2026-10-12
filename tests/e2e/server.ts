@@ -39,7 +39,12 @@ import { ConsoleEmailTransport } from '../../src/email/console-transport.js';
 import { GoogleOAuthClient } from '../../src/oauth/google-client.js';
 import { SESSION_COOKIE_NAME } from '../../src/config.js';
 import { systemClock } from '../../src/domain/clock.js';
-import { EMPTY_SIGNATURE } from '../../src/domain/story-signature.js';
+import {
+  EMPTY_SIGNATURE,
+  encodeSignature,
+  normalizeSignature,
+} from '../../src/domain/story-signature.js';
+import { extractSignature } from '../../src/domain/extract.js';
 import { DrizzleClusterRepo } from '../../src/repos/cluster-repo.js';
 import { DrizzleStoryRepo } from '../../src/repos/story-repo.js';
 import { DrizzleTopicRepo } from '../../src/repos/topic-repo.js';
@@ -488,17 +493,40 @@ for (const [project, reader] of Object.entries(E2E_UNSUBSCRIBE_FIXTURES)) {
   );
 }
 
+/**
+ * The signature production writes for an Article, taken the way ingest takes it.
+ *
+ * Cluster grouping gates a merge on this as well as on Entities, and refuses one
+ * where the signature says nothing — so a fixture that seeds `'{}'` produces
+ * Clusters the application cannot produce, and a spec asserting grouping forms
+ * them fails against the rule rather than against itself. The boot backfill is
+ * what keeps real rows signed; a fixture that writes them directly has to sign
+ * them itself.
+ */
+function signatureOf(title: string, body: string) {
+  return normalizeSignature(extractSignature(`${title}\n${body}`));
+}
+
 insert(
   `INSERT INTO articles (id, source_id, external_id, url, title, body, published_at, ingested_at, signature, story_id)
    VALUES ('e2e-article-1', ?, 'ext-1', 'https://www.theguardian.com/acme-foo', 'Acme Corp unveils Foo',
-           'Acme Corp unveiled a product called Foo, and the market has noticed.', ?, ?, '{}', 'e2e-story-1')`,
+           'Acme Corp unveiled a product called Foo, and the market has noticed.', ?, ?, ?, 'e2e-story-1')`,
   SOURCES[0]![0],
   NOW.getTime() - DAY,
   NOW.getTime(),
+  encodeSignature(
+    signatureOf(
+      'Acme Corp unveils Foo',
+      'Acme Corp unveiled a product called Foo, and the market has noticed.',
+    ),
+  ),
 );
 await storyRepo.insert({
   id: 'e2e-story-1' as StoryId,
-  signature: EMPTY_SIGNATURE,
+  signature: signatureOf(
+    'Acme Corp unveils Foo',
+    'Acme Corp unveiled a product called Foo, and the market has noticed.',
+  ),
   firstSeenAt: new Date(NOW.getTime() - DAY),
   lastSeenAt: NOW,
   published: { first: new Date(NOW.getTime() - DAY), last: NOW },
@@ -536,6 +564,10 @@ await entityRepo.upsertByKey({
   entity: { name: 'Acme Corp', key: 'acme corp', kind: 'org' },
 });
 
+/** The one report every coverage Article carries, so they group on the Entity alone. */
+const COVERAGE_TITLE = 'Acme Corp says something';
+const COVERAGE_BODY = 'Acme Corp was mentioned again, in a story nobody else carried.';
+
 /** Days before `NOW`, oldest first. */
 const COVERAGE: readonly { readonly id: string; readonly daysAgo: number }[] = [
   ...Array.from({ length: 12 }, (_, i) => ({ id: `burst-${i}`, daysAgo: 1 })),
@@ -546,7 +578,7 @@ for (const { id, daysAgo } of COVERAGE) {
   const storyId = `e2e-story-${id}` as StoryId;
   await storyRepo.insert({
     id: storyId,
-    signature: EMPTY_SIGNATURE,
+    signature: signatureOf(COVERAGE_TITLE, COVERAGE_BODY),
     firstSeenAt: publishedAt,
     lastSeenAt: publishedAt,
     published: { first: publishedAt, last: publishedAt },
@@ -557,12 +589,12 @@ for (const { id, daysAgo } of COVERAGE) {
       sourceId: SOURCES[0]![0],
       externalId: `ext-${id}`,
       url: `https://www.theguardian.com/${id}`,
-      title: 'Acme Corp says something',
-      body: 'Acme Corp was mentioned again, in a story nobody else carried.',
+      title: COVERAGE_TITLE,
+      body: COVERAGE_BODY,
       publishedAt,
       ingestedAt: publishedAt,
       entities: [],
-      signature: EMPTY_SIGNATURE,
+      signature: signatureOf(COVERAGE_TITLE, COVERAGE_BODY),
       storyId,
     },
     entityIds: [ACME_ENTITY_ID],

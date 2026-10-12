@@ -1,6 +1,6 @@
 # Cluster grouping is transitive closure, not adjacency
 
-**Superseded by [ADR-0030](0030-a-cluster-is-grouped-by-weighted-similarity.md).**
+**Superseded by [ADR-0030](0030-a-cluster-is-grouped-by-similarity-and-gated-on-the-signature.md).**
 Kept because the determinism argument below is the one that carried over, and a
 reader who wants to know why closure was ever chosen should be able to read it.
 Closure itself is gone: a chain of individually reasonable links produces

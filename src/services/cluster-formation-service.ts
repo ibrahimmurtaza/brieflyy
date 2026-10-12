@@ -1,6 +1,6 @@
 import type { Clock } from '../domain/clock.js';
 import {
-  groupByEntitySimilarity,
+  groupIntoClusters,
   sharedEntityCount,
   type GroundedEntity,
 } from '../domain/cluster-grouping.js';
@@ -168,9 +168,16 @@ export class ClusterFormationService {
    *
    * The rule itself is in `domain/cluster-grouping.ts`, which the benchmark
    * measures against real Topics as well, so that what is measured is what runs
-   * here. What is left here is the reading of it: the Entities of the Articles
-   * of a Story that this Topic actually follows, and the order each group comes
-   * back in.
+   * here. What is left here is the reading of it: the Entities of the Articles of
+   * a Story that this Topic actually follows, the signature the Story carries,
+   * and the order each group comes back in.
+   *
+   * The signature is read off the Story rather than off its Articles. A Story
+   * carries the signature of the Article that formed it and does not grow one as
+   * copies arrive (ADR-0007), and that is the signature the rule gates on: a
+   * union over the Articles was measured against the same labelled families and
+   * costs recall at the floor that holds it in place, because the union widens
+   * both sides of the comparison without widening their overlap.
    */
   private async groupStories(
     topic: Topic,
@@ -183,10 +190,10 @@ export class ClusterFormationService {
       this.deps.articleRepo,
     );
 
-    const groups = groupByEntitySimilarity(
-      stories,
-      (_story, index) => groundingByStory[index]!,
-    );
+    const groups = groupIntoClusters(stories, (story, index) => ({
+      entities: groundingByStory[index]!,
+      signature: story.signature,
+    }));
     return groups.map((group) =>
       [...group].sort((a, b) => a.lastSeenAt.getTime() - b.lastSeenAt.getTime()),
     );

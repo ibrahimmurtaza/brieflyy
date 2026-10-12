@@ -111,18 +111,28 @@ non-zero when a labelled pair cannot be resolved, because a report that quietly
 dropped pairs reads as a better rule than it is. `docs/cluster-grouping-baseline.md`
 records what the current rule scores and exactly how each number is defined.
 
-It also prints two numbers that bound what grouping over Entities alone can do,
-rather than leaving them to be discovered by disappointment. The **ceiling** is
-the precision a rule reading only Entities can reach: eight of its 49
-different-event pairs name exactly the same Entities, so their cosine is exactly
-1 and no threshold separates them. It is labelled as an Entity-only bound
-because it is one — a rule reading the Story signature as well clears it, which
-is [#126](https://github.com/ibrahimmurtaza/brieflyy/issues/126) rather than
-this rule. And the **at** lines regroup every Topic at each floor in
-`SHIPPED_SIMILARITY_FLOORS` and print the largest Cluster, so the claim that the
-all-pairs floor bounds Cluster size is a measurement rather than an assertion —
-the shipped floor itself is the headline `largest` line rather than one of them.
-`docs/adr/0030` records both bounds, and which of them a second signal moves.
+It also prints the numbers that bound what grouping can do, rather than leaving
+them to be discovered by disappointment. Two **ceilings**, each labelled with the
+representations it is a bound on: the **Entities-only** one is the precision a
+rule reading nothing else can reach (eight of its 49 different-event pairs name
+exactly the same Entities, so their cosine is exactly 1 and no threshold separates
+them), and the **Entities-and-signature** one is what a rule reading both can,
+which is the rule this repository runs. They are printed together because the
+Entity-only figure is not a bound on the application and a reader who has only
+that one will read a precision under it as a rule left to tune rather than as the
+price of the second signal. A **signature** line prints the floor a merge has to
+clear beside the range each label's families actually score across, because that
+floor is a second number fitted to the same labelled pairs and a reader is owed
+the distribution it was read from rather than the constant alone — which is also
+what says the gate is a gate and not a separator: the two ranges overlap almost
+entirely. The **at** lines regroup every Topic at each pairing in
+`SHIPPED_MERGE_THRESHOLDS` — a grid of three Entity floors against three
+signature floors, not a line through the neighbourhood — and print the largest
+Cluster, so the claim that the all-pairs floor bounds Cluster size is a
+measurement rather than an assertion, and reading across the floors against each
+other says which of the two is doing the bounding. The shipped pair itself is the
+headline `largest` line rather than one of them.
+`docs/adr/0030` records both ceilings and which of them the signature moves.
 
 `pnpm typecheck` covers `src/`, which is where the unit tests live, and not
 `tests/e2e/`: `tsconfig.json` includes only `src/**/*.ts`, and Playwright compiles
