@@ -750,12 +750,12 @@ counted.
 pnpm test
 ```
 
-The suite is 103 test files across `src/` holding 1,813 cases — Vitest prints the
+The suite is 105 test files across `src/` holding 1,827 cases — Vitest prints the
 live figure at the end of every run. `docs-agreement.test.ts` checks the file
 count and cannot check the case count without running the suite it lives in, so
 that one number is worth reading off a run rather than trusting.
 
-The layout is **83 of the 145 modules** under `src/` having a sibling test file of
+The layout is **84 of the 146 modules** under `src/` having a sibling test file of
 the same name. The other 62 are reached by a suite named for what it covers rather
 than for one module — `repos/oauth-repos.test.ts` over four repositories,
 `pages/topic-page.test.ts` over the routes that render a Topic — and some are
