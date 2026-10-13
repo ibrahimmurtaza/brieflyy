@@ -50,6 +50,7 @@ import { DrizzleDiscoverRepo } from './repos/discover-repo.js';
 import { DrizzleArchiveRepo } from './repos/archive-repo.js';
 import type { EmailTransport } from './email/transport.js';
 import type { LLMSummaryClient } from './domain/llm.js';
+import type { EmbeddingProvider } from './domain/embedding.js';
 import type { Clock } from './domain/clock.js';
 import { systemClock } from './domain/clock.js';
 import type { RandomSource } from './domain/crypto.js';
@@ -153,6 +154,15 @@ export interface CreateAppOptions {
    * construction, so there is nothing to fail and nothing to report.
    */
   readonly llmSummaryClient?: LLMSummaryClient | undefined;
+  /**
+   * Computes the embedding a Story carries from the Article that formed it.
+   *
+   * The caller's to hold, for the same reason the summary client is: whether a
+   * deployment embeds is a decision about the deployment. With none, every Story is
+   * formed exactly as it was before embeddings existed, carries none, and groups
+   * exactly as it did — so there is nothing to fail and nothing to report.
+   */
+  readonly embeddingProvider?: EmbeddingProvider | undefined;
   /**
    * Somebody a User can pay through.
    *
@@ -467,6 +477,7 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     repos: { sourceRepo, articleRepo, storyRepo, topicRepo },
     clock,
     feedFetcher: opts.feedFetcher,
+    embeddingProvider: opts.embeddingProvider,
     config: opts.ingestConfig,
     // Clusters are a grouping of the Stories a cycle wrote, so they are formed
     // once the cycle is done rather than alongside it.
@@ -668,6 +679,7 @@ async function resolveIngestScheduler(input: {
   };
   readonly clock: Clock;
   readonly feedFetcher: FeedFetcher | undefined;
+  readonly embeddingProvider: EmbeddingProvider | undefined;
   readonly config: IngestSchedulerConfig | undefined;
   readonly afterCycle?: ((report: RegistryIngestCycleReport) => Promise<void>) | undefined;
 }): Promise<IngestScheduler | null> {
@@ -683,6 +695,7 @@ async function resolveIngestScheduler(input: {
     feedFetcher: input.feedFetcher,
     clock: input.clock,
     random: nodeRandom,
+    ...(input.embeddingProvider ? { embeddingProvider: input.embeddingProvider } : {}),
   });
   const registry = new RegistryIngestService({
     ingest: ingestService,

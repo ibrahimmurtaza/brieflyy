@@ -71,6 +71,7 @@ async function seedTopicWithArticles(db: Db): Promise<void> {
     await storyRepo.insert({
       id: article.storyId as StoryId,
       signature: article.signature,
+      embedding: null,
       firstSeenAt: publishedAt,
       lastSeenAt: publishedAt,
       published: { first: publishedAt, last: publishedAt },

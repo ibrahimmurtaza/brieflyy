@@ -9,6 +9,7 @@ import {
   type StorySignature,
 } from '../domain/story-signature.js';
 import type { RandomSource } from '../domain/crypto.js';
+import type { EmbeddingProvider } from '../domain/embedding.js';
 import type {
   Article,
   ArticleId,
@@ -34,6 +35,15 @@ export interface IngestServiceDeps {
   readonly feedFetcher: FeedFetcher;
   readonly clock: Clock;
   readonly random: RandomSource;
+  /**
+   * Where a Story's second reading is computed, or nothing at all.
+   *
+   * Absent rather than a provider that answers null, because a deployment with no
+   * embedding credential is a complete configuration: every Story it forms carries
+   * no embedding, and that is a state the pipeline is built to have rather than a
+   * failure to report once per Article.
+   */
+  readonly embeddingProvider?: EmbeddingProvider | undefined;
 }
 
 export interface IngestSourceReport {
@@ -57,6 +67,7 @@ export class IngestService {
   private readonly feedFetcher: FeedFetcher;
   private readonly clock: Clock;
   private readonly random: RandomSource;
+  private readonly embeddingProvider: EmbeddingProvider | undefined;
 
   constructor(deps: IngestServiceDeps) {
     this.sourceRepo = deps.sourceRepo;
@@ -66,6 +77,7 @@ export class IngestService {
     this.feedFetcher = deps.feedFetcher;
     this.clock = deps.clock;
     this.random = deps.random;
+    this.embeddingProvider = deps.embeddingProvider;
   }
 
   async ingestSource(sourceId: SourceId): Promise<IngestSourceReport> {
@@ -156,6 +168,15 @@ export class IngestService {
         await this.storyRepo.insert({
           id: storyId,
           signature,
+          // The Article's embedding, taken once here where the Story is formed.
+          // Not recomputed as copies arrive, for the reason the signature above
+          // gives: a Story whose second reading moved with every copy would be a
+          // different Story each time. `null` is the answer for a deployment that
+          // embeds nothing and for a call that could not be made, and both form a
+          // Story that carries none — a Story with no embedding is a Story, and
+          // grouping reads a missing embedding as no evidence rather than as a
+          // vector of zeroes.
+          embedding: (await this.embeddingProvider?.embed(text)) ?? null,
           firstSeenAt: polledAt,
           lastSeenAt: polledAt,
           published: { first: entry.publishedAt, last: entry.publishedAt },
@@ -206,7 +227,7 @@ export class IngestService {
     };
   }
 
-  private async resolveEntities(text: string): Promise<readonly Entity[]> {
+private async resolveEntities(text: string): Promise<readonly Entity[]> {
     const out: Entity[] = [];
     for (const extracted of extractEntities(text)) {
       const id = this.random.uuid() as EntityId;

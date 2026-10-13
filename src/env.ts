@@ -13,7 +13,10 @@ import {
   BRIEF_GENERATION_CALL_TIMEOUT_MS_DEFAULT,
   BRIEF_GENERATED_CLUSTERS_DEFAULT,
   BRIEF_MAX_CLUSTERS_DEFAULT,
+  EMBEDDING_CALL_TIMEOUT_MS_DEFAULT,
   OPENAI_API_URL_DEFAULT,
+  OPENROUTER_EMBEDDING_MODEL_DEFAULT,
+  OPENROUTER_EMBEDDINGS_URL_DEFAULT,
 } from './config.js';
 
 export type EnvSource = Readonly<Record<string, string | undefined>>;
@@ -172,6 +175,22 @@ export interface ServerConfig {
   /** Where the written summaries are asked for. */
   readonly openaiApiUrl: string;
   /**
+   * The key that produces a Story's embedding, or undefined when the deployment
+   * has not configured one — in which case every Story formed carries no
+   * embedding, which is a complete configuration rather than a degraded one.
+   */
+  readonly openrouterApiKey: string | undefined;
+  /** Where an Article's embedding is asked for. */
+  readonly openrouterEmbeddingsUrl: string;
+  /**
+   * Which model the vectors are produced by. Recorded beside every one of them,
+   * so this is a default rather than the only source of the answer: the model that
+   * produced a vector is whatever the provider says produced it.
+   */
+  readonly openrouterEmbeddingModel: string;
+  /** How long one embedding call may take before the Story forms without one. */
+  readonly embeddingCallTimeoutMs: number;
+  /**
    * The payment provider's API credential. Absent, with the two below, is the
    * complete configuration for an instance that takes no payments — and an
    * instance that takes none is not a broken Brieflyy, it is a free one.
@@ -253,6 +272,22 @@ export function loadServerConfig(env: EnvSource): ServerConfig {
     ),
     openaiApiKey: readOptionalString(env, 'OPENAI_API_KEY'),
     openaiApiUrl: readString(env, 'OPENAI_API_URL', OPENAI_API_URL_DEFAULT),
+    openrouterApiKey: readOptionalString(env, 'OPENROUTER_API_KEY'),
+    openrouterEmbeddingsUrl: readString(
+      env,
+      'OPENROUTER_EMBEDDINGS_URL',
+      OPENROUTER_EMBEDDINGS_URL_DEFAULT,
+    ),
+    openrouterEmbeddingModel: readString(
+      env,
+      'OPENROUTER_EMBEDDING_MODEL',
+      OPENROUTER_EMBEDDING_MODEL_DEFAULT,
+    ),
+    embeddingCallTimeoutMs: readNonNegativeInt(
+      env,
+      'EMBEDDING_CALL_TIMEOUT_MS',
+      EMBEDDING_CALL_TIMEOUT_MS_DEFAULT,
+    ),
     stripeSecretKey: readOptionalString(env, 'STRIPE_SECRET_KEY'),
     stripeWebhookSecret: readOptionalString(env, 'STRIPE_WEBHOOK_SECRET'),
     stripePaidPriceId: readOptionalString(env, 'STRIPE_PAID_PRICE_ID'),

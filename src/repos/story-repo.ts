@@ -4,6 +4,8 @@ import type { Db } from '../db/client.js';
 import { articles, stories, type StoryRow } from '../db/schema.js';
 import { decodeSignature, encodeSignature } from '../domain/story-signature.js';
 import type { StorySignature } from '../domain/story-signature.js';
+import { decodeEmbedding, encodeEmbedding } from '../domain/embedding.js';
+import type { StoryEmbedding } from '../domain/embedding.js';
 import type {
   PublishedRange,
   SourceId,
@@ -29,6 +31,14 @@ export interface StoryRepo {
   insert(input: {
     readonly id: StoryId;
     readonly signature: StorySignature;
+    /**
+     * The vector for the Article that formed this Story, or none.
+     *
+     * Stated rather than optional: absence is a state this is designed for, and a
+     * caller that can leave it out is a caller whose formation path does not have
+     * to answer whether the deployment embeds at all.
+     */
+    readonly embedding: StoryEmbedding | null;
     readonly firstSeenAt: Date;
     readonly lastSeenAt: Date;
     readonly published: PublishedRange;
@@ -164,6 +174,9 @@ export class DrizzleStoryRepo implements StoryRepo {
       id: row.id as StoryId,
       sourceIds: [...sourceIds].sort(),
       signature: decodeSignature(row.signature),
+      // Read back through the one decoder, so a row whose two columns disagree is
+      // read as carrying none rather than as whichever half survived.
+      embedding: decodeEmbedding(row.embedding, row.embeddingModel),
       firstSeenAt: row.firstSeenAt,
       lastSeenAt: row.lastSeenAt,
       published: { first: row.firstPublishedAt, last: row.lastPublishedAt },
@@ -175,6 +188,7 @@ export class DrizzleStoryRepo implements StoryRepo {
   async insert(input: {
     readonly id: StoryId;
     readonly signature: StorySignature;
+    readonly embedding: StoryEmbedding | null;
     readonly firstSeenAt: Date;
     readonly lastSeenAt: Date;
     readonly published: PublishedRange;
@@ -182,6 +196,13 @@ export class DrizzleStoryRepo implements StoryRepo {
     await this.db.insert(stories).values({
       id: input.id,
       signature: encodeSignature(input.signature),
+      // Both halves or neither, so a later reader cannot hold one without the other.
+      ...(input.embedding === null
+        ? { embedding: null, embeddingModel: null }
+        : {
+            embedding: encodeEmbedding(input.embedding),
+            embeddingModel: input.embedding.model,
+          }),
       firstSeenAt: input.firstSeenAt,
       lastSeenAt: input.lastSeenAt,
       firstPublishedAt: input.published.first,
@@ -196,6 +217,7 @@ export class DrizzleStoryRepo implements StoryRepo {
       id: input.id,
       sourceIds: [],
       signature: input.signature,
+      embedding: input.embedding,
       firstSeenAt: input.firstSeenAt,
       lastSeenAt: input.lastSeenAt,
       published: input.published,

@@ -47,6 +47,7 @@ interface ArchiveRow {
 const STORY_ONE = {
   id: 'story-1' as StoryId,
   signature: { words: ['zap'], phrases: [] },
+  embedding: null,
   firstSeenAt: new Date('2026-09-01T00:00:00Z'),
   lastSeenAt: new Date('2026-09-01T00:00:00Z'),
   published: {

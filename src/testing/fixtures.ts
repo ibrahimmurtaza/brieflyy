@@ -260,6 +260,10 @@ export function makeStory(input: StoryFixture): Story {
     id: input.id as StoryId,
     sourceIds: (input.sourceIds ?? ['src-a']) as readonly SourceId[],
     signature: EMPTY_SIGNATURE,
+    // Every fixture is a Story that carries no embedding, and there is no option to
+    // say otherwise: no suite reads one yet, so an option that could would be a way
+    // to write a test whose fixture implies grouping reads it when it does not.
+    embedding: null,
     firstSeenAt,
     lastSeenAt,
     published: {

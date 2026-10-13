@@ -1,3 +1,4 @@
+import type { StoryEmbedding } from './embedding.js';
 import type { StorySignature } from './story-signature.js';
 import type { DeliverySlot } from './delivery-slot.js';
 
@@ -313,6 +314,17 @@ export interface Story {
   readonly sourceIds: readonly SourceId[];
   /** The signature this Story was formed from, fixed when it was created. */
   readonly signature: StorySignature;
+  /**
+   * What this Story's first Article said, as a dense vector, or nothing at all.
+   *
+   * Set once where the Story is formed, for the reason the signature above is: an
+   * identity that shifted every time a syndication copy landed would be a different
+   * Story each time. `null` is a state rather than a failure — a deployment with no
+   * embedding credential forms Stories that hold none, and a caller reads that as no
+   * evidence rather than as a vector of zeroes. Nothing reads it yet; grouping is
+   * unchanged while it is carried.
+   */
+  readonly embedding: StoryEmbedding | null;
   readonly firstSeenAt: Date;
   readonly lastSeenAt: Date;
   readonly published: PublishedRange;

@@ -1350,6 +1350,36 @@ describe('applySchema', () => {
     expect(row.first_published_at).toBe(0);
   });
 
+  it('leaves a Story written before the embedding columns carrying no embedding', () => {
+    // No backfill runs here, deliberately: an embedding has to be computed by a
+    // model, and a Story that gains one for free at boot would be a Story whose
+    // second reading arrived before anything asked for it. What the migration has
+    // to say about such a Story is that it holds no vector and names no model —
+    // null rather than a default, because a default vector is a claim about what
+    // the Article said and a zero one is the claim that it said nothing at all.
+    const driver = createInMemorySqliteDriver();
+    driver.exec(PRE_SIGNATURE_SQL);
+    driver
+      .prepare(
+        `INSERT INTO sources (id, slug, name, homepage_url) VALUES (?, ?, ?, ?)`,
+      )
+      .run('src-1', 'outlet', 'Outlet', 'https://example.com');
+    driver
+      .prepare(
+        `INSERT INTO stories (id, source_id, fingerprint, first_seen_at, last_seen_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run('story-1', 'src-1', 'old-hash', 1, 1);
+
+    applySchema(driver);
+
+    const row = driver
+      .prepare(`SELECT embedding, embedding_model FROM stories WHERE id = ?`)
+      .get('story-1') as { embedding: string | null; embedding_model: string | null };
+    expect(row.embedding).toBeNull();
+    expect(row.embedding_model).toBeNull();
+  });
+
   it('derives a signature for an Article written before the column existed', () => {
     const driver = createInMemorySqliteDriver();
     driver.exec(PRE_SIGNATURE_SQL);

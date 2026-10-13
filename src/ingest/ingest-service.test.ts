@@ -30,6 +30,13 @@ import { parseRss } from './rss-parser.js';
 import { NO_BACKOFF } from '../domain/types.js';
 import type { Source, SourceId } from '../domain/types.js';
 import { isSafeExternalUrl } from '../domain/url.js';
+import type { EmbeddingProvider } from '../domain/embedding.js';
+import { articleText } from '../domain/feed-text.js';
+import {
+  RECORDED_EMBEDDING_MODEL,
+  RecordingEmbeddingProvider,
+  vectorFor,
+} from '../testing/embedding-provider.js';
 
 class StaticFeedFetcher implements FeedFetcher {
   constructor(private readonly feed: RawFeed) {}
@@ -165,6 +172,8 @@ interface BuildInput {
   readonly feedUrl?: string | null;
   readonly sourceId?: SourceId;
   readonly fetcher?: FeedFetcher;
+  /** Absent by default: a deployment with no embedding credential is the default. */
+  readonly embeddingProvider?: EmbeddingProvider | undefined;
 }
 
 async function buildService(input: BuildInput): Promise<BuildResult> {
@@ -210,6 +219,7 @@ async function buildService(input: BuildInput): Promise<BuildResult> {
     },
     clock: clock.clock,
     random: deterministicRandom,
+    embeddingProvider: input.embeddingProvider,
   });
 
   return {
@@ -298,6 +308,121 @@ describe('IngestService', () => {
     expect(stored?.signature.phrases.length).toBeGreaterThan(0);
     expect(stored?.signature.words.length).toBeGreaterThan(0);
     expect(stored?.signature.phrases).toContain('acme corp unveiled');
+  });
+
+  it('forms a Story carrying the embedding of the Article that formed it', async () => {
+    // The happy path, and the one every other test in this block has to be read
+    // against. The text offered is the Article's own — the same headline and body
+    // definition the signature is taken from — because a vector of anything else is
+    // a vector of a different thing.
+    const provider = new RecordingEmbeddingProvider();
+    const { service, storyRepo, articleRepo, source } = await buildService({
+      entries: { entries: [WIRE_ENTRIES[0]!] },
+      embeddingProvider: provider,
+    });
+
+    await service.ingestSource(source.id);
+
+    const [storyId] = await storyIdsFor(articleRepo, source, [WIRE_ENTRIES[0]!]);
+    const story = await storyRepo.getById(storyId as never);
+    const forming = WIRE_ENTRIES[0]!;
+    expect(provider.asked).toEqual([articleText(forming.title, forming.body)]);
+    expect(story?.embedding).toEqual(vectorFor(articleText(forming.title, forming.body)));
+    expect(story?.embedding?.model).toBe(RECORDED_EMBEDDING_MODEL);
+  });
+
+  it('asks once per Story formed, not once per Article', async () => {
+    // Twenty-two wire copies of one story are one Story, and a second reading that
+    // moved with every copy would be a different reading each time.
+    const provider = new RecordingEmbeddingProvider();
+    const { service, storyRepo, articleRepo, source } = await buildService({
+      entries: { entries: WIRE_ENTRIES },
+      embeddingProvider: provider,
+    });
+
+    await service.ingestSource(source.id);
+
+    expect(provider.callCount).toBe(1);
+    const [storyId] = await storyIdsFor(articleRepo, source, WIRE_ENTRIES);
+    const story = await storyRepo.getById(storyId as never);
+    // The vector is the first copy's, and it is still that copy's after twenty-one
+    // more arrived: a Story that re-embedded on every pass would be paying to
+    // change the identity it was formed with.
+    expect(story?.embedding).toEqual(vectorFor(articleText(WIRE_ENTRIES[0]!.title, WIRE_ENTRIES[0]!.body)));
+  });
+
+  it('does not recompute a Story\'s embedding on a later pass over the same feed', async () => {
+    const provider = new RecordingEmbeddingProvider();
+    const { service, source, replaceFetcher } = await buildService({
+      entries: { entries: WIRE_ENTRIES },
+      embeddingProvider: provider,
+    });
+    await service.ingestSource(source.id);
+    expect(provider.callCount).toBe(1);
+
+    // The next poll sees the same feed again, which is what every poll of a Source
+    // that has not published anything new looks like.
+    replaceFetcher(new StaticFeedFetcher({ entries: WIRE_ENTRIES }));
+    const second = await service.ingestSource(source.id);
+
+    expect(provider.callCount).toBe(1);
+    expect(second.inserted).toBe(0);
+  });
+
+  it('embeds the Article each of several Stories was formed from', async () => {
+    const provider = new RecordingEmbeddingProvider();
+    const { service, storyRepo, articleRepo, source } = await buildService({
+      entries: { entries: UNRELATED_ENTRIES },
+      embeddingProvider: provider,
+    });
+
+    await service.ingestSource(source.id);
+
+    expect(provider.callCount).toBe(UNRELATED_REPORTS.length);
+    // Each Story carries its own Article's vector, rather than all of them the
+    // first one's — six Stories whose second readings were all the same would be
+    // six Articles that read identically.
+    for (const entry of UNRELATED_ENTRIES) {
+      const article = await articleRepo.findByExternalId(source.id, entry.externalId);
+      const story = await storyRepo.getById(article!.storyId as never);
+      expect(story?.embedding).toEqual(vectorFor(articleText(entry.title, entry.body)));
+    }
+    expect(new Set(provider.asked.map((text) => vectorFor(text).values.join(','))).size).toBe(
+      UNRELATED_REPORTS.length,
+    );
+  });
+
+  it('forms Stories carrying no embedding when the deployment has no credential', async () => {
+    // A complete configuration rather than a degraded one: everything the poll did
+    // before this change, with the same report, and no failure to notice.
+    const { service, storyRepo, articleRepo, source } = await buildService({
+      entries: { entries: WIRE_ENTRIES },
+    });
+
+    const report = await service.ingestSource(source.id);
+
+    expect(report.success).toBe(true);
+    expect(report.storiesAffected).toBe(1);
+    const [storyId] = await storyIdsFor(articleRepo, source, WIRE_ENTRIES);
+    const story = await storyRepo.getById(storyId as never);
+    // Not a vector of zeroes: zeroes are what a model says about nothing, and a
+    // Story holding them would read as a Story that means nothing at all.
+    expect(story?.embedding).toBeNull();
+    expect(story?.articleCount).toBe(22);
+  });
+
+  it('forms a Story carrying no embedding when the call could not be made', async () => {
+    const provider = new RecordingEmbeddingProvider(() => null);
+    const { service, storyRepo, articleRepo, source } = await buildService({
+      entries: { entries: WIRE_ENTRIES },
+      embeddingProvider: provider,
+    });
+
+    const report = await service.ingestSource(source.id);
+
+    expect(report.success).toBe(true);
+    const [storyId] = await storyIdsFor(articleRepo, source, WIRE_ENTRIES);
+    expect((await storyRepo.getById(storyId as never))?.embedding).toBeNull();
   });
 
   it('measures the dedup window from when an Article was published, not from when it was polled', async () => {

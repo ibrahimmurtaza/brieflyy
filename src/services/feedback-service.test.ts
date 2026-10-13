@@ -82,6 +82,7 @@ async function givenCluster(
   await new DrizzleStoryRepo(h.db).insert({
     id: storyId,
     signature: EMPTY_SIGNATURE,
+    embedding: null,
     firstSeenAt: NOW,
     lastSeenAt: NOW,
     published: { first: NOW, last: NOW },

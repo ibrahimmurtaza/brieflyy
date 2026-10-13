@@ -12,6 +12,7 @@ import { systemClock } from './domain/clock.js';
 import { HttpFeedFetcher } from './ingest/http-feed-fetcher.js';
 import { systemHttpClient } from './ingest/system-http-client.js';
 import { createLLMSummaryClient } from './services/llm-summary-service.js';
+import { createEmbeddingProvider } from './services/openrouter-embedding-service.js';
 import type { FeedFetcher } from './ingest/feed-fetcher.js';
 
 async function main(): Promise<void> {
@@ -36,6 +37,18 @@ async function main(): Promise<void> {
     apiKey: config.openaiApiKey,
     endpointUrl: config.openaiApiUrl,
     timeoutMs: config.briefGenerationCallTimeoutMs,
+  });
+
+  // The second reading of an Article, or nothing at all. Held here for the same
+  // reason: whether this deployment embeds is a decision about the deployment. With
+  // no credential, every Story is formed exactly as it was before embeddings
+  // existed and carries none, and grouping does not read one — so there is nothing
+  // here to fail on and nothing to fall back from.
+  const embeddingProvider = createEmbeddingProvider({
+    apiKey: config.openrouterApiKey,
+    endpointUrl: config.openrouterEmbeddingsUrl,
+    model: config.openrouterEmbeddingModel,
+    timeoutMs: config.embeddingCallTimeoutMs,
   });
 
   let oauthClient = undefined;
@@ -74,6 +87,7 @@ async function main(): Promise<void> {
     feedFetcher,
     devToolsEnabled: config.devToolsEnabled,
     ...(llmSummaryClient ? { llmSummaryClient } : {}),
+    ...(embeddingProvider ? { embeddingProvider } : {}),
     ...(paymentProvider ? { paymentProvider } : {}),
     briefMaxClusters: config.briefMaxClusters,
     briefGeneratedClusters: config.briefGeneratedClusters,

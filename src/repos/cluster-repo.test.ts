@@ -98,6 +98,7 @@ describe('DrizzleClusterRepo', () => {
     await storyRepo.insert({
       id: storyId,
       signature: EMPTY_SIGNATURE,
+      embedding: null,
       firstSeenAt: now,
       lastSeenAt: now,
       published: { first: now, last: now }
@@ -172,6 +173,7 @@ describe('DrizzleClusterRepo', () => {
     await storyRepo.insert({
       id: storyId,
       signature: EMPTY_SIGNATURE,
+      embedding: null,
       firstSeenAt: now,
       lastSeenAt: now,
       published: { first: now, last: now }
@@ -231,6 +233,7 @@ describe('DrizzleClusterRepo', () => {
     await storyRepo.insert({
       id: storyId,
       signature: EMPTY_SIGNATURE,
+      embedding: null,
       firstSeenAt: now,
       lastSeenAt: now,
       published: { first: now, last: now }

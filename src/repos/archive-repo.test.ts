@@ -124,6 +124,7 @@ describe('DrizzleArchiveRepo', () => {
       await stories.insert({
         id: 'story-theirs' as StoryId,
         signature: { words: ['zap'], phrases: [] },
+        embedding: null,
         firstSeenAt: new Date('2026-09-01T00:00:00Z'),
         lastSeenAt: new Date('2026-09-01T00:00:00Z'),
         published: {
@@ -276,6 +277,7 @@ describe('DrizzleArchiveRepo', () => {
     await stories.insert({
       id: 'story-1' as StoryId,
       signature: { words: ['zap'], phrases: [] },
+      embedding: null,
       firstSeenAt: new Date('2026-09-01T00:00:00Z'),
       lastSeenAt: new Date('2026-09-01T00:00:00Z'),
       published: {
@@ -413,6 +415,7 @@ describe('DrizzleArchiveRepo', () => {
     await stories.insert({
       id: 'story-1' as StoryId,
       signature: { words: ['zap'], phrases: [] },
+      embedding: null,
       firstSeenAt: old,
       lastSeenAt: old,
       published: { first: old, last: old },

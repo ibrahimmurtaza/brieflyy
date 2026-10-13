@@ -96,6 +96,7 @@ async function signInWithTopic(
   await new DrizzleStoryRepo(db).insert({
     id: 'story-1' as StoryId,
     signature: EMPTY_SIGNATURE,
+    embedding: null,
     firstSeenAt: NOW,
     lastSeenAt: NOW,
     published: { first: NOW, last: NOW },

@@ -128,6 +128,7 @@ async function givenStory(
   await h.storyRepo.insert({
     id: storyId,
     signature: EMPTY_SIGNATURE,
+    embedding: null,
     firstSeenAt: NOW,
     lastSeenAt: NOW,
     published: { first: NOW, last: NOW }
