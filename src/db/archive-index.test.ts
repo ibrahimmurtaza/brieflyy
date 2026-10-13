@@ -78,6 +78,20 @@ describe('the Archive text index', () => {
     return found;
   }
 
+  /**
+   * Every row one item holds, which is a question the single-row read cannot
+   * answer: the Archive is keyed by (kind, item, topic), so one Story covered by
+   * two Topics is two rows and asking for "the row" is asking the wrong thing.
+   */
+  function rows(kind: string, itemId: string): ArchiveRow[] {
+    return driver
+      .prepare(
+        `SELECT kind, item_id, topic_id, source_ids, entity_ids, created_at, title
+         FROM archive_items WHERE kind = ? AND item_id = ? ORDER BY topic_id`,
+      )
+      .all(kind, itemId) as ArchiveRow[];
+  }
+
   /** The item ids the full-text index says match, which is the claim of an FTS index. */
   function matchIds(text: string): string[] {
     const expression = toFtsMatch(text);
@@ -252,6 +266,115 @@ describe('the Archive text index', () => {
     // The Story is findable by its Articles' words, which are the only words it
     // has. The Article itself matches too — both are the same reporting — so the
     // assertion is that the Story is among what came back.
+    expect(matchIds('Prototype')).toContain('story-1');
+  });
+
+  it('indexes a Retired Story of the Topic following a Source it was reported in', async () => {
+    await stories.insert(STORY_ONE);
+    await articles.insert({
+      article: makeArticle({
+        id: 'a-elsewhere',
+        sourceId: 'src-b',
+        storyId: 'story-1',
+        title: 'Wire copy one',
+        body: 'A Prototype that never shipped.',
+      }),
+      entityIds: [],
+    });
+    // Retired by a Cluster, so the Story is in the Archive — but the Topic follows
+    // `src-a` and this Story was reported in `src-b`, and a Cluster does not say
+    // which Topics a Story is: what reported it does.
+    await clusters.insert(
+      makeCluster({
+        id: 'cluster-old',
+        topicId: 'topic-1',
+        state: 'archive',
+        createdAt: new Date('2026-08-01T00:00:00Z'),
+      }),
+      ['story-1' as StoryId],
+    );
+    expect(row('story', 'story-1')).toBeUndefined();
+
+    await topics.insertTopicSource('topic-1' as TopicId, 'src-b', 1);
+
+    expect(row('story', 'story-1')?.topic_id).toBe('topic-1');
+    expect(matchIds('Prototype')).toContain('story-1');
+  });
+
+  it('takes a Retired Story back out when the Topic stops following its Source', async () => {
+    await stories.insert(STORY_ONE);
+    await articles.insert({
+      article: makeArticle({
+        id: 'a-1',
+        sourceId: 'src-a',
+        storyId: 'story-1',
+        title: 'A Prototype that never shipped.',
+      }),
+      entityIds: [],
+    });
+    await clusters.insert(
+      makeCluster({
+        id: 'cluster-old',
+        topicId: 'topic-1',
+        state: 'archive',
+        createdAt: new Date('2026-08-01T00:00:00Z'),
+      }),
+      ['story-1' as StoryId],
+    );
+    expect(row('story', 'story-1')).toBeDefined();
+
+    driver
+      .prepare(`DELETE FROM topic_sources WHERE topic_id = ? AND source_id = ?`)
+      .run('topic-1', 'src-a');
+
+    expect(row('story', 'story-1')).toBeUndefined();
+    // And stops being findable, which is the half a stale index gets wrong: the
+    // row would still be there for the full-text table to match. The Article goes
+    // with it, since it was attributed by the same Source — so the assertion is
+    // that nothing about that reporting is left behind in this Topic's Archive.
+    expect(matchIds('Prototype')).toEqual([]);
+  });
+
+  it('leaves another Topic holding the same Story alone when a Source is dropped', async () => {
+    await topics.insert(makeTopic({ id: 'topic-2', userId: 'user-1', title: 'Fusion too' }));
+    await topics.insertTopicSource('topic-2' as TopicId, 'src-b', 0);
+    await stories.insert(STORY_ONE);
+    await articles.insert({
+      article: makeArticle({
+        id: 'a-2',
+        sourceId: 'src-b',
+        storyId: 'story-1',
+        title: 'A Prototype that never shipped.',
+      }),
+      entityIds: [],
+    });
+    await clusters.insert(
+      makeCluster({
+        id: 'cluster-old',
+        topicId: 'topic-1',
+        state: 'archive',
+        createdAt: new Date('2026-08-01T00:00:00Z'),
+      }),
+      ['story-1' as StoryId],
+    );
+    // The same story, covered by two Topics that both follow the outlet that
+    // reported it: one row each, because the Archive is keyed by (kind, item,
+    // topic) and one Story is not one Story per Topic.
+    await topics.insertTopicSource('topic-1' as TopicId, 'src-b', 1);
+    expect(rows('story', 'story-1').map((r) => r.topic_id).sort()).toEqual([
+      'topic-1',
+      'topic-2',
+    ]);
+
+    driver
+      .prepare(`DELETE FROM topic_sources WHERE topic_id = ? AND source_id = ?`)
+      .run('topic-1', 'src-b');
+
+    // Only that Topic's claim on it goes. The Story is one event rather than one
+    // per outlet, so it is still a Story of the Topic that follows that outlet —
+    // and taking its row everywhere would lose a User's history over a change to
+    // a different Topic of theirs.
+    expect(rows('story', 'story-1').map((r) => r.topic_id)).toEqual(['topic-2']);
     expect(matchIds('Prototype')).toContain('story-1');
   });
 

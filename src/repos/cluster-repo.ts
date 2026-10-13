@@ -13,6 +13,7 @@ import {
   type ArticleRow,
   type EntityRow,
 } from '../db/schema.js';
+import type { HeldCluster } from '../domain/cluster-identity.js';
 import { decodeSignature } from '../domain/story-signature.js';
 import type {
   Article,
@@ -44,15 +45,6 @@ export interface ClusterRepo {
     sourceIds: readonly SourceId[],
   ): Promise<readonly Article[]>;
   /**
-   * Write a Cluster and the Stories it groups, replacing any Cluster already
-   * under the same id.
-   *
-   * Formation runs again on every ingest cycle, and a Cluster's id is derived
-   * from the Stories in it, so re-forming one has to land on the row that is
-   * already there. Inserting instead would fail on the primary key and take the
-   * whole cycle with it.
-   */
-  /**
    * The Stories a Cluster groups, which is the hop from a signal about a Cluster
    * to the Articles it has to reach.
    *
@@ -62,6 +54,45 @@ export interface ClusterRepo {
    * where another Cluster lands.
    */
   listStoryIdsByClusterId(clusterId: ClusterId): Promise<readonly StoryId[]>;
+  /**
+   * The Clusters of a Topic that hold Stories, with the Stories each holds.
+   *
+   * What the last cycle formed, read back rather than remembered. Re-forming asks
+   * which Cluster a group of Stories is the continuation of
+   * (`domain/cluster-identity.ts`), so this is the whole of what it has to know
+   * and nothing else decides it.
+   *
+   * Every Cluster holding anything, archived or not. A Cluster that fell below the
+   * velocity threshold is formed again on every cycle while its Stories are in the
+   * window, and one that did not get to keep its id for a cycle would mint a fresh
+   * one and be archived beside the copy it had just been — which is the shape this
+   * change exists to remove. A Cluster the Topic has stopped forming is here for
+   * the same reason: if a Story of its is covered again, that is the same Cluster
+   * being covered again, with the Feedback a User gave it six weeks ago still on
+   * it.
+   *
+   * A Cluster holding nothing is not in it: there is no membership to recognise a
+   * group of Stories against, and asking which Stories are the same as this
+   * Cluster's would be asking about all of them.
+   */
+  listHeldByTopicId(topicId: string): Promise<readonly HeldCluster[]>;
+  /**
+   * Write a Cluster and the Stories it groups, replacing any Cluster already
+   * under the same id.
+   *
+   * Formation runs again on every ingest cycle, and a Cluster's id is carried
+   * forward from the Cluster it was rather than derived from the Stories it now
+   * holds, so re-forming one has to land on the row that is already there.
+   * Inserting instead would fail on the primary key and take the whole cycle with
+   * it.
+   *
+   * The membership is replaced rather than added to, because the Stories a Cluster
+   * groups are the ones it was formed with and no others. A Story that has aged
+   * out of it, or moved into a Cluster of its own, loses its row: a row left behind
+   * is a Story in a Cluster that no longer holds it, which is how a Story came to
+   * sit in more Clusters than its Topic had and the same reporting to be listed
+   * under several of them.
+   */
   insert(cluster: Cluster, storyIds?: readonly StoryId[]): Promise<void>;
   /**
    * Archive every Cluster of a Topic that is not in `keepIds`, and report how
@@ -172,6 +203,25 @@ export class DrizzleClusterRepo implements ClusterRepo {
     return rows.map((r) => r.storyId as StoryId);
   }
 
+  async listHeldByTopicId(topicId: string): Promise<readonly HeldCluster[]> {
+    const rows = (await this.db
+      .select({ clusterId: clusterStories.clusterId, storyId: clusterStories.storyId })
+      .from(clusterStories)
+      .innerJoin(clusters, eq(clusters.id, clusterStories.clusterId))
+      .where(eq(clusters.topicId, topicId))
+      .orderBy(asc(clusterStories.clusterId), asc(clusterStories.storyId))) as {
+      clusterId: string;
+      storyId: string;
+    }[];
+    const held = new Map<ClusterId, StoryId[]>();
+    for (const row of rows) {
+      const storyIds = held.get(row.clusterId as ClusterId) ?? [];
+      storyIds.push(row.storyId as StoryId);
+      held.set(row.clusterId as ClusterId, storyIds);
+    }
+    return [...held].map(([clusterId, storyIds]) => ({ clusterId, storyIds }));
+  }
+
   async listArticlesByClusterId(
     clusterId: string,
     sourceIds: readonly SourceId[],
@@ -264,10 +314,26 @@ export class DrizzleClusterRepo implements ClusterRepo {
           state: values.state,
         },
       });
+    const held = await this.listStoryIdsByClusterId(cluster.id);
+    await this.db
+      .delete(clusterStories)
+      .where(
+        and(
+          eq(clusterStories.clusterId, cluster.id),
+          // An empty membership means this Cluster groups nothing, and
+          // `notInArray` with no values is a query with no parameters.
+          ...(storyIds.length > 0
+            ? [notInArray(clusterStories.storyId, [...storyIds])]
+            : []),
+        ),
+      );
     for (const sid of storyIds) {
       await this.db.insert(clusterStories).values({ clusterId: cluster.id, storyId: sid }).onConflictDoNothing();
     }
-    await this.writeStateOfStoriesHeldBy([cluster.id]);
+    // Both sides of the membership, because a Story that has just left this
+    // Cluster is the one whose Retired state has to be written and no longer has a
+    // row here to be written from.
+    await this.writeStateOfStories([...new Set([...held, ...storyIds])]);
   }
 
   /**
@@ -280,6 +346,18 @@ export class DrizzleClusterRepo implements ClusterRepo {
    * asking itself. Written on both the way a Cluster is written up and the way it
    * is put away, which is what makes a Story leave Retired on its own when a
    * Cluster it is in is covered again.
+   */
+  private async writeStateOfStoriesHeldBy(clusterIds: readonly ClusterId[]): Promise<void> {
+    if (clusterIds.length === 0) return;
+    const rows = (await this.db
+      .selectDistinct({ storyId: clusterStories.storyId })
+      .from(clusterStories)
+      .where(inArray(clusterStories.clusterId, [...clusterIds]))) as { storyId: string }[];
+    await this.writeStateOfStories(rows.map((row) => row.storyId as StoryId));
+  }
+
+  /**
+   * Write whether each of these Stories is Retired, from the Clusters holding it.
    *
    * Each statement is guarded on the stored state disagreeing, which is not a
    * saving of work for its own sake: `stories` carries a trigger that rewrites that
@@ -287,20 +365,24 @@ export class DrizzleClusterRepo implements ClusterRepo {
    * column is named rather than when it changes. An unguarded pair would reindex
    * every Story a re-formed Cluster holds on every ingest cycle to arrive at the
    * answer it already had.
+   *
+   * Named for the Stories rather than for the Clusters holding them because a Story
+   * does not always arrive through a Cluster: one that has just been dropped by the
+   * Cluster it was in is named here directly, since the row that would have said so
+   * is the one that was removed.
    */
-  private async writeStateOfStoriesHeldBy(clusterIds: readonly ClusterId[]): Promise<void> {
-    if (clusterIds.length === 0) return;
-    const held = sql`stories.id IN (SELECT story_id FROM cluster_stories
-      WHERE cluster_id IN (${sql.join(clusterIds.map((id) => sql`${id}`), sql`, `)}))`;
+  private async writeStateOfStories(storyIds: readonly StoryId[]): Promise<void> {
+    if (storyIds.length === 0) return;
+    const named = inArray(stories.id, [...storyIds]);
     const isActive = sql.raw(STORY_IS_ACTIVE);
     await this.db
       .update(stories)
       .set({ state: 'archive' })
-      .where(and(held, sql`NOT ${isActive}`, ne(stories.state, 'archive')));
+      .where(and(named, sql`NOT ${isActive}`, ne(stories.state, 'archive')));
     await this.db
       .update(stories)
       .set({ state: 'active' })
-      .where(and(held, isActive, ne(stories.state, 'active')));
+      .where(and(named, isActive, ne(stories.state, 'active')));
   }
 
   async archiveExcluding(

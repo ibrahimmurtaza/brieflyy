@@ -1,10 +1,17 @@
 import { describe, expect, it } from 'vitest';
 
 import { createTestDb } from '../testing/test-db.js';
-import { makeTopic, makeUser } from '../testing/fixtures.js';
+import type { SqliteDriver } from '../db/client.js';
+import {
+  makeTopic,
+  makeUser,
+  makeCluster,
+  makeFeedbackEvent,
+} from '../testing/fixtures.js';
 import { DrizzleArticleRepo } from '../repos/article-repo.js';
 import { DrizzleClusterRepo } from '../repos/cluster-repo.js';
 import { DrizzleEntityRepo } from '../repos/entity-repo.js';
+import { DrizzleFeedbackRepo } from '../repos/feedback-repo.js';
 import { DrizzleSourceRepo } from '../repos/source-repo.js';
 import { DrizzleStoryRepo } from '../repos/story-repo.js';
 import { DrizzleTopicRepo } from '../repos/topic-repo.js';
@@ -16,7 +23,15 @@ import { CLUSTER_ACTIVE_VELOCITY_THRESHOLD } from './cluster-formation-service.j
 import { ClusterFormationService } from './cluster-formation-service.js';
 import type { Clock } from '../domain/clock.js';
 import { NO_BACKOFF } from '../domain/types.js';
-import type { ArticleId, EntityId, SourceId, StoryId, TopicId } from '../domain/types.js';
+import type {
+  ArticleId,
+  ClusterId,
+  EntityId,
+  SourceId,
+  StoryId,
+  TopicId,
+  UserId,
+} from '../domain/types.js';
 
 /** The moment the window closes. Every fixture time is relative to it. */
 const NOW = new Date('2026-09-02T12:00:00Z');
@@ -50,12 +65,14 @@ interface Harness {
   readonly articleRepo: DrizzleArticleRepo;
   readonly entityRepo: DrizzleEntityRepo;
   readonly sourceRepo: DrizzleSourceRepo;
+  readonly feedbackRepo: DrizzleFeedbackRepo;
+  readonly driver: SqliteDriver;
 }
 
 async function buildHarness(
   options: { readonly clusterWindowDays?: number } = {},
 ): Promise<Harness> {
-  const { db } = createTestDb();
+  const { db, driver } = createTestDb();
   const clock: Clock = { now: () => NOW };
   const clusterRepo = new DrizzleClusterRepo(db);
   const storyRepo = new DrizzleStoryRepo(db);
@@ -64,6 +81,7 @@ async function buildHarness(
   const sourceRepo = new DrizzleSourceRepo(db);
   const topicRepo = new DrizzleTopicRepo(db);
   const userRepo = new DrizzleUserRepo(db);
+  const feedbackRepo = new DrizzleFeedbackRepo(db);
 
   await userRepo.insert(makeUser({ id: 'user-1', onboardingState: 'topics_picked' }));
   await sourceRepo.insert({
@@ -101,6 +119,8 @@ async function buildHarness(
     articleRepo,
     entityRepo,
     sourceRepo,
+    feedbackRepo,
+    driver,
   };
 }
 
@@ -777,5 +797,222 @@ describe('ClusterFormationService', () => {
     const clusters = await h.service.formClustersForTopic('topic-1');
 
     expect(clusters).toHaveLength(2);
+  });
+});
+
+/**
+ * What a Cluster is when it is formed again and is not the same set of Stories.
+ *
+ * The cases here are the ones that used to be one failure: the id was derived
+ * from the membership, so any of these left the Cluster a User had been reading —
+ * and given Feedback on — under an id nothing would ever write to again, while the
+ * row it had been is still there holding Stories it no longer has.
+ */
+describe('a Cluster re-formed after its membership moved', () => {
+  it('keeps its id when a Story joins it', async () => {
+    const h = await buildHarness();
+    await givenStory(h, {
+      storyId: 'story-acme',
+      entities: ['acme', 'foo'],
+      body: BODY.acme,
+      hoursAgo: 5,
+    });
+    const [first] = await h.service.formClustersForTopic('topic-1');
+
+    await givenStory(h, {
+      storyId: 'story-acme-follow-up',
+      entities: ['acme', 'foo', 'bar'],
+      body: BODY.acmeFollowUp,
+      hoursAgo: 1,
+    });
+    const [second] = await h.service.formClustersForTopic('topic-1');
+
+    expect(second?.id).toBe(first?.id);
+    // One Cluster, not the Cluster it was plus the one it became.
+    expect(await h.clusterRepo.listByTopicId('topic-1')).toHaveLength(1);
+  });
+
+  it('keeps the Feedback a User gave on it as its membership moves', async () => {
+    const h = await buildHarness();
+    await givenStory(h, {
+      storyId: 'story-acme',
+      entities: ['acme', 'foo'],
+      body: BODY.acme,
+      hoursAgo: 5,
+    });
+    const [first] = await h.service.formClustersForTopic('topic-1');
+    await h.feedbackRepo.insert(
+      makeFeedbackEvent({
+        id: 'fe-1',
+        userId: 'user-1' as UserId,
+        clusterId: first!.id,
+      }),
+    );
+
+    await givenStory(h, {
+      storyId: 'story-acme-follow-up',
+      entities: ['acme', 'foo', 'bar'],
+      body: BODY.acmeFollowUp,
+      hoursAgo: 1,
+    });
+    const [second] = await h.service.formClustersForTopic('topic-1');
+
+    // The signal is keyed on the Cluster the User pressed the button on, so an id
+    // that moved under a Story joining would take it out of the picture for good:
+    // the Theme still ranks by what the User said, and the page no longer shows
+    // the button they pressed.
+    expect(second?.id).toBe(first?.id);
+    const readBack = await h.feedbackRepo.listByUserAndCluster(
+      'user-1' as UserId,
+      second!.id,
+    );
+    expect(readBack.map((event) => event.id)).toEqual(['fe-1']);
+  });
+
+  it('drops the membership row of a Story that has aged out of it', async () => {
+    // A one-day window, and two Stories a day apart, so the second leaves the
+    // window while the first is still in it — which is a Cluster that is still
+    // there and still forming, holding one Story less.
+    const h = await buildHarness({ clusterWindowDays: 1 });
+    await givenStory(h, {
+      storyId: 'story-acme',
+      entities: ['acme', 'foo'],
+      body: BODY.acme,
+      hoursAgo: 1,
+    });
+    await givenStory(h, {
+      storyId: 'story-acme-follow-up',
+      entities: ['acme', 'foo', 'bar'],
+      body: BODY.acmeFollowUp,
+      hoursAgo: 20,
+    });
+    const [first] = await h.service.formClustersForTopic('topic-1');
+    expect(await storyIdsByCluster(h, first!.id)).toEqual([
+      'story-acme',
+      'story-acme-follow-up',
+    ]);
+
+    const later = new Date(NOW.getTime() + 6 * HOUR);
+    await h.service.formClustersForTopic('topic-1', later);
+
+    // The row for a Story the Cluster no longer groups is what put that Story in
+    // more Clusters than the Topic had, and what kept the Retired story
+    // searchable only by accident of which Cluster it had once been in.
+    expect(await h.clusterRepo.listStoryIdsByClusterId(first!.id)).toEqual([
+      'story-acme',
+    ]);
+  });
+
+  it('leaves no Story in more than one Cluster of the Topic', async () => {
+    const h = await buildHarness();
+    await givenStory(h, {
+      storyId: 'story-acme',
+      entities: ['acme', 'foo'],
+      body: BODY.acme,
+      hoursAgo: 5,
+    });
+    await h.service.formClustersForTopic('topic-1');
+
+    // The Cluster gains a Story and a second Cluster forms beside it: the case
+    // where the old ids were left behind holding the Stories they had.
+    await givenStory(h, {
+      storyId: 'story-acme-follow-up',
+      entities: ['acme', 'foo', 'bar'],
+      body: BODY.acmeFollowUp,
+      hoursAgo: 1,
+    });
+    await givenStory(h, {
+      storyId: 'story-brandx',
+      entities: ['brandx', 'tinyco'],
+      body: BODY.brandx,
+      hoursAgo: 2,
+    });
+    await h.service.formClustersForTopic('topic-1');
+
+    const held = await h.clusterRepo.listHeldByTopicId('topic-1');
+    const seen = held.flatMap((cluster) => cluster.storyIds);
+    expect([...new Set(seen)].sort()).toEqual(seen.slice().sort());
+    expect(seen.sort()).toEqual([
+      'story-acme',
+      'story-acme-follow-up',
+      'story-brandx',
+    ]);
+  });
+
+  it('leaves a Story that has left every Cluster in the Archive', async () => {
+    const h = await buildHarness({ clusterWindowDays: 1 });
+    await givenStory(h, {
+      storyId: 'story-acme',
+      entities: ['acme', 'foo'],
+      body: BODY.acme,
+      hoursAgo: 1,
+    });
+    await givenStory(h, {
+      storyId: 'story-acme-follow-up',
+      entities: ['acme', 'foo', 'bar'],
+      body: BODY.acmeFollowUp,
+      hoursAgo: 20,
+    });
+    await h.service.formClustersForTopic('topic-1');
+
+    const later = new Date(NOW.getTime() + 6 * HOUR);
+    await h.service.formClustersForTopic('topic-1', later);
+    expect((await h.storyRepo.getById('story-acme-follow-up' as StoryId))?.state).toBe(
+      'archive',
+    );
+
+    // Retired, and still a Story of this Topic rather than an event that happened:
+    // the Archive reads a Retired Story's Topic off what reported it, which is a
+    // fact about the reporting and does not move when the Cluster the Stories were
+    // grouped in is formed with one of them instead of both.
+    const indexed = h.driver
+      .prepare(
+        `SELECT topic_id FROM archive_items WHERE kind = 'story' AND item_id = ?`,
+      )
+      .all('story-acme-follow-up') as { topic_id: string }[];
+    expect(indexed).toEqual([{ topic_id: 'topic-1' }]);
+  });
+
+  it('hands a split to one part and a new id to the other', async () => {
+    const h = await buildHarness();
+    await givenStory(h, {
+      storyId: 'story-acme',
+      entities: ['acme', 'foo'],
+      body: BODY.acme,
+      hoursAgo: 5,
+    });
+    await givenStory(h, {
+      storyId: 'story-brandx',
+      entities: ['brandx', 'tinyco'],
+      body: BODY.brandx,
+      hoursAgo: 4,
+    });
+    // The previous cycle's Cluster, written through the repository rather than
+    // through a cycle that no two Stories about different companies would have
+    // been put in one: grouping splits them, and this is the Cluster that is
+    // about to be split.
+    await h.clusterRepo.insert(
+      makeCluster({ id: 'cluster-before', topicId: 'topic-1', createdAt: NOW }),
+      ['story-acme' as StoryId, 'story-brandx' as StoryId],
+    );
+
+const clusters = await h.service.formClustersForTopic('topic-1');
+
+    expect(clusters).toHaveLength(2);
+    const membershipOf = new Map<string, string>();
+    for (const cluster of clusters) {
+      for (const storyId of await h.clusterRepo.listStoryIdsByClusterId(cluster.id)) {
+        membershipOf.set(storyId, cluster.id);
+      }
+    }
+    // One id standing and one minted, and the two halves are apart: an id held by
+    // two Clusters would be two things pretending to be one, and the Feedback on it
+    // would belong to neither.
+    expect(membershipOf.get('story-acme')).toBe('cluster-before');
+    expect(membershipOf.get('story-brandx')).toBe('cluster-topic-1-story-brandx');
+    // And the Cluster that kept the id holds only the half that is its own.
+    expect(await h.clusterRepo.listStoryIdsByClusterId('cluster-before')).toEqual([
+      'story-acme',
+    ]);
   });
 });

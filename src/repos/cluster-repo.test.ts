@@ -361,5 +361,80 @@ describe('DrizzleClusterRepo', () => {
 
     expect((await storyRepo.getById('story-1' as StoryId))?.state).toBe('archive');
   });
+
+  it('drops the membership row of a Story a re-form left out of it', async () => {
+    await storyRepo.insert(makeStory({ id: 'story-1' }));
+    await storyRepo.insert(makeStory({ id: 'story-2' }));
+    await clusterRepo.insert(makeCluster({ id: 'cluster-1', topicId: 'topic-1' }), [
+      'story-1' as StoryId,
+      'story-2' as StoryId,
+    ]);
+
+    // A Cluster's id no longer says which Stories it holds, so a Story that ages
+    // out of its membership would otherwise stay in it for ever: one row per Story
+    // per Cluster it had ever been in, and a Story in more Clusters than the Topic
+    // has.
+    await clusterRepo.insert(makeCluster({ id: 'cluster-1', topicId: 'topic-1' }), [
+      'story-1' as StoryId,
+    ]);
+
+    expect(await clusterRepo.listStoryIdsByClusterId('cluster-1')).toEqual(['story-1']);
+  });
+
+  it('retires a Story that left every Cluster', async () => {
+    await storyRepo.insert(makeStory({ id: 'story-1' }));
+    await storyRepo.insert(makeStory({ id: 'story-2' }));
+    await clusterRepo.insert(makeCluster({ id: 'cluster-1', topicId: 'topic-1' }), [
+      'story-1' as StoryId,
+      'story-2' as StoryId,
+    ]);
+
+    // The row is gone, so nothing else names this Story, and the pass that wrote
+    // the row is the only thing that can say the Story is Retired. Leaving its
+    // state where it was would leave a Story nothing is covering looking Active.
+    await clusterRepo.insert(makeCluster({ id: 'cluster-1', topicId: 'topic-1' }), [
+      'story-1' as StoryId,
+    ]);
+
+    expect((await storyRepo.getById('story-2' as StoryId))?.state).toBe('archive');
+  });
+
+  it('leaves a Story Active while another Cluster still holds it', async () => {
+    await storyRepo.insert(makeStory({ id: 'story-1' }));
+    await clusterRepo.insert(makeCluster({ id: 'cluster-1', topicId: 'topic-1' }), [
+      'story-1' as StoryId,
+    ]);
+    await clusterRepo.insert(makeCluster({ id: 'cluster-2', topicId: 'topic-1' }), [
+      'story-1' as StoryId,
+    ]);
+
+    await clusterRepo.insert(makeCluster({ id: 'cluster-1', topicId: 'topic-1' }), []);
+
+    expect((await storyRepo.getById('story-1' as StoryId))?.state).toBe('active');
+  });
+
+  it('reads back the Clusters a Topic holds and the Stories in each', async () => {
+    await topicRepo.insert(makeTopic({ id: 'topic-2', userId: 'user-1' }));
+    await storyRepo.insert(makeStory({ id: 'story-1' }));
+    await storyRepo.insert(makeStory({ id: 'story-2' }));
+    await clusterRepo.insert(makeCluster({ id: 'cluster-1', topicId: 'topic-1' }), [
+      'story-1' as StoryId,
+      'story-2' as StoryId,
+    ]);
+    await clusterRepo.insert(makeCluster({ id: 'cluster-2', topicId: 'topic-1' }), [
+      'story-2' as StoryId,
+    ]);
+    // Another Topic's Cluster, and one of this Topic's that holds nothing: neither
+    // is something a re-form of this Topic can inherit an id from.
+    await clusterRepo.insert(makeCluster({ id: 'cluster-3', topicId: 'topic-2' }), [
+      'story-1' as StoryId,
+    ]);
+    await clusterRepo.insert(makeCluster({ id: 'cluster-4', topicId: 'topic-1' }), []);
+
+    expect(await clusterRepo.listHeldByTopicId('topic-1')).toEqual([
+      { clusterId: 'cluster-1', storyIds: ['story-1', 'story-2'] },
+      { clusterId: 'cluster-2', storyIds: ['story-2'] },
+    ]);
+  });
 });
 
