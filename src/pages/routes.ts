@@ -1894,7 +1894,10 @@ ${signalButtons}
       </article>`;
     })
     .join('\n');
-  const emptyState = emptyStateBlock(input);
+  const emptyState = emptyStateBlock({
+    ...input,
+    readsNoSources: input.topic.sourceIds.length === 0,
+  });
   const sourceFilterBar = sourceFilterBarHtml(input);
   const windowForm = clusterWindowForm(input);
   const briefActions = sendBriefSection(input);
@@ -2249,6 +2252,12 @@ ${list}`;
  * offering a way out of it leaves the User with nothing to act on, which is the
  * state they are least able to work out for themselves.
  *
+ * The fifth is the one that is not a waiting state at all. A Topic that reads no
+ * Source has no Cluster to wait for: ingest takes each cycle's work from the union
+ * of every live Topic's Sources, so this Topic names none and is polled for nobody.
+ * It reads exactly like "nothing has arrived yet" and is not it, and "check back
+ * after the next ingest" sends the User to wait for something that cannot happen.
+ *
  * Nothing is said when there are Clusters on the page. A brief that is showing
  * Clusters is not filtered to nothing, whatever the query string says.
  */
@@ -2260,8 +2269,24 @@ function emptyStateBlock(input: {
   readonly topicSlug: string;
   /** The names of the Sources hidden from this Topic, named rather than counted. */
   readonly hiddenSourceNames: readonly string[];
+  /**
+   * Whether this Topic reads any Source at all.
+   *
+   * Checked before every other branch, because a Topic that reads nothing can never
+   * have a Cluster however long it waits: ingest builds each cycle from the union of
+   * every live Topic's Sources, so this Topic contributes none and is polled for
+   * nobody. Telling that User to wait for the next ingest promises a thing that is
+   * never going to arrive, and sends them away from the one page that fixes it.
+   */
+  readonly readsNoSources: boolean;
 }): string {
   if (input.clusters.length > 0) return '';
+  if (input.readsNoSources) {
+    return `    <div class="empty-state">
+      <p class="muted">This topic isn't reading any sources yet, so there is nothing to gather for it. Add a source and Brieflyy will start filling it in.</p>
+      <p class="empty-state__actions"><a href="/topics/${escapeHtml(input.topicSlug)}/settings">Add a source</a></p>
+    </div>`;
+  }
   // Checked before the filter, because it outranks it: a Source filter that
   // matches nothing is a transient thing the link undoes, whereas a hidden Source
   // is why there is nothing left to filter, and offering "Show all N" here would

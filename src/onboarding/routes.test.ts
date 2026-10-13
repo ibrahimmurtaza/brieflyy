@@ -308,7 +308,7 @@ describe('HTTP: POST /onboarding/pick-topics', () => {
     expect(response.headers.location).toBe('/onboarding/delivery-time');
   });
 
-  it('accepts two templates plus a free-form topic', async () => {
+  it('accepts two templates plus a free-form topic, then asks it for sources', async () => {
     const ids = await fetchTemplateIds(app, cookie);
     const response = await submitForm(
       app,
@@ -317,6 +317,24 @@ describe('HTTP: POST /onboarding/pick-topics', () => {
       `templateIds=${ids[0]}&templateIds=${ids[1]}&freeformTitle=Fusion%20energy`,
     );
     expect(response.statusCode).toBe(302);
+    // Not the delivery-time step. A Topic the User named arrives reading nothing, and
+    // a cycle only gathers for the Sources some live Topic names — so this one would
+    // sit permanently empty. Its settings page is where the registry and the control
+    // that answers this already are.
+    expect(response.headers.location).toBe('/topics/fusion-energy/settings');
+  });
+
+  it('goes straight on when every topic picked came from a template', async () => {
+    const ids = await fetchTemplateIds(app, cookie);
+    const response = await submitForm(
+      app,
+      cookie,
+      '/onboarding/pick-topics',
+      `templateIds=${ids[0]}&templateIds=${ids[1]}&templateIds=${ids[2]}`,
+    );
+    expect(response.statusCode).toBe(302);
+    // A Template names its own Sources, so there is nothing to ask and the flow is
+    // not made longer for a User who did not need it.
     expect(response.headers.location).toBe('/onboarding/delivery-time');
   });
 
@@ -856,6 +874,9 @@ describe('HTTP: /pick-topics (managing topics after onboarding)', () => {
     expect(await slugsHeld(app, cookie)).toHaveLength(0);
     const added = await submitForm(app, cookie, '/pick-topics', 'freeformTitle=World%20news');
     expect(added.statusCode).toBe(302);
+    // The same ask as the onboarding path, from the topic-management page: a Topic
+    // the User named reads nothing until somebody says what it should read.
+    expect(added.headers.location).toBe('/topics/world-news/settings');
 
     const page = await app.inject({
       method: 'GET',

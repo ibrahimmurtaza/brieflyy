@@ -1159,10 +1159,47 @@ describe('HTTP: /topics/:slug on a Topic with no Sources', () => {
     await h.app.close();
   });
 
-  it('still shows the empty state rather than failing', async () => {
+  it('says it reads nothing instead of promising an ingest that cannot come', async () => {
     const resp = await page(h, '/topics/topic-1');
 
     expect(resp.statusCode).toBe(200);
+    // "Check back after the next ingest" is a promise this Topic can never have
+    // kept: a cycle reads the union of every live Topic's Sources, so this one names
+    // none and is polled for nobody. Saying it would send the User to wait for
+    // something that is never going to arrive.
+    expect(resp.body).toContain("isn't reading any sources yet");
+    expect(resp.body).not.toContain('Check back after the next ingest');
+  });
+
+  it('offers the page where a Source can be added', async () => {
+    const resp = await page(h, '/topics/topic-1');
+
+    // The two links this state used to offer — delivery time and managing topics —
+    // are on the page, but neither of them can add a Source, and a User following
+    // them is no closer to an answer.
+    expect(resp.body).toContain('/topics/topic-1/settings');
+  });
+});
+
+describe('HTTP: /topics/:slug on a Topic with Sources but no Clusters yet', () => {
+  let h: Harness;
+
+  beforeEach(async () => {
+    h = await signInWithTopic({ withSources: true });
+  });
+
+  afterEach(async () => {
+    await h.app.close();
+  });
+
+  it('still says to wait, because an ingest can deliver this one', async () => {
+    const resp = await page(h, '/topics/topic-1');
+
+    // The counterpart to the case above: this Topic does read Sources, so the next
+    // cycle really can fill it, and the honest answer is to wait rather than to be
+    // sent off to configure something that is already configured.
+    expect(resp.statusCode).toBe(200);
     expect(resp.body).toContain('No stories yet for this topic');
+    expect(resp.body).toContain('Check back after the next ingest');
   });
 });

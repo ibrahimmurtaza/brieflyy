@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 import { escapeHtml } from '../domain/html.js';
 import { resolveTier, topicCapOverflow, type TopicCapOverflow } from '../domain/tier.js';
-import type { User } from '../domain/types.js';
+import type { Topic, User } from '../domain/types.js';
 import { BILLING_SETTINGS_PATH } from '../billing/paths.js';
 import { deliveryTimePage } from '../pages/routes.js';
 import { layout, overCapCallout, type ShellAccount } from '../pages/layout.js';
@@ -21,6 +21,33 @@ const selectInputSchema = z.object({
   templateIds: z.array(z.string().min(1).max(128)).max(8),
   freeformTitle: z.string().trim().max(80).optional(),
 });
+
+/**
+ * Where a picker submission goes next, which depends on what it created.
+ *
+ * A Topic made from a Template arrives with the Sources that Template names, so it
+ * has something to read the moment it exists. A Topic the User named themselves
+ * arrives with none, and one that reads nothing is never gathered for: an ingest
+ * cycle takes its work from the union of every live Topic's Sources, so a Topic
+ * naming none contributes nothing and no cluster will ever appear under it.
+ *
+ * So naming a Topic is only half of making one, and the half that can be inferred
+ * is the half the application does. The User who typed a name has said what they
+ * want to read about and not what they want to read it from, and that is a question
+ * only they can answer — but it is one they are never asked, which is how a Topic of
+ * their own ends up permanently empty behind a page that tells them to wait for the
+ * next ingest.
+ *
+ * Sending them to that Topic's settings is the ask: it is the page that lists the
+ * registry and already has the control that answers it, so the question is asked
+ * where the answer lives rather than on a page built for it. The flow still moves
+ * on afterwards — settings has a link back to the Topic — because somebody who named
+ * a Topic and changed their mind is not owed a step they did not ask for.
+ */
+function nextAfterPicking(topics: readonly Topic[], otherwise: string): string {
+  const freeform = topics.find((t) => t.origin.kind === 'freeform');
+  return freeform ? `/topics/${encodeURIComponent(freeform.slug)}/settings` : otherwise;
+}
 
 function readField(body: unknown, key: string): string | undefined {
   if (body == null || typeof body !== 'object') return undefined;
@@ -92,7 +119,10 @@ export async function registerOnboardingRoutes(
         : {}),
     });
     if (outcome.status === 'ok') {
-      return reply.code(302).header('location', '/onboarding/delivery-time').send();
+      return reply
+        .code(302)
+        .header('location', nextAfterPicking(outcome.topics, '/onboarding/delivery-time'))
+        .send();
     }
     if (outcome.reason === 'paywall_tier_limit') {
       return reply
@@ -145,7 +175,7 @@ export async function registerOnboardingRoutes(
         : {}),
     });
     if (outcome.status === 'ok') {
-      return reply.code(302).header('location', '/topics').send();
+      return reply.code(302).header('location', nextAfterPicking(outcome.topics, '/topics')).send();
     }
     if (outcome.reason === 'paywall_tier_limit') {
       return reply
