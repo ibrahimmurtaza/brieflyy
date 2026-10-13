@@ -141,6 +141,23 @@ async function addSource(
   });
 }
 
+/**
+ * Extra Sources the Topic follows, so a Story can be carried by more than one.
+ *
+ * A Cluster holding a single Article is not Active, so a fixture that wants one
+ * has to give it coverage from a second outlet — and an Article from a Source the
+ * Topic does not follow is left out of the Cluster entirely, so the Source has to
+ * be added to the Topic as well as the registry. One call rather than the two
+ * steps repeated, because a fixture that adds the outlet and forgets the second
+ * step fails as a Cluster with no Articles in it rather than as the mistake.
+ */
+async function followedBy(h: Harness, ...ids: readonly SourceId[]): Promise<void> {
+  for (const [index, id] of ids.entries()) {
+    await addSource(h, id, `Source ${id}`);
+    await h.topicRepo.insertTopicSource('topic-1', id, 1 + index);
+  }
+}
+
 /** Write a Story with one Article, and return the Entity ids it carries. */
 async function givenStory(
   h: Harness,
@@ -153,8 +170,8 @@ async function givenStory(
     readonly now?: Date;
     readonly title?: string;
     readonly sourceId?: SourceId;
-    /** A copy of the same event, carried by a second outlet in the same Story. */
-    readonly syndicatedFrom?: SourceId;
+    /** Outlets besides the first that carried the same event, an hour apart each. */
+    readonly syndicatedFrom?: SourceId | readonly SourceId[];
   },
 ): Promise<readonly EntityId[]> {
   const seenAt = new Date((input.now ?? NOW).getTime() - input.hoursAgo * HOUR);
@@ -182,16 +199,23 @@ async function givenStory(
     lastSeenAt: seenAt,
     published: { first: seenAt, last: seenAt }
   });
-  // One Article, or two when the same story was also carried by another outlet:
-  // a syndicated copy is the same Story with a second Source in it, which is the
-  // shape this whole change exists to produce.
+  // One Article, or one per outlet when the same story was carried by several: a
+  // syndicated copy is the same Story with a second Source in it, which is the
+  // shape the whole of a Story's coverage is written from.
+  const carried = [
+    input.sourceId ?? SOURCE_ID,
+    ...(input.syndicatedFrom === undefined
+      ? []
+      : typeof input.syndicatedFrom === 'string'
+        ? [input.syndicatedFrom]
+        : input.syndicatedFrom),
+  ];
   const outlets: readonly { readonly sourceId: SourceId; readonly suffix: string; readonly hoursLater: number }[] =
-    input.syndicatedFrom
-      ? [
-          { sourceId: input.sourceId ?? SOURCE_ID, suffix: '', hoursLater: 0 },
-          { sourceId: input.syndicatedFrom, suffix: '-copy', hoursLater: 1 },
-        ]
-      : [{ sourceId: input.sourceId ?? SOURCE_ID, suffix: '', hoursLater: 0 }];
+    carried.map((sourceId, index) => ({
+      sourceId,
+      suffix: index === 0 ? '' : `-copy${index}`,
+      hoursLater: index,
+    }));
   for (const outlet of outlets) {
     await h.articleRepo.insert({
       article: {
@@ -584,6 +608,94 @@ describe('ClusterFormationService', () => {
   });
 
 
+  it('measures velocity in Articles a day over the life of the Cluster', async () => {
+    const h = await buildHarness();
+    await followedBy(h, 'src-other');
+    // One Story two outlets told, and one Story told once, two days and a day
+    // back: three Articles over the two days since the first was seen.
+    await givenStory(h, {
+      storyId: 'story-acme',
+      entities: ['acme', 'foo'],
+      body: BODY.acme,
+      hoursAgo: 48,
+      syndicatedFrom: 'src-other',
+    });
+    await givenStory(h, {
+      storyId: 'story-acme-follow-up',
+      entities: ['acme', 'foo', 'bar'],
+      body: BODY.acmeFollowUp,
+      hoursAgo: 24,
+    });
+
+    const [cluster] = await h.service.formClustersForTopic('topic-1');
+
+    // One and a half Articles a day, and not the one a day the same two Stories
+    // count: a Story told by two outlets and a Story told by one are the same
+    // number of Stories, which is why counting Stories cannot tell a story that is
+    // being picked up from one that was published once.
+    expect(cluster?.velocity).toBeCloseTo(1.5, 6);
+  });
+
+  it('archives a Cluster one Article from one Source is holding', async () => {
+    const h = await buildHarness();
+    // One outlet, one Article, and it arrived an hour ago: the fastest a story
+    // covered once can read, and it is not evidence of movement. A brief planning
+    // only Active Clusters would otherwise lead with any of the hundreds like it
+    // a real corpus holds.
+    await givenStory(h, {
+      storyId: 'story-lonely',
+      entities: ['acme', 'foo'],
+      body: BODY.acme,
+      hoursAgo: 1,
+    });
+
+    const [cluster] = await h.service.formClustersForTopic('topic-1');
+
+    expect(cluster?.velocity).toBeCloseTo(1, 6);
+    expect(cluster?.state).toBe('archive');
+  });
+
+  it('does not let a Cluster that was heavily covered and then stopped outrank one still being covered', async () => {
+    const h = await buildHarness();
+    await followedBy(h, 'src-other', 'src-third', 'src-fourth');
+    // Four outlets told the Acme story over the four days it ran, and it has been
+    // silent since. Six Articles a day of attention once is not attention now.
+    await givenStory(h, {
+      storyId: 'story-acme',
+      entities: ['acme', 'foo'],
+      body: BODY.acme,
+      hoursAgo: 4 * 24,
+      syndicatedFrom: ['src-other', 'src-third', 'src-fourth'],
+    });
+    // The BrandX story broke an hour ago and two outlets are on it.
+    await givenStory(h, {
+      storyId: 'story-brandx',
+      entities: ['brandx', 'tinyco'],
+      body: BODY.brandx,
+      hoursAgo: 1,
+      syndicatedFrom: 'src-third',
+    });
+
+    const clusters = await h.service.formClustersForTopic('topic-1');
+    const byStory = new Map<string, (typeof clusters)[number]>();
+    for (const cluster of clusters) {
+      for (const id of await storyIdsByCluster(h, cluster.id)) byStory.set(id, cluster);
+    }
+    const covered = byStory.get('story-acme');
+    const live = byStory.get('story-brandx');
+
+    // Counting Stories, the busy one reads a quarter of a Story a day — the same
+    // number whichever of the two you look at first, because what they hold in
+    // common is one Story. Counting Articles, what it took was four Articles over
+    // four days, which is under the line rather than over it: a brief planning only
+    // Active Clusters cannot lead with it at all, let alone put it above a story
+    // two outlets are on right now.
+    expect(covered?.velocity).toBeCloseTo(1, 6);
+    expect(covered?.state).toBe('archive');
+    expect(live!.velocity).toBeGreaterThan(covered!.velocity);
+    expect(live?.state).toBe('active');
+  });
+
   it('gives an Active Cluster a velocity above the threshold', async () => {
     const h = await buildHarness();
     await givenStory(h, {
@@ -601,7 +713,8 @@ describe('ClusterFormationService', () => {
 
     const [cluster] = await h.service.formClustersForTopic('topic-1');
 
-    // Two Stories in five hours is far more than the threshold asks for.
+    // Two Stories in five hours is two Articles over the day-long floor, which is
+    // above what the threshold asks for.
     expect(cluster?.velocity).toBeGreaterThan(CLUSTER_ACTIVE_VELOCITY_THRESHOLD);
     expect(cluster?.state).toBe('active');
   });
@@ -624,36 +737,15 @@ describe('ClusterFormationService', () => {
     expect(cluster!.velocity).toBeLessThan(CLUSTER_ACTIVE_VELOCITY_THRESHOLD);
   });
 
-  it('measures velocity in Stories per day over the life of the Cluster', async () => {
-    const h = await buildHarness();
-    await givenStory(h, {
-      storyId: 'story-acme',
-      entities: ['acme', 'foo'],
-      body: BODY.acme,
-      hoursAgo: 48,
-    });
-    await givenStory(h, {
-      storyId: 'story-acme-follow-up',
-      entities: ['acme', 'foo', 'bar'],
-      body: BODY.acmeFollowUp,
-      hoursAgo: 24,
-    });
-
-    const [cluster] = await h.service.formClustersForTopic('topic-1');
-
-    // Two Stories across the two days since the first of them. Dividing by the
-    // Topic's whole seven-day window instead would report a third of this, and
-    // make every Cluster on a slow week look dead.
-    expect(cluster?.velocity).toBeCloseTo(1, 6);
-  });
-
   it('archives a Cluster whose Stories have all aged out of the window', async () => {
     const h = await buildHarness();
+    await followedBy(h, 'src-other');
     await givenStory(h, {
       storyId: 'story-acme',
       entities: ['acme', 'foo'],
       body: BODY.acme,
       hoursAgo: 2,
+      syndicatedFrom: 'src-other',
     });
     await h.service.formClustersForTopic('topic-1');
     const first = await h.clusterRepo.listByTopicId('topic-1');
@@ -672,17 +764,19 @@ describe('ClusterFormationService', () => {
 
   it('retires a Story whose Clusters have all stopped being Active', async () => {
     const h = await buildHarness();
+    await followedBy(h, 'src-other');
     await givenStory(h, {
       storyId: 'story-acme',
       entities: ['acme', 'foo'],
       body: BODY.acme,
       hoursAgo: 2,
+      syndicatedFrom: 'src-other',
     });
     await h.service.formClustersForTopic('topic-1');
     expect((await h.storyRepo.getById('story-acme' as StoryId))?.state).toBe('active');
 
-    // Five days on, one Story spread over five days is under the threshold, so
-    // the Cluster holding it is no longer Active — and it is still inside the
+    // Five days on, two Articles over a five-day span is under the threshold, so
+    // the Cluster holding them is no longer Active — and it is still inside the
     // window, which is the case a derived answer would have had to go looking for.
     const later = new Date(NOW.getTime() + 5 * 24 * HOUR);
     await h.service.formClustersForTopic('topic-1', later);
@@ -694,13 +788,18 @@ describe('ClusterFormationService', () => {
 
   it('brings a Story back out of Retired when it is covered again', async () => {
     const h = await buildHarness();
+    await followedBy(h, 'src-other', 'src-third');
     await givenStory(h, {
       storyId: 'story-acme',
       entities: ['acme', 'foo'],
       body: BODY.acme,
       hoursAgo: 2,
+      syndicatedFrom: 'src-other',
     });
-    const later = new Date(NOW.getTime() + 5 * 24 * HOUR);
+    // Two days later the two Articles are spread over more than a day and a
+    // third, and the Cluster has stopped being Active, so the Story is Retired
+    // rather than merely quiet.
+    const later = new Date(NOW.getTime() + 2 * 24 * HOUR);
     await h.service.formClustersForTopic('topic-1');
     await h.service.formClustersForTopic('topic-1', later);
     expect((await h.storyRepo.getById('story-acme' as StoryId))?.state).toBe('archive');
@@ -714,6 +813,7 @@ describe('ClusterFormationService', () => {
       body: BODY.acmeFollowUp,
       hoursAgo: 0,
       now: later,
+      syndicatedFrom: 'src-third',
     });
     const clusters = await h.service.formClustersForTopic('topic-1', later);
 

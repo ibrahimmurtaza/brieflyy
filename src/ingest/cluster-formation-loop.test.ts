@@ -15,6 +15,10 @@ const POLL_AT = new Date('2026-09-02T12:00:00Z');
  * BrandX. Two Sources and two stories is the smallest shape that shows both
  * that unrelated stories split into separate Clusters and that a Cluster's
  * Source list is the union of the Sources its Articles came from.
+ *
+ * Each story is carried twice — by two Articles from the same outlet, which the
+ * dedup folds into one Story — because a Cluster holding a single Article is not
+ * Active however recently it arrived, and a brief reads Active Clusters only.
  */
 const ACME_BODY =
   'Acme Corp today unveiled a new AI product called Foo. Analysts said the launch changes the landscape for enterprise customers.';
@@ -48,6 +52,13 @@ const FEEDS: Readonly<Record<string, RawFeed>> = {
         title: 'BrandX Inc acquires TinyCo',
         body: BRANDX_BODY,
         publishedAt: new Date('2026-09-02T10:40:00Z'),
+      },
+      {
+        externalId: 'b-b2',
+        url: 'https://www.bbc.co.uk/news/brandx-2',
+        title: 'BrandX Inc buys TinyCo',
+        body: BRANDX_BODY,
+        publishedAt: new Date('2026-09-02T10:50:00Z'),
       },
     ],
   },
@@ -93,9 +104,9 @@ describe('a Topic filling with Clusters from one ingest cycle', () => {
     const resp = await tick(h);
     expect(resp.statusCode).toBe(200);
 
-    // Three Articles across two Sources, deduped into two Stories, grouped into
+    // Four Articles across two Sources, deduped into two Stories, grouped into
     // two Clusters — with no step between the tick and the Clusters.
-    expect(h.count('articles')).toBe(3);
+    expect(h.count('articles')).toBe(4);
     expect(h.count('stories')).toBe(2);
     expect(h.count('clusters')).toBe(2);
     expect(h.count('cluster_stories')).toBe(2);
@@ -137,16 +148,17 @@ describe('a Topic filling with Clusters from one ingest cycle', () => {
     expect(filtered.body).not.toContain('BrandX Inc announced today');
   });
 
-  it('gives every Cluster a velocity of Stories per unit time, not a whole number', async () => {
+  it('rates each Cluster by the Articles it holds, over the day-long floor', async () => {
     await tick(h);
 
     const clusters = rows<{ velocity: number; state: string }>(h,
       `SELECT velocity, state FROM clusters`,
     );
     for (const cluster of clusters) {
-      // One Story, first seen two hours before the cycle finished, so the rate
-      // is the day-long floor rather than the count of one.
-      expect(cluster.velocity).toBeCloseTo(1, 6);
+      // One Story, two Articles, both first seen two hours before the cycle
+      // finished, so the rate is the day-long floor over two Articles rather than
+      // a count of one.
+      expect(cluster.velocity).toBeCloseTo(2, 6);
       expect(cluster.state).toBe('active');
     }
   });

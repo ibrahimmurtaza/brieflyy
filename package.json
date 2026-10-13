@@ -24,7 +24,8 @@
     "db:push": "drizzle-kit push",
     "ingest:check-feeds": "tsx src/ingest/check-feeds.ts",
     "cluster:benchmark": "tsx src/benchmark/run-cluster-benchmark.ts",
-    "cluster:sweep": "tsx scripts/cluster-sweep.ts"
+    "cluster:sweep": "tsx scripts/cluster-sweep.ts",
+    "cluster:velocity": "tsx scripts/cluster-velocity.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.0",

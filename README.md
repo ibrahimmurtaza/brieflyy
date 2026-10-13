@@ -73,6 +73,7 @@ pnpm db:push             # drizzle's own diff; drops the Archive index. See belo
 pnpm ingest:check-feeds  # poll every registry feed live; non-zero if one is not ingestible
 pnpm cluster:benchmark   # score Cluster grouping against the labelled pairs, over DATABASE_URL
 pnpm cluster:sweep       # the same corpus at every pair of floors on a grid, for the frontier
+pnpm cluster:velocity    # the Articles-a-day distribution the Active threshold is read from
 ```
 
 `pnpm db:migrate` is the command that applies DDL, and it is the one the "Changing
@@ -121,6 +122,16 @@ the two frontiers compared. The grid is wider than the shipped floors on purpose
 sweep that stopped at the shipped answer could not disagree with it. It reads no
 `DATABASE_URL` fallback for the same reason the benchmark is not in `pnpm verify` — the
 frontier is a claim about a real corpus.
+
+`pnpm cluster:velocity` measures the other number a Cluster carries rather than the rule
+that produces it: the Articles-a-day velocity that decides whether a Cluster is Active at
+all, and so whether a BriefPlan can select it. It forms every live Topic's Clusters with
+the function `ClusterFormationService` calls — `clusterVelocity`, exported for the same
+reason `groundingByStoryInScope` is — and prints the distribution that velocity takes
+over the corpus: a histogram of Articles a day, the exact values underneath it, and one
+row per candidate threshold saying how many Clusters and how many Stories it would leave
+Active. `docs/cluster-velocity-baseline.md` records the measurement and what the shipped
+number rests on.
 
 It also prints the numbers that bound what grouping can do, rather than leaving
 them to be discovered by disappointment. Two **ceilings**, each labelled with the
@@ -478,8 +489,8 @@ shape change needs one of:
     before the send rather than a receipt for one.
   - A column whose declared type changed goes in the entry's `types` map, for
     the same reason: SQLite cannot alter a column in place. `clusters.velocity`
-    is the case that needed it — velocity became a Stories-per-day rate, and an
-    `INTEGER` column truncates every fraction of one.
+    is the case that needed it — velocity became a rate rather than a count, and
+    an `INTEGER` column truncates every fraction of one.
   - A column the old table does not have at all and that cannot simply default
     to nothing goes in `backfill`, as the SQL that produces it from the rows
     already stored — `magic_links.email` is worked out from the account the old
@@ -647,6 +658,7 @@ purpose, and each is reached by something other than a request:
 | `src/ingest/check-feeds.ts` | `pnpm ingest:check-feeds` |
 | `src/benchmark/` | `pnpm cluster:benchmark`, and its scoring suite |
 | `scripts/cluster-sweep.ts` | `pnpm cluster:sweep` |
+| `scripts/cluster-velocity.ts` | `pnpm cluster:velocity` |
 | `src/ingest/test-constants.ts` | the ingest suites |
 | `src/testing/`, `src/app-wiring.ts` | the suites |
 
