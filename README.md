@@ -74,6 +74,7 @@ pnpm ingest:check-feeds  # poll every registry feed live; non-zero if one is not
 pnpm cluster:benchmark   # score Cluster grouping against the labelled pairs, over DATABASE_URL
 pnpm cluster:sweep       # the same corpus at every pair of floors on a grid, for the frontier
 pnpm cluster:velocity    # the Articles-a-day distribution the Active threshold is read from
+pnpm cluster:summary     # how much of a Cluster's bullets restate the Cluster above them
 ```
 
 `pnpm db:migrate` is the command that applies DDL, and it is the one the "Changing
@@ -155,6 +156,23 @@ measurement rather than an assertion, and reading across the floors against each
 other says which of the two is doing the bounding. The shipped pair itself is the
 headline `largest` line rather than one of them.
 `docs/adr/0030` records both ceilings and which of them the signature moves.
+
+`pnpm cluster:summary` measures the third number a Cluster carries: the statements its
+bullets are drawn from, and whether any of them say what the Cluster already shows.
+Bullet selection falls back to an Article's headline and a Cluster's title *is* its
+representative Article's headline, so an Article that was only a headline offered the
+Cluster its own name as a bullet — the line sitting directly above it. The headline is
+excluded now, the way the one-liner already was, and a Cluster with nothing left to
+quote carries fewer bullets rather than a repeated one. The command draws each
+Cluster's summary through `clusterSummaryOf`, the function `ClusterFormationService`
+calls, and draws the counterfactual — the same draw with the title left out of the
+exclusions — through `bulletsFrom` directly. On the corpus recorded in
+`docs/cluster-summary-baseline.md`, 501 of 748 bullets restated their Cluster's title
+before, and the 250 that remain do not, running the shipped rule; the same report
+prices the change at 470 of 726 Clusters carrying no bullets at all. A report reading
+its own copy of the rule would carry on printing a clean number the day the rule
+changed and nobody changed the report. It is not in `pnpm verify` for the same reason
+`pnpm cluster:benchmark` is not: the numbers are a claim about a real corpus.
 
 `pnpm typecheck` covers `src/`, which is where the unit tests live, and not
 `tests/e2e/`: `tsconfig.json` includes only `src/**/*.ts`, and Playwright compiles
@@ -659,6 +677,7 @@ purpose, and each is reached by something other than a request:
 | `src/benchmark/` | `pnpm cluster:benchmark`, and its scoring suite |
 | `scripts/cluster-sweep.ts` | `pnpm cluster:sweep` |
 | `scripts/cluster-velocity.ts` | `pnpm cluster:velocity` |
+| `scripts/cluster-summary.ts` | `pnpm cluster:summary` |
 | `src/ingest/test-constants.ts` | the ingest suites |
 | `src/testing/`, `src/app-wiring.ts` | the suites |
 

@@ -55,8 +55,14 @@ export const CLUSTER_ACTIVE_VELOCITY_THRESHOLD = 1.5;
  */
 const MIN_VELOCITY_SPAN_DAYS = 1;
 
-/** How many statements a Cluster's bullets carry. */
-const MAX_BULLET_POINTS = 3;
+/**
+ * How many statements a Cluster's bullets carry.
+ *
+ * Exported for the same reason `clusterVelocity` is: the summary measurement asks
+ * what a Cluster is given rather than what it spends, and a report that read the
+ * number off a copy of it would be measuring the copy.
+ */
+export const MAX_BULLET_POINTS = 3;
 
 export interface ClusterFormationReport {
   /** How many Topics were formed. */
@@ -256,16 +262,7 @@ export class ClusterFormationService {
   ): Promise<Cluster> {
     const perStory = await this.inScopeArticlesByStory(topic, stories);
     const articles: Article[] = perStory.flat();
-    const ranked = rankArticles(articles);
-    const representative = ranked[0];
-
-    const oneLiner = representative ? oneLinerFrom(representative) : '';
-    const title = representative?.title.trim() ?? '';
-    const bulletPoints = bulletsFrom(
-      ranked,
-      MAX_BULLET_POINTS,
-      oneLiner,
-    );
+    const summary = clusterSummaryOf(rankArticles(articles));
     const sourceIds = [
       ...new Set(articles.map((a) => a.sourceId).filter((id) => id.length > 0)),
     ].sort();
@@ -274,9 +271,9 @@ export class ClusterFormationService {
     return {
       id,
       topicId: topic.id,
-      title,
-      summary: oneLiner,
-      bulletPoints,
+      title: summary.title,
+      summary: summary.oneLiner,
+      bulletPoints: summary.bulletPoints,
       createdAt: now,
       lastSeenAt: mostRecent(stories).lastSeenAt,
       articleCount: articles.length,
@@ -369,8 +366,13 @@ export function measuredOverSpanFloor(stories: readonly Story[], now: Date): boo
  * whole is actually about rather than whatever happened to be written first.
  * Recency breaks a tie, because between two equally central Articles the newer
  * one has the more complete account.
+ *
+ * Exported for the same reason `clusterVelocity` is, and because the order is half
+ * of what a Cluster summary is: the representative is what it is titled by and the
+ * order is the order its bullets are drawn in, so a measurement of the summary has
+ * to read this rather than re-derive a second order and report on it.
  */
-function rankArticles(articles: readonly Article[]): readonly Article[] {
+export function rankArticles(articles: readonly Article[]): readonly Article[] {
   const entityIdsByArticle = articles.map(
     (a) => new Set(a.entities.map((e) => e.id)),
   );
@@ -389,6 +391,37 @@ function rankArticles(articles: readonly Article[]): readonly Article[] {
         a.index - b.index,
     )
     .map((entry) => entry.article);
+}
+
+export interface ClusterSummaryText {
+  /** The Cluster's headline: its representative Article's own title. */
+  readonly title: string;
+  /** The line the bullets sit under: the representative Article's first statement. */
+  readonly oneLiner: string;
+  /** The statements below it, none of which repeats either of the two. */
+  readonly bulletPoints: readonly string[];
+}
+
+/**
+ * What a Cluster is shown with, read off its Articles in ranked order.
+ *
+ * One place, because the three lines are not independent: the title is the
+ * representative Article's headline and the one-liner is a sentence off the same
+ * Article, so a rule that excluded the one-liner from the bullets and not the title
+ * would put the title straight back in through the headline fallback. Built here
+ * rather than inline in `finalizeCluster` so the summary measurement runs this
+ * rather than a second copy of it — a report reading its own copy would carry on
+ * printing a clean number the day the rule changed and nobody changed it.
+ */
+export function clusterSummaryOf(ranked: readonly Article[]): ClusterSummaryText {
+  const representative = ranked[0];
+  const oneLiner = representative ? oneLinerFrom(representative) : '';
+  const title = representative?.title.trim() ?? '';
+  return {
+    title,
+    oneLiner,
+    bulletPoints: bulletsFrom(ranked, MAX_BULLET_POINTS, [oneLiner, title]),
+  };
 }
 
 function mostRecent(stories: readonly Story[]): Story {

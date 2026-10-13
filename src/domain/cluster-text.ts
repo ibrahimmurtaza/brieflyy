@@ -61,14 +61,30 @@ export function oneLinerFrom(article: Article): string {
  * caller decides which Articles are the "top" ones. An Article contributes
  * nothing if every statement it has is already on the list, because a Cluster is
  * several Articles saying the same thing and repeating it reads as padding.
+ *
+ * `shown` is the text the Cluster already carries above the bullets — its title
+ * and its one-liner — and nothing drawn from it becomes a bullet. The headline is
+ * the last thing an Article has to offer, so an Article that is only a headline
+ * offers the Cluster's own title: a bullet restating the line a User has just
+ * read takes a slot a statement nobody has read yet could have filled, and it is
+ * the slot that decides what else the Cluster says. A Cluster with nothing left
+ * once the exclusions are taken carries fewer bullets rather than a repeated
+ * one, which is the cost stated rather than discovered on a thin Cluster.
+ *
+ * Compared normalised, the same way the de-duplication in the loop below compares
+ * two Articles' statements, so a headline an outlet shouted or padded with spaces
+ * is excluded by the same rule a clean one is.
  */
 export function bulletsFrom(
   articles: readonly Article[],
   limit: number,
-  exclude?: string,
+  shown: readonly string[] = [],
 ): readonly string[] {
   const seen = new Set<string>();
-  if (exclude) seen.add(normalize(exclude));
+  for (const text of shown) {
+    const key = normalize(text);
+    if (key.length > 0) seen.add(key);
+  }
   const out: string[] = [];
   for (const article of articles) {
     if (out.length >= limit) break;
@@ -94,6 +110,21 @@ function statementsOf(article: Article): readonly string[] {
   return title.length === 0
     ? extractSentences(article.body)
     : [...extractSentences(article.body), title];
+}
+
+/**
+ * Whether a statement says what one of `shown` already says.
+ *
+ * The same question `bulletsFrom` asks of every candidate, answered the same way
+ * — casefolded, whitespace-collapsed, trimmed — and exposed rather than left
+ * private because "a bullet restating the headline above it" is a claim about a
+ * corpus and a measurement of it cannot be written without it. Reading the answer
+ * out of a copy of the comparison would be a second reading, and one free to
+ * disagree with the rule it is measuring.
+ */
+export function restates(statement: string, shown: readonly string[]): boolean {
+  const key = normalize(statement);
+  return shown.some((text) => normalize(text) === key);
 }
 
 /**

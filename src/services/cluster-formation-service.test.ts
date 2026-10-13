@@ -512,9 +512,14 @@ describe('ClusterFormationService', () => {
     const expectedBullet = quoted.find((s) => s !== cluster?.summary);
     expect(cluster?.bulletPoints).toContain(expectedBullet);
     expect(cluster?.bulletPoints).not.toContain(cluster?.summary);
+    // And nothing restates the headline the Cluster is named by either, which
+    // is what the other Article's headline would otherwise become: the bullets
+    // fall back to a title only when the body has no statement, and this
+    // representative has a body.
+    expect(cluster?.bulletPoints).not.toContain(cluster?.title);
   });
 
-  it('still bullets a Cluster whose only Article has one sentence', async () => {
+  it('gives a Cluster no bullets rather than repeating the headline above them', async () => {
     const h = await buildHarness();
     await givenStory(h, {
       storyId: 'story-acme',
@@ -526,13 +531,14 @@ describe('ClusterFormationService', () => {
 
     const [cluster] = await h.service.formClustersForTopic('topic-1');
 
-    // The one-liner takes the body's only sentence, so the bullet has to come
-    // from the Article's title. An empty list would leave the thinnest Cluster
-    // there is looking like it had nothing behind it.
+    // The thinnest Cluster there is: one Article, whose only sentence is the
+    // one-liner and whose headline is the Cluster's title. What is left to
+    // quote is what the User has just read, so the Cluster carries none. Fewer
+    // bullets than the limit is the cost; a bullet restating the headline is
+    // what it buys.
     expect(cluster?.summary).toBe('Acme Corp unveiled an AI product called Foo in Seattle.');
-    expect(cluster?.bulletPoints).toEqual([
-      'Acme Corp unveils Foo at a conference in Seattle.',
-    ]);
+    expect(cluster?.title).toBe('Acme Corp unveils Foo at a conference in Seattle.');
+    expect(cluster?.bulletPoints).toEqual([]);
   });
 
   it('lists every Source its Articles came from', async () => {
