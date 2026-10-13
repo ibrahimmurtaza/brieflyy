@@ -709,6 +709,105 @@ describe('IngestScheduler', () => {
     ).not.toBeNull();
   });
 
+  it('joins a cycle already running rather than starting a second one', async () => {
+    const { scheduler, topicRepo, userRepo, setFetcher } = await buildHarness();
+    await insertTopicWithSources(topicRepo, userRepo, {
+      id: 't',
+      userId: 'u',
+      sourceIds: ['reuters'],
+    });
+
+    // Park the cycle inside the feed, so the second tick lands while the first is
+    // provably still in flight rather than after it.
+    const fetchGate: { release: (() => void) | null } = { release: null };
+    let fetches = 0;
+    setFetcher({
+      async fetch() {
+        fetches++;
+        await new Promise<void>((resolve) => {
+          fetchGate.release = resolve;
+        });
+        return { entries: [] };
+      },
+    });
+
+    const first = scheduler.tick();
+    await new Promise((r) => setImmediate(r));
+    const second = scheduler.tick();
+
+    fetchGate.release!();
+    const [a, b] = await Promise.all([first, second]);
+
+    // One poll and one cycle. Two overlapping cycles would each have read the
+    // backoffs into memory before either wrote them back, so the Source would be
+    // polled against a nextAttemptAt neither had seen.
+    expect(fetches).toBe(1);
+    expect(a.cycleId).toBe(b.cycleId);
+  });
+
+  it('runs a fresh cycle after the one in flight failed', async () => {
+    let afterCycles = 0;
+    const { scheduler, topicRepo, userRepo } = await buildHarness({
+      afterCycle: async () => {
+        afterCycles++;
+        if (afterCycles === 1) throw new Error('cluster formation failed');
+      },
+    });
+    await insertTopicWithSources(topicRepo, userRepo, {
+      id: 't',
+      userId: 'u',
+      sourceIds: ['reuters'],
+    });
+
+    await expect(scheduler.tick()).rejects.toThrow('cluster formation failed');
+
+    // The guard has to be cleared on a rejection too. Left set, every later
+    // caller — the next tick from the loop, a sign-in, the ingest route — is
+    // handed the rejection of a cycle that already ended.
+    const report = await scheduler.tick();
+    expect(report.sources.length).toBeGreaterThan(0);
+    expect(afterCycles).toBe(2);
+  });
+
+  it('waits for a cycle started outside the loop before stop() resolves', async () => {
+    const { scheduler, topicRepo, userRepo, setFetcher } = await buildHarness();
+    await insertTopicWithSources(topicRepo, userRepo, {
+      id: 't',
+      userId: 'u',
+      sourceIds: ['reuters'],
+    });
+
+    // A sign-in or the ingest route starts this one, so the loop has never heard
+    // of it and has nothing to wait for.
+    const fetchGate: { release: (() => void) | null } = { release: null };
+    setFetcher({
+      async fetch() {
+        await new Promise<void>((resolve) => {
+          fetchGate.release = resolve;
+        });
+        return { entries: [] };
+      },
+    });
+
+    const outside = scheduler.tick();
+    await new Promise((r) => setImmediate(r));
+    expect(fetchGate.release, 'the cycle never reached the feed').not.toBeNull();
+
+    let stopResolved = false;
+    void scheduler.stop().then(() => {
+      stopResolved = true;
+    });
+    await new Promise((r) => setImmediate(r));
+    expect(stopResolved, 'stop() returned while a cycle was still running').toBe(
+      false,
+    );
+
+    fetchGate.release!();
+    await outside;
+    await scheduler.stop();
+    expect(stopResolved).toBe(true);
+  });
+
   it('does not let a Source no live Topic follows hold the loop awake', async () => {
     // The registry outlives the Topics naming its Sources. A Source left on only
     // removed Topics is never polled, so the date on its row is never moved — and

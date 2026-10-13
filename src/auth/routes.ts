@@ -28,6 +28,22 @@ export interface AuthRoutesOptions {
   readonly cookieSecure: boolean;
   readonly appBaseUrl: string;
   readonly magicLinkRateLimiter: FixedWindowRateLimiter;
+  /**
+   * Runs after a sign-in has been established, once the session cookie is set.
+   *
+   * A sign-in is the point at which a Reader comes back to a brief that was
+   * written without them, so it is where ingest belongs: a cycle run here picks
+   * up what has appeared since the last one. It is given the User rather than
+   * asked to look, because the route already resolved them and nothing else in
+   * this file knows how.
+   *
+   * Awaited, but never allowed to fail the sign-in. The session is established
+   * by the time this is called, and a Reader whose feed cannot be refreshed at
+   * this exact moment still has a session and a last brief; answering 500
+   * because a feed was slow would take both away for a problem neither is
+   * responsible for.
+   */
+  readonly onSignedIn?: (auth: CurrentAuth) => Promise<void> | void;
 }
 
 function readSessionCookie(req: FastifyRequest): string {
@@ -175,6 +191,7 @@ export async function registerAuthRoutes(
         cookieSecure: opts.cookieSecure,
         sessionTtlMs: opts.sessionTtlMs,
       });
+      await notifySignedIn(opts.onSignedIn, outcome);
       reply
         .code(302)
         .header('location', postSigninPath(outcome.user.onboardingState))
@@ -266,12 +283,38 @@ export async function registerAuthRoutes(
         cookieSecure: opts.cookieSecure,
         sessionTtlMs: opts.sessionTtlMs,
       });
+      await notifySignedIn(opts.onSignedIn, outcome);
       return reply
         .code(302)
         .header('location', postSigninPath(outcome.user.onboardingState))
         .send();
     },
   );
+}
+
+/**
+ * Run the sign-in side effect, if there is one, without letting it fail.
+ *
+ * The two doors are the only two places a sign-in completes, so this is where
+ * they meet: a hook wired for one door and forgotten on the other would ingest
+ * on magic-link sign-ins and not on Google ones, which reads as intermittent.
+ * Both outcomes arrive here already carrying the session the User is being
+ * signed in to, which is what the hook is handed.
+ */
+async function notifySignedIn(
+  onSignedIn: ((auth: CurrentAuth) => Promise<void> | void) | undefined,
+  outcome: CurrentAuth,
+): Promise<void> {
+  if (onSignedIn === undefined) return;
+  try {
+    await onSignedIn(outcome);
+  } catch (error) {
+    // Logged rather than raised: the redirect has already been decided, and the
+    // cookie is already set. A failed refresh costs a Reader one cycle of
+    // freshness, which the interval loop will make up; a 500 costs them the
+    // sign-in they just completed.
+    console.error('[auth] sign-in side effect failed:', error);
+  }
 }
 
 function refuseGoogle(reply: FastifyReply): FastifyReply {
