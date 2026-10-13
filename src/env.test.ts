@@ -104,7 +104,7 @@ describe('loadServerConfig', () => {
     expect(config.resendApiKey).toBeUndefined();
     expect(config.oauthProvider).toBeUndefined();
     expect(config.ingestEnabled).toBe(true);
-    expect(config.ingestIntervalMs).toBe(30 * 60 * 1000);
+    expect(config.ingestIntervalMs).toBe(6 * 60 * 60 * 1000);
     expect(config.ingestBackoffBaseMs).toBe(60 * 1000);
     expect(config.ingestBackoffMaxMs).toBe(30 * 60 * 1000);
     expect(config.devToolsEnabled).toBe(true);

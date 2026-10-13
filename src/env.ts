@@ -230,7 +230,7 @@ export function loadServerConfig(env: EnvSource): ServerConfig {
     googleOAuthClientId: readOptionalString(env, 'GOOGLE_OAUTH_CLIENT_ID'),
     googleOAuthClientSecret: readOptionalString(env, 'GOOGLE_OAUTH_CLIENT_SECRET'),
     ingestEnabled: readBool(env, 'INGEST_ENABLED', true),
-    ingestIntervalMs: readInt(env, 'INGEST_INTERVAL_MS', 30 * 60 * 1000),
+    ingestIntervalMs: readInt(env, 'INGEST_INTERVAL_MS', 6 * 60 * 60 * 1000),
     ingestBackoffBaseMs: readInt(env, 'INGEST_BACKOFF_BASE_MS', 60 * 1000),
     ingestBackoffMaxMs: readInt(env, 'INGEST_BACKOFF_MAX_MS', 30 * 60 * 1000),
     briefsEnabled: readBool(env, 'BRIEFS_ENABLED', true),

@@ -10,6 +10,18 @@ import type { TopicRepo } from '../repos/topic-repo.js';
 export interface TopicSettingsServiceDeps {
   readonly topicRepo: TopicRepo;
   readonly sourceRepo: SourceRepo;
+  /**
+   * Runs once a Source has been attached to a Topic.
+   *
+   * The same reason onboarding has one: a cycle builds its work from the Sources
+   * live Topics name, so a Source nobody has polled is a Source this Topic cannot
+   * show anything from. Attaching one is the moment that stops being true.
+   *
+   * Fire-and-forget by contract, and a throw is logged rather than raised — the
+   * Source is attached either way, and a User who asked for a new one should not
+   * be handed an error page for a feed that is merely slow.
+   */
+  readonly onSourceAttached?: () => void | Promise<void>;
 }
 
 /**
@@ -90,7 +102,24 @@ export class TopicSettingsService {
       return { status: 'invalid', reason: 'unknown_source' };
     }
     await this.deps.topicRepo.addSource(topic.id, input.sourceId);
+    await this.notifySourceAttached();
     return { status: 'ok' };
+  }
+
+  /**
+   * Tell the caller a fresh Source is worth a cycle, without letting it fail the add.
+   *
+   * Same contract as the picker's: the caller has already committed, so the worst a
+   * slow or failing refresh can do is leave the new Source quiet until the next
+   * cycle, and the worst a raising one could do is lose the User's request.
+   */
+  private async notifySourceAttached(): Promise<void> {
+    if (this.deps.onSourceAttached === undefined) return;
+    try {
+      await this.deps.onSourceAttached();
+    } catch (error) {
+      console.error('[topic-settings] post-attach refresh failed:', error);
+    }
   }
 
   /** Stop following one Source of this Topic, and only of this Topic. */
