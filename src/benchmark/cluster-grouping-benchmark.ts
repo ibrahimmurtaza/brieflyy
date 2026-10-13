@@ -16,7 +16,11 @@
 
 import type { EntityId, StoryId, TopicId } from '../domain/types.js';
 import {
+  SHIPPED_MERGE_GATE,
+  clearsMergeGate,
   describeThresholds,
+  inverseDocumentFrequencies,
+  similarityBetween,
   type GroundedEntity,
   type GroundedStory,
   type MergeThresholds,
@@ -365,6 +369,193 @@ export function signatureMargins(input: {
       range('different-event', input.measured.differentEvent),
     ],
   };
+}
+
+/**
+ * One Topic's Stories and how each of them reads, which is the scope the rule
+ * compares within.
+ *
+ * `readings` and `storyIds` are joined by position, as they are everywhere the
+ * rule is fed: the rule reads a Story's Entities and its signature at one index
+ * and this reports which Story that index is, so a caller cannot hand the two
+ * halves of one Story's reading to two different Stories.
+ */
+export interface TopicScope {
+  readonly storyIds: readonly StoryId[];
+  readonly readings: readonly GroundedStory[];
+}
+
+/**
+ * Which half of the gate turns each labelled family away, at the given floors.
+ *
+ * The four buckets partition the families that could be weighed, and each is named
+ * for what a rule reading one signal alone would do with it rather than for the
+ * half that stopped it — which is what makes the off-diagonal pair answerable.
+ * `signatureAloneAdmits` is the same-event families the conjunction costs: those no
+ * function over Entities can reach and a signature floor would.
+ * `entityAloneAdmits` and `signatureAloneAdmits` together are what it buys on the
+ * negatives: the different-event families one half or the other would admit alone.
+ * Their sum is how many families could be weighed, which is the denominator a report
+ * needs and which nothing here has to be told.
+ */
+export interface GateRefusals {
+  /** Families clearing both floors, where the gate turns nothing away. */
+  readonly cleared: readonly ResolvedStoryPair[];
+  /** Families a signature floor alone admits and the conjunction refuses. */
+  readonly signatureAloneAdmits: readonly ResolvedStoryPair[];
+  /** Families an Entity floor alone admits and the conjunction refuses. */
+  readonly entityAloneAdmits: readonly ResolvedStoryPair[];
+  /** Families no floor on either signal admits. */
+  readonly neitherAdmits: readonly ResolvedStoryPair[];
+  /**
+   * Families no Topic holds both Stories for.
+   *
+   * Named rather than left out, because a family that could not be weighed is a
+   * gap in what the corpus can say and not a family the gate held apart.
+   */
+  readonly unshared: readonly string[];
+}
+
+/**
+ * Which half of the merge gate refuses each labelled family, at the given floors.
+ *
+ * This is the measurement a widening of the gate needs and the grouped numbers
+ * cannot give: `evaluateClusterGrouping` reports what the rule did, and what it
+ * did does not say which of the two floors was the reason. The gate reads both,
+ * so a pair it refuses is refused by one of them or the other, and the two cost
+ * opposite things — the Entity half refusing costs recall on families no
+ * similarity function over Entities can reach, and the signature half refusing
+ * buys precision on families Entities cannot separate.
+ *
+ * A family is judged in the Topic that comes nearest to admitting it, and the
+ * cosine is weighed by the Entity weights of *that* Topic's Stories, because the
+ * cosine is: the same two Stories are one event where the thing they share is
+ * rare and two where every Story shares it. Taking the best of them is also the
+ * only reading consistent with how a family's verdict is formed elsewhere — a
+ * Topic holding both Stories welds them and the family counts as welded, so the
+ * conjunction refuses a family exactly when no Topic admits it.
+ */
+export function gateRefusals(input: {
+  readonly pairs: readonly ResolvedStoryPair[];
+  readonly topics: readonly TopicScope[];
+  readonly thresholds: MergeThresholds;
+}): GateRefusals {
+  // Weights and index read once per Topic rather than once per family: the cosine
+  // is weighed by the rarity each Entity has across that Topic's Stories, so
+  // working it out needs the whole of that Topic and nothing of any other one.
+  const scopes = input.topics.map((topic) => ({
+    readings: topic.readings,
+    at: new Map(topic.storyIds.map((storyId, index) => [storyId, index] as const)),
+    weights: inverseDocumentFrequencies(topic.readings.map((reading) => reading.entities)),
+  }));
+
+  const cleared: ResolvedStoryPair[] = [];
+  const signatureAloneAdmits: ResolvedStoryPair[] = [];
+  const entityAloneAdmits: ResolvedStoryPair[] = [];
+  const neitherAdmits: ResolvedStoryPair[] = [];
+  const unshared: string[] = [];
+
+  for (const pair of input.pairs) {
+    let entity = -1;
+    let left: StorySignature | null = null;
+    let right: StorySignature | null = null;
+    for (const scope of scopes) {
+      const atLeft = scope.at.get(pair.leftStoryId);
+      const atRight = scope.at.get(pair.rightStoryId);
+      if (atLeft === undefined || atRight === undefined) continue;
+      entity = Math.max(
+        entity,
+        similarityBetween(
+          scope.readings[atLeft]!.entities,
+          scope.readings[atRight]!.entities,
+          scope.weights,
+        ),
+      );
+      // A Story carries one signature whatever Topic it is read in, so the first
+      // is taken and the rest of the loop is spent on the cosine.
+      left ??= scope.readings[atLeft]!.signature;
+      right ??= scope.readings[atRight]!.signature;
+    }
+    if (left === null || right === null) {
+      unshared.push(pair.name);
+      continue;
+    }
+
+    const signature = signatureSimilarity(left, right);
+    // The conjunction itself is asked of the rule rather than restated here, and
+    // the two halves are read off the floors beside it because a question with one
+    // answer cannot say which half gave it.
+    const bucket = clearsMergeGate({
+      entity,
+      signature,
+      thresholds: input.thresholds,
+      gate: SHIPPED_MERGE_GATE,
+    })
+      ? cleared
+      : signature >= input.thresholds.signature
+        ? signatureAloneAdmits
+        : entity >= input.thresholds.entity
+          ? entityAloneAdmits
+          : neitherAdmits;
+    bucket.push(pair);
+  }
+
+  return { cleared, signatureAloneAdmits, entityAloneAdmits, neitherAdmits, unshared };
+}
+
+/** One labelled set's refusals, as a row of the report beside its label. */
+export interface GateRefusalRow {
+  readonly label: string;
+  readonly refusals: GateRefusals;
+}
+
+/**
+ * The columns of {@link formatGateRefusals}, named for what each count is.
+ *
+ * The two middle ones are pairs the conjunction refuses and the wider gate would
+ * admit, so they are the price of each half in the same units and are read against
+ * each other rather than added up: the first is what the Entity half costs in
+ * recall and the second what the signature half refuses among the negatives.
+ */
+const REFUSAL_COLUMNS = ['both', 'signature-alone', 'entity-alone', 'neither', 'weighed'] as const;
+
+/**
+ * A fixed-width count of what each half of the gate turned away, one row per label.
+ *
+ * Read off the corpus rather than off the clock, so two runs diff, and printed here
+ * rather than in the sweep because it is a report and the sweep's own output has no
+ * suite. `weighed` is the sum of the four buckets rather than a count handed in:
+ * they partition the families a Topic holds both Stories for, and a family no Topic
+ * holds both Stories for is in none of them.
+ */
+export function formatGateRefusals(
+  rows: readonly GateRefusalRow[],
+  context: { readonly thresholds: MergeThresholds },
+): string {
+  const width = Math.max(
+    'label'.length,
+    ...rows.map((row) => row.label.length),
+    ...REFUSAL_COLUMNS.map((column) => column.length),
+  );
+  const line = (label: string, cells: readonly string[]): string =>
+    `  ${label.padEnd(width)}${cells.map((cell) => cell.padStart(width)).join(' ')}\n`;
+
+  return [
+    `\ngate refusals at ${describeThresholds(context.thresholds)}\n`,
+    line('label', [...REFUSAL_COLUMNS]),
+    ...rows.map(({ label, refusals }) => {
+      const buckets = [
+        refusals.cleared.length,
+        refusals.signatureAloneAdmits.length,
+        refusals.entityAloneAdmits.length,
+        refusals.neitherAdmits.length,
+      ];
+      return line(
+        label,
+        [...buckets, buckets.reduce((total, count) => total + count, 0)].map(String),
+      );
+    }),
+  ].join('');
 }
 
 export interface ClusterGroupingReport {

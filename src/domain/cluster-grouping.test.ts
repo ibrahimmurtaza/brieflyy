@@ -3,9 +3,11 @@ import { describe, expect, it } from 'vitest';
 import {
   ENTITY_KIND_WEIGHTS,
   ENTITY_SIMILARITY_FLOOR,
+  SHIPPED_MERGE_GATE,
   SHIPPED_MERGE_THRESHOLD,
   SHIPPED_MERGE_THRESHOLDS,
   SIGNATURE_SIMILARITY_FLOOR,
+  clearsMergeGate,
   describeThresholds,
   groupIntoClusters,
   inverseDocumentFrequencies,
@@ -13,6 +15,7 @@ import {
   similarityBetween,
   type GroundedEntity,
   type GroundedStory,
+  type MergeGate,
   type MergeThresholds,
 } from './cluster-grouping.js';
 import { EMPTY_SIGNATURE, type StorySignature } from './story-signature.js';
@@ -41,27 +44,35 @@ function text(...words: string[]): StorySignature {
   return { words, phrases: [] };
 }
 
-/** Group these readings, reported as the indexes each Cluster holds. */
+/**
+ * Group these readings, reported as the indexes each Cluster holds.
+ *
+ * The floors and the gate that combines them stay separate parameters, because
+ * they are separate decisions in the rule and a spread of one into the place of
+ * the other reads as the other's move.
+ */
 function groupsOf(
   readings: readonly GroundedStory[],
   thresholds?: MergeThresholds,
+  gate?: MergeGate,
 ): readonly (readonly number[])[] {
   const stories = readings.map((_reading, index) => index);
-  return groupIntoClusters(
-    stories,
-    (story) => readings[story]!,
-    thresholds === undefined ? {} : { thresholds },
-  );
+  return groupIntoClusters(stories, (story) => readings[story]!, {
+    ...(thresholds === undefined ? {} : { thresholds }),
+    ...(gate === undefined ? {} : { gate }),
+  });
 }
 
 /** Group Stories carrying these Entity sets, every one of them saying the same. */
 function groupsOfEntities(
   entitySets: readonly (readonly GroundedEntity[])[],
   thresholds?: MergeThresholds,
+  gate?: MergeGate,
 ): readonly (readonly number[])[] {
   return groupsOf(
     entitySets.map((entities) => ({ entities, signature: SAME_TEXT })),
     thresholds,
+    gate,
   );
 }
 
@@ -69,8 +80,9 @@ function groupsOfEntities(
 function largestClusterOf(
   entitySets: readonly (readonly GroundedEntity[])[],
   thresholds?: MergeThresholds,
+  gate?: MergeGate,
 ): number {
-  return Math.max(0, ...groupsOfEntities(entitySets, thresholds).map((g) => g.length));
+  return Math.max(0, ...groupsOfEntities(entitySets, thresholds, gate).map((g) => g.length));
 }
 
 /**
@@ -403,6 +415,113 @@ describe('groupIntoClusters', () => {
     expect(
       groupsOf(readings, { ...SHIPPED_MERGE_THRESHOLD, entity: 0 }),
     ).not.toContainEqual([0, 1]);
+  });
+});
+
+describe('the gate a merge has to clear', () => {
+  /**
+   * Two Stories sharing no Entity at all, but plainly about the same thing as
+   * text — the shape the six same-event families the baseline records as
+   * unreachable by any function over Entities are in.
+   */
+  function unreadTogether(): readonly GroundedStory[] {
+    return [
+      { entities: [entity()], signature: text('acme', 'foo', 'launches') },
+      { entities: [entity()], signature: text('acme', 'foo', 'launch') },
+    ];
+  }
+
+  it('gates on a conjunction by default, which is what the rule ships', () => {
+    expect(SHIPPED_MERGE_GATE).toBe('both');
+
+    // Read as the default rather than as the absence of the wider gate, because
+    // "no gate named" and "the gate the rule ships" are the same rule today and a
+    // future reader should not have to know that to trust the first one.
+    expect(groupsOf(unreadTogether())).not.toContainEqual([0, 1]);
+    expect(groupsOf(unreadTogether(), undefined, SHIPPED_MERGE_GATE)).toEqual(
+      groupsOf(unreadTogether()),
+    );
+  });
+
+  it('joins a pair the Entity floor alone refuses when the signature clears it', () => {
+    // The cosine between two Entity vectors sharing nothing is exactly zero, so
+    // this is the whole of what the widened gate is for: the same-event families
+    // `docs/cluster-grouping-baseline.md` says the Entity rule cannot reach.
+    expect(groupsOf(unreadTogether(), undefined, 'either')).toContainEqual([0, 1]);
+  });
+
+  it('still refuses a pair neither half clears, however wide the gate is', () => {
+    // Neither signal saying anything is not a low score on both of them, and a
+    // widened gate that waves it through is not a widened gate.
+    const readings = [
+      { entities: [entity()], signature: text('acme', 'foo', 'launches') },
+      { entities: [entity()], signature: text('ruling', 'overturns', 'appeal') },
+    ];
+
+    expect(groupsOf(readings, undefined, 'either')).not.toContainEqual([0, 1]);
+  });
+
+  it('holds a Story out of a widened-gate Cluster whose members do not read like it', () => {
+    // The first two merge on their Entities and their text alike. The third
+    // shares the Entities and not the text — which the conjunction would refuse on
+    // the second signal, and which the widened gate must still weigh against every
+    // member rather than against the pair being merged.
+    const shared = entity();
+    const other = entity();
+
+    const groups = groupsOf(
+      [
+        { entities: [shared], signature: text('acme', 'foo', 'launch') },
+        { entities: [shared], signature: text('acme', 'foo', 'launch') },
+        { entities: [shared, other], signature: text('ruling', 'overturns', 'appeal') },
+      ],
+      undefined,
+      'either',
+    );
+
+    expect(groups).toContainEqual([0, 1]);
+    expect(groups).toContainEqual([2]);
+  });
+
+  it('merges a Story carrying no signature on its Entities when the gate is widened', () => {
+    // Not a consequence the widened gate can dodge, and worth stating rather than
+    // discovering: reading nothing is still not evidence, but under `either` the
+    // Entity half is no longer waiting on the signature's permission.
+    const shared = entity();
+    const readings = [
+      { entities: [shared], signature: text('acme', 'foo', 'launch') },
+      { entities: [shared], signature: EMPTY_SIGNATURE },
+    ];
+
+    expect(groupsOf(readings)).not.toContainEqual([0, 1]);
+    expect(groupsOf(readings, undefined, 'either')).toContainEqual([0, 1]);
+  });
+});
+
+describe('clearsMergeGate', () => {
+  const over: MergeThresholds = { entity: 0.5, signature: 0.05 };
+
+  const clears = (entity: number, signature: number, gate: MergeGate): boolean =>
+    clearsMergeGate({ entity, signature, thresholds: over, gate });
+
+  it('clears on both halves or neither, under the gate the rule ships', () => {
+    // The predicate itself rather than the grouping, because two things read it —
+    // the rule deciding merges and the benchmark pricing them — and a measure that
+    // disagreed with the thing it measures would be pricing a rule nobody runs.
+    expect(clears(0.6, 0.06, 'both')).toBe(true);
+    expect(clears(0.6, 0.01, 'both')).toBe(false);
+    expect(clears(0.4, 0.06, 'both')).toBe(false);
+    expect(clears(0.4, 0.01, 'both')).toBe(false);
+  });
+
+  it('clears on one half alone only when the gate has been widened', () => {
+    expect(clears(0.6, 0.01, 'either')).toBe(true);
+    expect(clears(0.4, 0.06, 'either')).toBe(true);
+    expect(clears(0.4, 0.01, 'either')).toBe(false);
+  });
+
+  it('takes a score sitting exactly on a floor as clearing it, as the rule does', () => {
+    expect(clears(0.5, 0.05, 'both')).toBe(true);
   });
 });
 

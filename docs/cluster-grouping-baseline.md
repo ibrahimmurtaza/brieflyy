@@ -272,6 +272,104 @@ above the whole same-event range rather than below it — and still loses a fami
 of recall, because a union widens both sides of the comparison without widening
 their overlap.
 
+### What the conjunction costs, and what it buys
+
+The gate above is a conjunction — a pair merges only where the cosine *and* the
+signature clear their floors — and until now the two halves had never been priced
+against each other. The frontier shows what each floor does while the other sits
+still; it does not show what happens if a pair may qualify on **either** signal,
+which is the one reading that would reach the same-event families no function over
+Entities can join. `pnpm cluster:sweep` sweeps every cell twice to price it: once
+under the conjunction, once under the wider gate where either signal admits a pair
+on its own.
+
+Measured over 15 live Topics holding 1,757 Stories, window ending
+2026-10-12T19:38:02.384Z. This is a **different corpus from the one the rest of
+this file describes**, not a later reading of it, so none of the numbers above is
+re-measured by it: the shipped point here reads 41.4% / 71.4% against the
+baseline's 51.7% / 71.4% — the same precision by coincidence, ten points less
+recall. Two things changed it. The window is three days later, and it carries one
+Topic the development corpus did not have — a wide one following the fifteen
+Sources the labelled families need, over a fourteen-day window, added through
+`DrizzleTopicRepo` for exactly the reason the corpus was widened once before ("Every
+labelled pair is measurable, and that took widening the corpus"). That Topic holds
+1,510 Stories where the widest of the other fourteen holds 382, and it moves the
+Entity weights everything is scored against, which is where the ten points of
+recall went.
+
+What it buys is the denominator. Every one of the 78 labelled families is held by a
+live Topic on this corpus: 29 of 29 same-event and 49 of 49 different-event, none
+aged out and none out of scope, measured off Articles the corpus already held. The
+run this replaces could see fifteen and twenty.
+
+At the shipped floors:
+
+| gate | recall | precision | clusters | largest | singletons |
+| --- | --- | --- | --- | --- | --- |
+| **both** (shipped) | 41.4% | **71.4%** | 4631 | **5** | **93.3%** |
+| either | 86.2% | 34.7% | 2891 | 21 | 53.7% |
+
+**No widened cell is admissible, because none reaches the precision the rule
+ships.** The conjunction reads 71.4% at 0.45/0.04. The widened gate's best
+precision anywhere on the 48-cell grid is **49.0%**, at 0.50/0.08 — against 85.7%
+for the conjunction's own best. Its largest Cluster never falls below 9 anywhere on
+the grid against 5 at the shipped point, and its singleton share never climbs above
+83.5% against 93.3%. Every cell reaching the grid's widest recall of 86.2% sits at
+or below 34.7% precision with a largest Cluster of 21 or more.
+
+**There is one band where the wider gate reads better, and it is not in the part of
+the grid this rule sits in.** Read the two frontiers at equal recall. At 69.0% and
+65.5% recall the wider gate reaches 49.0% precision where the conjunction's best at
+that recall is 40.8% — up to eight points better. Below 62.1% recall the
+conjunction is strictly better everywhere, by six points at 62.1% and by twenty-odd
+lower down. Above 69.0% recall only the wider gate goes at all, and at 44.9%
+precision or below.
+
+That band sits at roughly 49% precision against the 71.4% this rule ships.
+ADR-0030 took recall *away* to get precision — "Precision above 71.4% is reachable
+… This ADR takes the recall" — and moving to 49% to buy back 17 points of recall in
+one band is that decision reversed rather than a better answer to it.
+
+**The conjunction refuses 28 same-event families and 23 different-event ones.**
+The sweep counts each labelled family by which half turned it away, at the shipped
+floors:
+
+| label | both clear | signature alone admits | Entity alone admits | neither admits | weighed |
+| --- | --- | --- | --- | --- | --- |
+| same-event | 14 | **14** | 0 | 1 | 29 |
+| different-event | 19 | 14 | **9** | 7 | 49 |
+
+The middle two columns are pairs the conjunction refuses and the wider gate would
+admit, so they are the price of each half in the same units.
+
+Read across: **fourteen of the twenty-nine same-event families clear the signature
+floor and not the Entity floor**, and none the other way round. Those are the
+families no similarity function over Entities can reach, and they are what a
+signature floor alone would join — half the recall set.
+
+Read down the other side: **nine of the forty-nine different-event families clear
+the cosine and not the signature floor.** Nine is every one of them — this corpus's
+Entity-only ceiling puts exactly nine of the 49 beyond any threshold at all, as
+Entity vectors that are identical and so score a cosine of exactly 1. The
+signature floor is what holds apart all nine, and nothing else in the rule reaches
+any of them. That is what ADR-0030 named the second floor for. The same floor also
+refuses fourteen on the cosine half's behalf.
+
+**What the all-pairs constraint does to both numbers.** The fourteen newly
+admissible same-event families produce thirteen more welded, 12 to 25 of 29. The
+twenty-three newly admissible different-event families produce eighteen more
+welded, 14 to 32 of 49. So the gate holds apart eighteen negatives to reach
+thirteen positives, and it holds them apart in the direction the application needs:
+a family welded is a Cluster somebody reads, and a family split is a Story that
+reads on its own.
+
+**Nothing groups differently.** `SHIPPED_MERGE_GATE` is `'both'`, and the widened
+gate is reachable only by naming it, so `pnpm cluster:benchmark`,
+`pnpm cluster:velocity` and `pnpm cluster:summary` all run the conjunction they
+ran before. The floors stay separately stated as well: `MergeThresholds` still
+carries the Entity floor and the signature floor apart, and how the two combine is
+a third statement beside them rather than a value either of them can be read as.
+
 ### What this does not reach
 
 **Precision is capped at 83.7% for a rule reading Entities, and the cap is
@@ -308,7 +406,19 @@ same-event families share no Entity at all — no similarity function over Entit
 joins them. Five of those six clear a signature floor of 0.04 anyway, so that
 ceiling belongs to Entity extraction rather than to this rule, but it does not
 belong to the application either. More than half of real event families still
-come back split, and which lever finally moves them is open rather than settled.
+come back split.
+
+**Which lever finally moves them was open; it is the Entity cosine, and not the
+gate.** The lever that reaches those families is the obvious one — let a pair
+qualify on either signal — and it has now been measured rather than left open,
+against the whole labelled set ("What the conjunction costs, and what it buys",
+above). Widening the gate reaches them: 86.2% recall against the shipped point's
+41.4%, which is past the 79.3% Entity-only ceiling the paragraph above names. It
+pays 36.7 points of precision for it, drops the singleton share from 93.3% to
+53.7%, and returns Clusters of twenty-one Stories where the shipped rule holds
+five. No widened cell anywhere on the grid reaches the precision the rule ships.
+The gate is kept as a conjunction, and what it costs — fourteen same-event
+families — is the cheaper of the two prices on the table.
 
 Ticket #118 asked for precision above 90% and quoted a baseline of 96.1%. The
 measured baseline was 36.7%, and #117 said on close that the quoted figure did not
