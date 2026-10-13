@@ -1,4 +1,5 @@
 import type { Clock } from '../domain/clock.js';
+import { assignClusterIds } from '../domain/cluster-identity.js';
 import {
   groupIntoClusters,
   sharedEntityCount,
@@ -129,6 +130,13 @@ export class ClusterFormationService {
    * a Story that has aged out of the window stops being counted. Anything left
    * over is archived, which is what stops a Topic's LivingBrief from filling up
    * with copies of Stories that have moved on.
+   *
+   * The one thing carried across a cycle is the Cluster's id, and the rule that
+   * carries it is `domain/cluster-identity.ts`: a group of Stories keeps the id of
+   * the Cluster it has most in common with, and everything else is new. So the
+   * Clusters a User has been reading — and given Feedback on — stay the same rows
+   * as Stories join them and age out of them, and the Archive does not accumulate
+   * a copy of every Cluster for every way its membership has ever moved.
    */
   private async formTopic(
     topic: Topic,
@@ -145,9 +153,16 @@ export class ClusterFormationService {
       windowStart,
     });
 
+    const groups = await this.groupStories(topic, stories);
+    const ids = assignClusterIds(
+      topic.id,
+      groups.map((group) => group.map((story) => story.id)),
+      await this.deps.clusterRepo.listHeldByTopicId(topic.id),
+    );
+
     const clusters: Cluster[] = [];
-    for (const group of await this.groupStories(topic, stories)) {
-      const cluster = await this.finalizeCluster(topic, group, now);
+    for (const [index, group] of groups.entries()) {
+      const cluster = await this.finalizeCluster(topic, group, ids[index]!, now);
       await this.deps.clusterRepo.insert(
         cluster,
         group.map((story) => story.id),
@@ -225,6 +240,7 @@ export class ClusterFormationService {
   private async finalizeCluster(
     topic: Topic,
     stories: readonly Story[],
+    id: ClusterId,
     now: Date,
   ): Promise<Cluster> {
     const perStory = await this.inScopeArticlesByStory(topic, stories);
@@ -245,7 +261,7 @@ export class ClusterFormationService {
     const velocity = clusterVelocity(stories, now);
 
     return {
-      id: clusterIdFor(topic.id, stories),
+      id,
       topicId: topic.id,
       title,
       summary: oneLiner,
@@ -340,23 +356,4 @@ function mostRecent(stories: readonly Story[]): Story {
       story.lastSeenAt.getTime() > latest.lastSeenAt.getTime() ? story : latest,
     stories[0]!,
   );
-}
-
-/**
- * A Cluster's id, derived from the Stories in it.
- *
- * Derived from membership rather than from the clock so that re-forming the
- * same Stories lands on the same Cluster and updates it. An id carrying the
- * window would make every cycle mint a fresh copy of every Cluster, and a
- * Topic's LivingBrief would fill with duplicates of the same news.
- *
- * The cost is that a Cluster which gains or loses a Story becomes a different
- * Cluster by id, and the one it was is archived. That is the glossary's shape
- * rather than a leak: Archive is history of Clusters beyond their active
- * lifetime, and a Story joining a Cluster is a genuine change to what that
- * Cluster is, not a new draft of the same thing.
- */
-function clusterIdFor(topicId: TopicId, stories: readonly Story[]): ClusterId {
-  const members = stories.map((s) => s.id).sort().join('|');
-  return `cluster-${topicId}-${members}` as ClusterId;
 }

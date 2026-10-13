@@ -20,7 +20,7 @@ ticket number on its own says nothing about whether the code is there.
 | 04 | DeliveryTime picker & welcome email | done | `src/domain/timezone.ts`, `src/onboarding/welcome-email.ts`, `GET /settings/delivery` |
 | 05 | Single-source ingest + Story dedup | done | `src/ingest/ingest-service.ts`, `src/domain/story-signature.ts`, `src/domain/feed-text.ts`, ADR-0017 |
 | 06 | Full source registry ingest | done | `src/ingest/registry-ingest-service.ts`, `src/ingest/ingest-scheduler.ts`, ADR-0003 |
-| 07 | Cluster formation & extractive summary | done | `src/services/cluster-formation-service.ts`, ADR-0005, ADR-0030 |
+| 07 | Cluster formation & extractive summary | done | `src/services/cluster-formation-service.ts`, ADR-0005, ADR-0030, ADR-0034 |
 | 08 | LivingBrief in-app | done | `GET /topics/:slug` in `src/pages/routes.ts` |
 | 09 | Feedback signals | done | `src/services/feedback-service.ts`, ADR-0004 |
 | 10 | BriefPlan + scheduled BriefSnapshot | done | `src/services/brief-plan-service.ts`, `src/services/scheduled-brief-service.ts`, ADR-0011 |
@@ -600,7 +600,11 @@ Four of the six have a directory of their own, and two do not:
   Cluster formation. An extracted name is canonicalised before it is stored — a
   prefix, a demonym and a shortening are folded away, and an outlet, a feed's own
   labels and a head noun on its own are not Entities at all — so that one thing
-  written several ways is one row (ADR-0008, ADR-0031).
+  written several ways is one row (ADR-0008, ADR-0031). Formation re-forms every
+  Topic's Clusters on every cycle, and a Cluster keeps its id as Stories join it and
+  age out of it: the membership rows are reconciled rather than accumulated, so a
+  Feedback given on a Cluster is still on it afterwards rather than on the row it has
+  become (ADR-0034).
 - **Brief** — no directory: it is `services/brief-plan-service.ts`,
   `services/brief-snapshot-renderer.ts`, `services/scheduled-brief-service.ts` and
   `services/brief-status-routes.ts`, plus `repos/brief-*-repo.ts` and
@@ -746,12 +750,12 @@ counted.
 pnpm test
 ```
 
-The suite is 104 test files across `src/` holding 1,801 cases — Vitest prints the
+The suite is 105 test files across `src/` holding 1,827 cases — Vitest prints the
 live figure at the end of every run. `docs-agreement.test.ts` checks the file
 count and cannot check the case count without running the suite it lives in, so
 that one number is worth reading off a run rather than trusting.
 
-The layout is **83 of the 145 modules** under `src/` having a sibling test file of
+The layout is **84 of the 146 modules** under `src/` having a sibling test file of
 the same name. The other 62 are reached by a suite named for what it covers rather
 than for one module — `repos/oauth-repos.test.ts` over four repositories,
 `pages/topic-page.test.ts` over the routes that render a Topic — and some are

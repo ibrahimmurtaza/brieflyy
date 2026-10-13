@@ -113,7 +113,8 @@ const articleRows: RowsFrom = (where) => `
   WHERE ${where}`;
 
 /**
- * A Story, once per Topic whose Clusters hold it, and only while it is Retired.
+ * One Story, once per Topic that follows a Source it was reported in, and only
+ * while it is Retired.
  *
  * The text is every Article's, because a Story has none of its own: it is a
  * grouping, not a document, so the only way to search one is to search what was
@@ -131,17 +132,24 @@ const articleRows: RowsFrom = (where) => `
  * evaluated on every write to it, for every Story the write touches, by code that
  * has no business knowing how a Cluster's state is decided.
  *
- * Distinct, because the join is one row per Cluster and a Story spans Sources
- * (ADR 0010), so a dedup Story is normally held by more than one Cluster of the same
- * Topic. The Archive is keyed by (kind, item, topic), so those rows collide on insert
- * and the write throws — which is the cluster formation that put the second Cluster
- * there failing, not the Archive being asked to hold two of something. Every other
- * column is a function of the Story and the Topic, so the duplicates are identical and
- * collapsing them costs nothing: one Topic's Retired Story is one row however many
- * Clusters are still holding it.
+ * The Topic comes from the Sources its Articles came from, on the same join the
+ * Articles themselves are attributed by, rather than from the Clusters holding it.
+ * That is what says which Topic a Story was reported to — the pipeline scopes a
+ * Story to a Topic by exactly this rule (`storyRepo.listBySourceIdsInWindow`) —
+ * and it is a fact about the reporting that does not move when the Topics Clusters
+ * are formed over it do. Reading it off `cluster_stories` instead would mean that a
+ * Story dropped from a Cluster's membership as it aged out of the window stopped
+ * being a Story of that Topic at all, and a User's Archive lost the record of what
+ * was reported to them because the pipeline had finished grouping it.
+ *
+ * Distinct, because one Story reported by three of a Topic's Sources arrives here
+ * three times and the Archive is keyed by (kind, item, topic). A Story is normally
+ * held by one Cluster of a Topic, but a Cluster it has left behind keeps it in the
+ * Archive until its own Articles age out, and one row per Source it was reported
+ * in is not one row per Cluster either.
  */
 const storyRows: RowsFrom = (where) => `
-  SELECT DISTINCT 'story', s.id, c.topic_id,
+  SELECT DISTINCT 'story', s.id, ts.topic_id,
     COALESCE((SELECT group_concat(DISTINCT a.source_id) FROM articles a WHERE a.story_id = s.id), ''),
     COALESCE((SELECT group_concat(DISTINCT ae.entity_id)
       FROM articles a JOIN article_entities ae ON ae.article_id = a.id
@@ -151,8 +159,8 @@ const storyRows: RowsFrom = (where) => `
     COALESCE((SELECT group_concat(a.body, char(10)) FROM articles a WHERE a.story_id = s.id), ''),
     ''
   FROM stories s
-  JOIN cluster_stories cs ON cs.story_id = s.id
-  JOIN clusters c ON c.id = cs.cluster_id
+  JOIN articles a ON a.story_id = s.id
+  JOIN topic_sources ts ON ts.source_id = a.source_id
   WHERE ${where}
     AND s.state = 'archive'`;
 
@@ -247,6 +255,35 @@ function rewriteArticlesInTopic(topic: string, source: string): string {
   );
 }
 
+/**
+ * Rewrite the Retired Stories one Topic can now see of one Source.
+ *
+ * The same rule as the Articles, for the same reason: a Topic following a Source
+ * is what puts the reporting that Source carried into the Archive, and a Story is
+ * carried by the Articles in it. Which Topics hold a Story is what a Cluster's
+ * membership used to say, so a Story's row did not move when a Topic started or
+ * stopped following a Source; it does now, and a trigger is the only thing that
+ * can notice.
+ */
+function rewriteStoriesOfSource(topic: string, source: string): string {
+  // The delete half cannot ask which Topics followed the Source: an AFTER DELETE
+  // trigger runs once the row is gone, and a join to `topic_sources` would find
+  // nothing. Both halves therefore answer with the Stories reported in that Source.
+  //
+  // Both halves are also held to one Topic, which is the half that matters: a
+  // Story reported in two of a User's Topics is one row in each, and a Topic
+  // stopping one of its Sources is a change to that Topic's Archive and not to
+  // every other Topic's. `archive_items` carries `topic_id` for exactly this, and
+  // the write half — which is scoped to the Topic — would otherwise be restoring
+  // one row against a delete that took both.
+  const reportedIn = `s.id IN (SELECT a.story_id FROM articles a
+      WHERE a.story_id IS NOT NULL AND a.source_id = ${source})`;
+  return `${drop('story', `topic_id = ${topic} AND item_id IN (SELECT s.id FROM stories s WHERE ${reportedIn})`)}${write(
+    storyRows,
+    `${reportedIn} AND ts.topic_id = ${topic}`,
+  )}`;
+}
+
 function trigger(name: string, event: string, table: string, body: string): string {
   // The trailing semicolon is what separates one trigger from the next: SQLite
   // ends a trigger body at `END`, not at a semicolon, so without it the next
@@ -304,9 +341,11 @@ ${trigger('archive_items_links_ad', 'DELETE', 'cluster_stories', rewriteStories(
 
 ${trigger('archive_items_stories_au', 'UPDATE OF state', 'stories', rewriteStories('s.id = new.id'))}
 
-${trigger('archive_items_topic_sources_ai', 'INSERT', 'topic_sources', rewriteArticlesInTopic('new.topic_id', 'new.source_id'))}
-${trigger('archive_items_topic_sources_ad', 'DELETE', 'topic_sources', drop('article', `topic_id = old.topic_id
-  AND item_id IN (SELECT a.id FROM articles a WHERE a.source_id = old.source_id)`))}
+${trigger('archive_items_topic_sources_ai', 'INSERT', 'topic_sources', `${rewriteArticlesInTopic('new.topic_id', 'new.source_id')}
+${rewriteStoriesOfSource('new.topic_id', 'new.source_id')}`)}
+${trigger('archive_items_topic_sources_ad', 'DELETE', 'topic_sources', `${drop('article', `topic_id = old.topic_id
+  AND item_id IN (SELECT a.id FROM articles a WHERE a.source_id = old.source_id)`)}
+${rewriteStoriesOfSource('old.topic_id', 'old.source_id')}`)}
 `;
 
 /**
