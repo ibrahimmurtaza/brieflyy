@@ -72,6 +72,7 @@ async function signInWithTopicAndClusters(): Promise<Harness> {
     await new DrizzleStoryRepo(db).insert({
       id: storyId as StoryId,
       signature: EMPTY_SIGNATURE,
+      embedding: null,
       firstSeenAt: NOW,
       lastSeenAt: NOW,
       published: { first: NOW, last: NOW },

@@ -155,6 +155,7 @@ async function insertArticle(input: {
   await input.storyRepo.insert({
     id: article.storyId as StoryId,
     signature: article.signature,
+    embedding: null,
     firstSeenAt: input.publishedAt,
     lastSeenAt: input.publishedAt,
     published: { first: input.publishedAt, last: input.publishedAt },

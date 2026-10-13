@@ -44,6 +44,7 @@ export const DEFERRED_SERVICES: Readonly<Record<string, string>> = {};
  * than learning to ignore it by name.
  */
 export const REACHED_BY_SUITES: Readonly<Record<string, string>> = {
+  RecordingEmbeddingProvider: 'testing/embedding-provider.ts',
   SeededFeedFetcher: 'testing/app-harness.ts',
   RecordingPaymentProvider: 'testing/payment-provider.ts',
   RecordingSummaryClient: 'testing/summary-client.ts',

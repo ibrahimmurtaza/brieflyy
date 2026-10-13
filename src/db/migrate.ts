@@ -188,6 +188,8 @@ CREATE INDEX IF NOT EXISTS article_entities_entity_idx ON article_entities (enti
 CREATE TABLE IF NOT EXISTS stories (
   id TEXT PRIMARY KEY NOT NULL,
   signature TEXT NOT NULL DEFAULT '{}',
+  embedding TEXT,
+  embedding_model TEXT,
   first_seen_at INTEGER NOT NULL,
   last_seen_at INTEGER NOT NULL,
   first_published_at INTEGER NOT NULL DEFAULT 0,
@@ -753,6 +755,25 @@ const COLUMN_MIGRATIONS: readonly ColumnMigration[] = [
     table: 'stories',
     column: 'signature',
     ddl: `ALTER TABLE stories ADD COLUMN signature TEXT NOT NULL DEFAULT '{}'`,
+  },
+  {
+    // What the Story's first Article said, as a dense vector. Nullable with no
+    // default, because the absence of one is the state: every Story formed before
+    // this existed was read as carrying no embedding, and grouping reads a missing
+    // embedding as no evidence rather than as a vector of zeroes. There is no
+    // backfill here because an embedding has to be computed by a model, and the
+    // operator command that does it is a separate decision.
+    table: 'stories',
+    column: 'embedding',
+    ddl: `ALTER TABLE stories ADD COLUMN embedding TEXT`,
+  },
+  {
+    // Which model produced that vector, which is what makes it comparable with
+    // another Story's and nothing else does. A row holding one without the other
+    // reads as holding neither.
+    table: 'stories',
+    column: 'embedding_model',
+    ddl: `ALTER TABLE stories ADD COLUMN embedding_model TEXT`,
   },
   {
     // The Story's published range, which is what the dedup window is measured

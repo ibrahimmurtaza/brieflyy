@@ -30,6 +30,29 @@ export const MAGIC_LINK_RATE_LIMITS: MagicLinkRateLimits = {
 
 export const OPENAI_API_URL_DEFAULT = 'https://api.openai.com/v1/chat/completions';
 
+/**
+ * Where an Article's embedding is asked for, and what it is asked with.
+ *
+ * A second credential rather than a second reading of the one above: a deployment
+ * may write briefs without embedding anything, and embed without writing a brief
+ * that has ever been sent. Sharing the key would make each of those a decision
+ * about both.
+ */
+export const OPENROUTER_EMBEDDINGS_URL_DEFAULT = 'https://openrouter.ai/api/v1/embeddings';
+
+/** Which model the vectors are produced by, recorded beside every one of them. */
+export const OPENROUTER_EMBEDDING_MODEL_DEFAULT = 'openai/text-embedding-3-small';
+
+/**
+ * How long one embedding call may take before the Story forms without one.
+ *
+ * Formation holds this call in the middle of an ingest cycle, so a provider that
+ * accepts the request and never answers would hold the cycle rather than one
+ * Story's second reading — and a Story with no embedding is a complete Story, so
+ * there is nothing to be gained by waiting for one that may never come.
+ */
+export const EMBEDDING_CALL_TIMEOUT_MS_DEFAULT = 5000;
+
 /** Where the payment provider's API lives, and the only Stripe host this asks. */
 export const STRIPE_API_BASE_URL_DEFAULT = 'https://api.stripe.com';
 

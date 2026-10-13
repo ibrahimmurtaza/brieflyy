@@ -195,6 +195,7 @@ async function givenStory(
     // is what the gate reads. A fixture that wrote an empty one would be testing
     // the gate's refusal rather than the grouping it is here to hold up.
     signature: normalizeSignature(extractSignature(input.body)),
+    embedding: null,
     firstSeenAt: seenAt,
     lastSeenAt: seenAt,
     published: { first: seenAt, last: seenAt }

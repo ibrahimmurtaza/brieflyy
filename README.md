@@ -238,6 +238,44 @@ writes the whole brief. Two bounds on the writing itself,
 per-call and per-brief limits; the first may not exceed the second, and boot
 refuses a pair that does rather than leaving the budget unreachable.
 
+### Embedding a Story
+
+A Story carries two readings of the Article that formed it: the **Story signature**
+of its words and phrases, and the **Story embedding** — a dense vector of what
+that Article said. The embedding is computed once, where the Story is formed, and
+stored beside the model that produced it (ADR-0037). Nothing reads it yet:
+grouping is unchanged, and a Story carrying one groups exactly as it did before,
+which is what makes it safe to land before the floor that will.
+
+`OPENROUTER_API_KEY` is optional and its absence is a complete configuration, in
+the same shape as `OPENAI_API_KEY` above: `createEmbeddingProvider` returns
+nothing, every Story is formed exactly as it was before embeddings existed, and
+each one carries no embedding. Those Stories hold `null` rather than a vector of
+zeroes — zeroes are a claim about what the Article said, and a Story holding them
+would read as one that means nothing at all.
+
+Two settings rather than one, because a deployment may write briefs without
+embedding and embed without writing: `OPENROUTER_EMBEDDINGS_URL` is OpenRouter's
+OpenAI-shaped embeddings endpoint, and `OPENROUTER_EMBEDDING_MODEL` names the
+model to ask for. That name is only the default for what is recorded — the model
+stored beside each vector is the one the provider says produced it, which is not
+the same statement when the provider routes a name to whichever vendor is serving
+it. Two Stories embedded by two different models are not comparable, and the
+reader that discovers that is the reader doing it far too late.
+
+`EMBEDDING_CALL_TIMEOUT_MS` bounds the call, because formation holds it in the
+middle of an ingest cycle: an endpoint that accepts the request and never answers
+would otherwise hold the cycle rather than one Story's second reading. A call that
+outruns it forms a Story with no embedding, which is what it did before this
+existed.
+
+No Story is backfilled. Every Story already in the database was formed before
+anything carried a vector, so it carries none and groups exactly as it did — and
+an un-backfilled corpus would measure a semantic floor as though it had done
+nothing. The backfill is its own operator command, over a copy of the database the
+way the corpus commands work, so that running it is an act rather than something
+that happened at boot.
+
 ### Seeing whether it worked
 
 The written path fails quietly by design — no credential, a failed call, a spent
@@ -576,7 +614,8 @@ src/
 │                          # both the migration and the cluster repo)
 ├── directory/             # Seed JSON + directory loader (Sources, TopicTemplates)
 ├── domain/                # pure types & helpers (crypto, clock, timezone,
-│                          # DeliverySlot, tier, story signature, trends, LLM contract)
+│                          # DeliverySlot, tier, story signature, story embedding,
+│                          # trends, LLM contract)
 ├── http/                  # route access declarations, the cross-site write guard,
 │                          # rate limiter, and the error handler every route's
 │                          # failures reach
@@ -613,9 +652,9 @@ src/
 │                          # the LivingBrief, the Archive route, ...)
 ├── services/              # clustering; the brief layer (BriefPlan, BriefSnapshot
 │                          # renderer, the scheduled job, /admin/briefs); the written
-│                          # summary client; the feedback layer; topic settings; the
-│                          # trends service; Archive search; and the unsubscribe
-│                          # state that job honours
+│                          # summary client, the embedding provider; the feedback
+│                          # layer; topic settings; the trends service; Archive
+│                          # search; and the unsubscribe state that job honours
 ├── trends/                # the trends view: inline-SVG chart + sparklines, the
 │                          # per-Topic and across-your-topics pages, HTTP routes
 │
@@ -641,7 +680,10 @@ Four of the six have a directory of their own, and two do not:
   Topic's Clusters on every cycle, and a Cluster keeps its id as Stories join it and
   age out of it: the membership rows are reconciled rather than accumulated, so a
   Feedback given on a Cluster is still on it afterwards rather than on the row it has
-  become (ADR-0034).
+  become (ADR-0034). A Story formed from an Article also carries that Article's
+  **Story embedding**, computed once at formation and stored beside the model that
+  produced it; nothing reads it yet, so grouping is unchanged while it is carried
+  (ADR-0037).
 - **Brief** — no directory: it is `services/brief-plan-service.ts`,
   `services/brief-snapshot-renderer.ts`, `services/scheduled-brief-service.ts` and
   `services/brief-status-routes.ts`, plus `repos/brief-*-repo.ts` and
@@ -670,7 +712,7 @@ and nothing constructs it. A class is named in one of the two lists in
 that exists and is not wired yet, and every entry in it names the ticket that will
 wire the class. That list is empty, so there is no service that is built and
 unreachable — and the emptiness is a claim the guard checks against the list rather
-than one the prose asserts. `REACHED_BY_SUITES` is for the six classes that are test
+than one the prose asserts. `REACHED_BY_SUITES` is for the seven classes that are test
 doubles rather than application code, and each names the module that reaches it; a
 double the application constructed would be application code in the wrong list, and
 one no suite constructs is dead code, so both of those fail too.
@@ -715,6 +757,7 @@ double in `src/testing/`, a lambda a test supplies, or a test of its own.
 | `EmailTransport` | `send(message)` | `ConsoleEmailTransport`, `ResendEmailTransport` |
 | `EmailTransport` | `send(message)`, raising `EmailRefusedError` only where the provider itself answered no — a thrown call is not a refusal (ADR-0027) | `ConsoleEmailTransport`, `ResendEmailTransport` |
 | `LLMSummaryClient` | `generateSummary(clusterTitle, clusterSummary, articles)` | `OpenAILLMSummaryService`, `RecordingSummaryClient`, or none at all |
+| `EmbeddingProvider` | `embed(text)` | `OpenRouterEmbeddingService`, `RecordingEmbeddingProvider`, or none at all |
 | `Clock` | `now()` | `systemClock`, `makeTestClock` (a `set`/`advance` pair) |
 | `RandomSource` | `bytes()`, `uuid()` | `nodeRandom`, `deterministicRandom` |
 | `EnvSource` | `Readonly<Record<string, string \| undefined>>` | `process.env`, a plain object in tests |
@@ -789,13 +832,13 @@ counted.
 pnpm test
 ```
 
-The suite is 105 test files across `src/` holding 1,827 cases — Vitest prints the
+The suite is 107 test files across `src/` holding 1,888 cases — Vitest prints the
 live figure at the end of every run. `docs-agreement.test.ts` checks the file
 count and cannot check the case count without running the suite it lives in, so
 that one number is worth reading off a run rather than trusting.
 
-The layout is **84 of the 146 modules** under `src/` having a sibling test file of
-the same name. The other 62 are reached by a suite named for what it covers rather
+The layout is **86 of the 149 modules** under `src/` having a sibling test file of
+the same name. The other 63 are reached by a suite named for what it covers rather
 than for one module — `repos/oauth-repos.test.ts` over four repositories,
 `pages/topic-page.test.ts` over the routes that render a Topic — and some are
 test-only helpers, entrypoints and the two modules whose behaviour is a shape

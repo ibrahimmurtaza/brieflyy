@@ -5,17 +5,22 @@ import { DrizzleSourceRepo } from './source-repo.js';
 import { DrizzleArticleRepo } from './article-repo.js';
 import { DrizzleStoryRepo } from './story-repo.js';
 import { EMPTY_SIGNATURE, isSameStory } from '../domain/story-signature.js';
+import type { StoryEmbedding } from '../domain/embedding.js';
 import { NO_BACKOFF } from '../domain/types.js';
 import type { Article, ArticleId, Source, StoryId } from '../domain/types.js';
 import { WIRE_COPIES, signatureOf } from '../testing/story-fixtures.js';
 
 const HOUR = 60 * 60 * 1000;
 
+/** A four-value vector, every entry of which a float32 holds exactly. */
+const A_VECTOR: StoryEmbedding = { model: 'vendor/some-embedding-1', values: [1, -2.5, 0, 3.5] };
+
 async function setupSource(): Promise<{
   source: Source;
   db: ReturnType<typeof createTestDb>['db'];
+  driver: ReturnType<typeof createTestDb>['driver'];
 }> {
-  const { db } = createTestDb();
+  const { driver, db } = createTestDb();
   const sourceRepo = new DrizzleSourceRepo(db);
   const source: Source = {
     id: 'src-test',
@@ -28,7 +33,7 @@ async function setupSource(): Promise<{
     backoff: NO_BACKOFF,
   };
   await sourceRepo.insert(source);
-  return { source, db };
+  return { source, db, driver };
 }
 
 /** A second outlet, so a Story can be seen holding Articles from more than one. */
@@ -91,6 +96,7 @@ async function givenStory(
   await repo.insert({
     id: storyId,
     signature: signatureOf(WIRE_COPIES[0]!.body),
+    embedding: null,
     firstSeenAt: input.at,
     lastSeenAt: input.at,
     published: { first: input.at, last: input.at }
@@ -121,6 +127,7 @@ describe('DrizzleStoryRepo', () => {
     await repo.insert({
       id: storyId,
       signature: signatureOf(WIRE_COPIES[0]!.body),
+      embedding: null,
       firstSeenAt: t,
       lastSeenAt: t,
       published: { first: t, last: t }
@@ -137,6 +144,7 @@ describe('DrizzleStoryRepo', () => {
     await repo.insert({
       id: 'story-1' as StoryId,
       signature: signatureOf(WIRE_COPIES[0]!.body),
+      embedding: A_VECTOR,
       firstSeenAt: t,
       lastSeenAt: t,
       published: { first: t, last: t }
@@ -145,6 +153,83 @@ describe('DrizzleStoryRepo', () => {
     expect(found?.signature).toEqual(signatureOf(WIRE_COPIES[0]!.body));
     // And it is still recognisable as the same Story as a syndication copy.
     expect(isSameStory(found!.signature, signatureOf(WIRE_COPIES[7]!.body))).toBe(true);
+  });
+
+  it('reads back the embedding it stored, beside the model that produced it', async () => {
+    // Both halves asserted together because the second is the only thing that makes
+    // the first comparable with another Story's.
+    const { db } = await setupSource();
+    const repo = new DrizzleStoryRepo(db);
+    const t = new Date('2026-05-01T12:00:00Z');
+    await repo.insert({
+      id: 'story-1' as StoryId,
+      signature: signatureOf(WIRE_COPIES[0]!.body),
+      embedding: A_VECTOR,
+      firstSeenAt: t,
+      lastSeenAt: t,
+      published: { first: t, last: t }
+    });
+    const found = await repo.getById('story-1' as StoryId);
+    expect(found?.embedding?.values).toEqual([1, -2.5, 0, 3.5]);
+    expect(found?.embedding?.model).toBe('vendor/some-embedding-1');
+  });
+
+  it('reads a Story formed with no embedding as carrying none, not as zeroes', async () => {
+    const { db } = await setupSource();
+    const repo = new DrizzleStoryRepo(db);
+    const t = new Date('2026-05-01T12:00:00Z');
+    await repo.insert({
+      id: 'story-1' as StoryId,
+      signature: signatureOf(WIRE_COPIES[0]!.body),
+      embedding: null,
+      firstSeenAt: t,
+      lastSeenAt: t,
+      published: { first: t, last: t }
+    });
+    expect((await repo.getById('story-1' as StoryId))?.embedding).toBeNull();
+  });
+
+  it('carries the embedding on the candidate lookup the next Article is compared against', async () => {
+    // The read that decides where a later Article goes, rather than a lookup by id:
+    // a vector that survived insert and was then dropped by hydration would be a
+    // Story that stores a second reading and never offers it to anything.
+    const { db } = await setupSource();
+    const repo = new DrizzleStoryRepo(db);
+    const t = new Date('2026-05-01T12:00:00Z');
+    await repo.insert({
+      id: 'story-1' as StoryId,
+      signature: signatureOf(WIRE_COPIES[0]!.body),
+      embedding: A_VECTOR,
+      firstSeenAt: t,
+      lastSeenAt: t,
+      published: { first: t, last: t }
+    });
+
+    const candidates = await repo.listCandidates({ publishedAt: t, windowMs: 72 * 60 * 60 * 1000 });
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]?.embedding?.model).toBe('vendor/some-embedding-1');
+    expect(candidates[0]?.embedding?.values).toEqual([1, -2.5, 0, 3.5]);
+  });
+
+  it('stores a vector it cannot read back as carrying none, rather than as a half-read one', async () => {
+    // A row whose two columns disagree is a row nobody can compare with anything,
+    // so the whole value reads as absence rather than the half that survived.
+    const { db, driver } = await setupSource();
+    const repo = new DrizzleStoryRepo(db);
+    const t = new Date('2026-05-01T12:00:00Z');
+    await repo.insert({
+      id: 'story-1' as StoryId,
+      signature: signatureOf(WIRE_COPIES[0]!.body),
+      embedding: A_VECTOR,
+      firstSeenAt: t,
+      lastSeenAt: t,
+      published: { first: t, last: t }
+    });
+    // Take the model away and leave the vector behind.
+    driver.prepare(`UPDATE stories SET embedding_model = NULL WHERE id = ?`).run('story-1');
+
+    expect((await repo.getById('story-1' as StoryId))?.embedding).toBeNull();
   });
 
   it('touches lastSeenAt without moving the published range', async () => {
@@ -156,6 +241,7 @@ describe('DrizzleStoryRepo', () => {
     await repo.insert({
       id: storyId,
       signature: signatureOf(WIRE_COPIES[0]!.body),
+      embedding: null,
       firstSeenAt: published,
       lastSeenAt: published,
       published: { first: published, last: published }
@@ -177,6 +263,7 @@ describe('DrizzleStoryRepo', () => {
     await repo.insert({
       id: storyId,
       signature: signatureOf(WIRE_COPIES[0]!.body),
+      embedding: null,
       firstSeenAt: first,
       lastSeenAt: first,
       published: { first: first, last: first }
@@ -197,6 +284,7 @@ describe('DrizzleStoryRepo', () => {
     await storyRepo.insert({
       id: storyId,
       signature: signatureOf(WIRE_COPIES[0]!.body),
+      embedding: null,
       firstSeenAt: t,
       lastSeenAt: t,
       published: { first: t, last: t }
@@ -225,6 +313,7 @@ describe('DrizzleStoryRepo', () => {
     await repo.insert({
       id: 'story-1' as StoryId,
       signature: signatureOf(WIRE_COPIES[0]!.body),
+      embedding: null,
       firstSeenAt: seenAt,
       lastSeenAt: seenAt,
       published: { first: new Date('2026-05-01T10:00:00Z'), last: new Date('2026-05-01T10:00:00Z') }
@@ -251,6 +340,7 @@ describe('DrizzleStoryRepo', () => {
     await repo.insert({
       id: 'story-1' as StoryId,
       signature: signatureOf(WIRE_COPIES[0]!.body),
+      embedding: null,
       firstSeenAt: seenAt,
       lastSeenAt: seenAt,
       published: { first: new Date('2026-05-01T10:00:00Z'), last: new Date('2026-05-01T10:00:00Z') }
@@ -275,6 +365,7 @@ describe('DrizzleStoryRepo', () => {
     await repo.insert({
       id: 'story-1' as StoryId,
       signature: signatureOf(WIRE_COPIES[0]!.body),
+      embedding: null,
       firstSeenAt: seenAt,
       lastSeenAt: seenAt,
       published: { first: firstPublished, last: lastPublished }

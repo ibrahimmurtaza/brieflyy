@@ -287,6 +287,7 @@ async function seedSignalTopic(input: {
   await storyRepo.insert({
     id: storyId,
     signature: EMPTY_SIGNATURE,
+    embedding: null,
     firstSeenAt: new Date(NOW.getTime() - DAY),
     lastSeenAt: NOW,
     published: { first: new Date(NOW.getTime() - DAY), last: NOW },
@@ -369,6 +370,7 @@ async function seedQuotedTopic(input: {
   await storyRepo.insert({
     id: storyId,
     signature: EMPTY_SIGNATURE,
+    embedding: null,
     firstSeenAt: new Date(NOW.getTime() - DAY),
     lastSeenAt: NOW,
     published: { first: new Date(NOW.getTime() - DAY), last: NOW },
@@ -527,6 +529,7 @@ await storyRepo.insert({
     'Acme Corp unveils Foo',
     'Acme Corp unveiled a product called Foo, and the market has noticed.',
   ),
+  embedding: null,
   firstSeenAt: new Date(NOW.getTime() - DAY),
   lastSeenAt: NOW,
   published: { first: new Date(NOW.getTime() - DAY), last: NOW },
@@ -579,6 +582,7 @@ for (const { id, daysAgo } of COVERAGE) {
   await storyRepo.insert({
     id: storyId,
     signature: signatureOf(COVERAGE_TITLE, COVERAGE_BODY),
+    embedding: null,
     firstSeenAt: publishedAt,
     lastSeenAt: publishedAt,
     published: { first: publishedAt, last: publishedAt },

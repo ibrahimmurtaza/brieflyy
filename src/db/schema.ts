@@ -414,6 +414,24 @@ export const stories = sqliteTable(
      * not match.
      */
     signature: text('signature').notNull().default('{}'),
+    /**
+     * What this Story's first Article said, as a dense vector, and the model
+     * that produced it.
+     *
+     * Two columns and both nullable, because a Story carrying no embedding is a
+     * state this is designed for rather than a gap: a deployment with no credential
+     * forms Stories that hold neither, and a caller reads that as no evidence
+     * rather than as a vector of zeroes. The model is beside the vector rather
+     * than inside it because the two halves have to arrive together — two Stories
+     * embedded by two different models are not comparable, and a reader holding one
+     * vector without the other is guessing which reading it has.
+     *
+     * Set once, where the Story is formed, and not recomputed as syndication copies
+     * arrive, for the reason the signature above gives: an identity that shifted
+     * with every copy would be a different Story each time.
+     */
+    embedding: text('embedding'),
+    embeddingModel: text('embedding_model'),
     firstSeenAt: integer('first_seen_at', { mode: 'timestamp_ms' }).notNull(),
     lastSeenAt: integer('last_seen_at', { mode: 'timestamp_ms' }).notNull(),
     /**
