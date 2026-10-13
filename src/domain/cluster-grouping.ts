@@ -15,16 +15,21 @@
  *   and once by their Story signatures, which is the signal that tells two reports
  *   about the same company apart (ADR-0007).
  * - **Linkage**: the most similar pair of Stories is merged first, and a merge
- *   only happens when every member of the resulting Cluster clears *both* floors
- *   with every other member of it.
+ *   only happens when every member of the resulting Cluster clears the gate with
+ *   every other member of it.
  *
  * The second step is what stops a chain of individually reasonable links
  * running away into one Cluster: a Story can only join a Cluster it is similar
  * to all of, so a hub that is a bit like everything is left on its own.
  *
- * Both floors are stated in one {@link MergeThresholds} rather than one at a
- * time, because a rule reading two signals cannot be described by one number and a
- * caller passing a bare one cannot say which of the two they meant.
+ * What clears that gate is three separate statements rather than one. Both floors
+ * are stated in one {@link MergeThresholds} rather than one at a time, because a
+ * rule reading two signals cannot be described by one number and a caller passing
+ * a bare one cannot say which of the two they meant. The way they combine is a
+ * third — a {@link MergeGate}, shipped as a conjunction — because how alike is
+ * enough on each signal and whether one of them being enough is enough are two
+ * different decisions, and widening the rule is the second one rather than the
+ * first.
  */
 
 import { signatureSimilarity, type StorySignature } from './story-signature.js';
@@ -60,13 +65,64 @@ export interface GroundedStory {
  * A merge happens only where a pair clears both, so neither floor can be moved
  * by passing the other: a caller lowering the Entity cosine to widen the rule has
  * still left the signature floor where the rule ships it, and a caller loosening
- * the signature gate has not widened the cosine at all.
+ * the signature gate has not widened the cosine at all. How the two combine is
+ * {@link MergeGate}, which is a third statement and not something either of these
+ * two can be read as.
  */
 export interface MergeThresholds {
   /** How alike two Stories' Entity vectors have to be, as a share of 0 to 1. */
   readonly entity: number;
   /** How much two Stories' signatures have to agree, as a share of 0 to 1. */
   readonly signature: number;
+}
+
+/**
+ * How the two floors combine into the one test a pair has to clear.
+ *
+ * `both` is a conjunction — the pair clears it only where the cosine and the
+ * signature are both above their floors — and `either` is a disjunction, where
+ * either signal on its own admits the pair. They are stated apart from
+ * {@link MergeThresholds} because they are a different decision: the floors say
+ * how alike is enough on each signal, and this says whether one of them being
+ * enough is enough. Reading them as one value would let a caller widen the rule
+ * by naming a floor rather than by saying what they meant.
+ */
+export type MergeGate = 'both' | 'either';
+
+/**
+ * The gate the rule runs at, as one link.
+ *
+ * A conjunction, and the claim `docs/cluster-grouping-baseline.md` measures: of
+ * the same-event families the Entity rule cannot reach, the ones a signature
+ * floor alone would admit, and the different-event families the conjunction
+ * holds apart. `either` is measured beside it rather than shipped, so widening
+ * the gate is a decision somebody takes against those numbers rather than a
+ * default that arrives with a change to the linkage.
+ */
+export const SHIPPED_MERGE_GATE: MergeGate = 'both';
+
+/**
+ * Whether two scores clear the gate, at the floors given.
+ *
+ * Stated once here because two things need it and the measurement must not be able
+ * to disagree with the rule: `groupIntoClusters` decides merges with it, and
+ * `gateRefusals` prices the halves with it, which it cannot do by asking a question
+ * that only has one answer — so a change to how the two signals combine has to
+ * happen here and not twice.
+ */
+export function clearsMergeGate(scores: {
+  /** How alike two Stories' Entity vectors are. */
+  readonly entity: number;
+  /** How much two Stories' signatures agree. */
+  readonly signature: number;
+  readonly thresholds: MergeThresholds;
+  readonly gate: MergeGate;
+}): boolean {
+  const clearsEntity = scores.entity >= scores.thresholds.entity;
+  const clearsSignature = scores.signature >= scores.thresholds.signature;
+  return scores.gate === 'either'
+    ? clearsEntity || clearsSignature
+    : clearsEntity && clearsSignature;
 }
 
 /**
@@ -253,33 +309,37 @@ export function similarityBetween(
 /**
  * Split Stories into the groups that become Clusters.
  *
- * A merge happens only where a pair clears both {@link MergeThresholds}, and the
- * floor decides how alike is enough on each of the two signals: the cosine
- * answers whether two Stories are about the same named things, and the signature
- * answers whether they are about the same thing. The linkage below then decides
- * which Clusters those pairs make. Comparison is against every other Story rather
- * than against the one immediately before it in time, because comparing only
- * neighbours would make the grouping a function of when things happened to arrive
- * — one Story landing between two related ones would pull them apart. The order
- * merges go in is by descending Entity similarity and then by position, so the
- * same set of Stories always forms the same Clusters: the cosine picks which pair
- * to consider first, and the signature only ever refuses one.
+ * A merge happens only where a pair clears the gate {@link groupIntoClusters} is
+ * given — both {@link MergeThresholds} under {@link SHIPPED_MERGE_GATE}, or either
+ * of them under the wider one — and each floor decides how alike is enough on its
+ * own signal: the cosine answers whether two Stories are about the same named
+ * things, and the signature answers whether they are about the same thing. The
+ * linkage below then decides which Clusters those pairs make. Comparison is
+ * against every other Story rather than against the one immediately before it in
+ * time, because comparing only neighbours would make the grouping a function of
+ * when things happened to arrive — one Story landing between two related ones
+ * would pull them apart. The order merges go in is by descending Entity similarity
+ * and then by position, so the same set of Stories always forms the same Clusters:
+ * the cosine picks which pair to consider first, and the signature only ever
+ * refuses one.
  *
  * A Story whose signature says nothing is never merged on the strength of its
- * Entities, the same way one naming no Entity is never merged. Reading nothing is
- * not evidence of anything, and a gate exists to hold two Stories apart — failing
- * it open would leave the corpus's unsigned rows grouping by the one signal the
- * gate was added to check them on.
+ * Entities under the gate the rule ships, the same way one naming no Entity is
+ * never merged. Reading nothing is not evidence of anything, and a gate exists to
+ * hold two Stories apart — failing it open would leave the corpus's unsigned rows
+ * grouping by the one signal the gate was added to check them on. Widening the gate
+ * to `either` gives that up, which is part of what the wider gate costs.
  *
  * Groups come back in the order their first member appeared.
  */
 export function groupIntoClusters<T>(
   items: readonly T[],
   readOf: (item: T, index: number) => GroundedStory,
-  options: { readonly thresholds?: MergeThresholds } = {},
+  options: { readonly thresholds?: MergeThresholds; readonly gate?: MergeGate } = {},
 ): readonly (readonly T[])[] {
   if (items.length === 0) return [];
   const thresholds = options.thresholds ?? SHIPPED_MERGE_THRESHOLD;
+  const gate = options.gate ?? SHIPPED_MERGE_GATE;
   const readings = items.map(readOf);
   const entitySets = readings.map((reading) => reading.entities);
   const inverseDocumentFrequency = inverseDocumentFrequencies(entitySets);
@@ -303,16 +363,20 @@ export function groupIntoClusters<T>(
   const signatureScoreOf = perPair((i, j) =>
     signatureSimilarity(readings[i]!.signature, readings[j]!.signature),
   );
-  const clearsBothFloors = (i: number, j: number): boolean =>
-    entityScoreOf(i, j) >= thresholds.entity &&
-    signatureScoreOf(i, j) >= thresholds.signature;
+  const clearsTheGate = (i: number, j: number): boolean =>
+    clearsMergeGate({
+      entity: entityScoreOf(i, j),
+      signature: signatureScoreOf(i, j),
+      thresholds,
+      gate,
+    });
 
   // Most similar pair first. Ties break on position so the order is the same on
   // every run rather than the one the sort happened to produce.
   const candidates: { readonly i: number; readonly j: number; readonly score: number }[] = [];
   for (let i = 0; i < items.length; i++) {
     for (let j = i + 1; j < items.length; j++) {
-      if (!clearsBothFloors(i, j)) continue;
+      if (!clearsTheGate(i, j)) continue;
       candidates.push({ i, j, score: entityScoreOf(i, j) });
     }
   }
@@ -339,10 +403,10 @@ export function groupIntoClusters<T>(
     const into = members[left]!;
     const from = members[right]!;
     // Every member of the resulting Cluster, not just the pair being merged:
-    // this is the difference between a Cluster and a chain of links. Both floors
-    // apply to every one of those pairs, because a Story that reads unlike the
+    // this is the difference between a Cluster and a chain of links. The gate
+    // applies to every one of those pairs, because a Story that reads unlike the
     // Cluster it would join has not been shown to belong to it either.
-    if (from.some((to) => into.some((existing) => !clearsBothFloors(existing, to)))) {
+    if (from.some((to) => into.some((existing) => !clearsTheGate(existing, to)))) {
       continue;
     }
     into.push(...from);

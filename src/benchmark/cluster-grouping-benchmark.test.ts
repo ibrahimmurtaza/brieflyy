@@ -4,17 +4,29 @@ import {
   bothSignalsPrecisionCeiling,
   evaluateClusterGrouping,
   formatClusterReport,
+  formatGateRefusals,
   entityPrecisionCeiling,
+  gateRefusals,
   resolveClusterPairs,
   type ClusterGroupingReport,
+  type GateRefusals,
   type GroupedTopic,
   type PairResolution,
+  type ResolvedStoryPair,
+  type TopicScope,
 } from './cluster-grouping-benchmark.js';
 import type { CorpusStoryRef, LabelledStoryPair } from '../testing/cluster-pair-fixtures.js';
 import { corpusRefKey } from '../testing/cluster-pair-fixtures.js';
-import type { StoryId, TopicId, EntityId } from '../domain/types.js';
-import type { GroundedEntity, MergeThresholds } from '../domain/cluster-grouping.js';
-import { SIGNATURE_SIMILARITY_FLOOR } from '../domain/cluster-grouping.js';
+import type { EntityId, StoryId, TopicId } from '../domain/types.js';
+import type {
+  GroundedEntity,
+  GroundedStory,
+  MergeThresholds,
+} from '../domain/cluster-grouping.js';
+import {
+  SHIPPED_MERGE_THRESHOLD,
+  SIGNATURE_SIMILARITY_FLOOR,
+} from '../domain/cluster-grouping.js';
 import { EMPTY_SIGNATURE, type StorySignature } from '../domain/story-signature.js';
 
 const storyA = 'story-a' as StoryId;
@@ -487,5 +499,204 @@ grouped: [{ topicId: topicOne, clusters: [[storyA], [storyB]] }],
       );
 
     expect(build()).toBe(build());
+  });
+});
+
+describe('gateRefusals', () => {
+  const rare: GroundedEntity = { id: 'entity-rare' as EntityId, kind: 'concept' };
+  const crowded: GroundedEntity = { id: 'entity-crowded' as EntityId, kind: 'org' };
+  // Places, so the shared Entity outweighs the one Entity each Story has besides
+  // it: an org aside of equal rarity would cap the cosine near 0.5 and the test
+  // would be about the size of the Topic rather than about which Topic is read.
+  const asideOne: GroundedEntity = { id: 'entity-aside-1' as EntityId, kind: 'place' };
+  const asideTwo: GroundedEntity = { id: 'entity-aside-2' as EntityId, kind: 'place' };
+  const elsewhere: GroundedEntity = { id: 'entity-elsewhere' as EntityId, kind: 'org' };
+
+  const sameWords: StorySignature = { words: ['acme', 'foo', 'launches'], phrases: ['acme foo'] };
+  const alsoSameWords: StorySignature = { words: ['acme', 'foo', 'launch'], phrases: ['acme foo'] };
+  const otherWords: StorySignature = { words: ['ruling', 'overturns', 'appeal'], phrases: [] };
+
+  /** These Stories over these readings, joined by position. */
+  function scopeOf(entries: readonly (readonly [StoryId, GroundedStory])[]): TopicScope {
+    return {
+      storyIds: entries.map(([storyId]) => storyId),
+      readings: entries.map(([, reading]) => reading),
+    };
+  }
+
+  /** N filler Stories, each naming `crowded` and a place of its own. */
+  function filler(count: number): readonly (readonly [StoryId, GroundedStory])[] {
+    return Array.from({ length: count }, (_unused, index) => [
+      `filler-${index}` as StoryId,
+      {
+        entities: [crowded, { id: `filler-place-${index}` as EntityId, kind: 'place' }],
+        signature: EMPTY_SIGNATURE,
+      },
+    ]);
+  }
+
+  /** The one family the refusal counts are read off, resolved against the fixture corpus. */
+  function refusalsFor(
+    topics: readonly TopicScope[],
+    thresholds: MergeThresholds = SHIPPED_MERGE_THRESHOLD,
+  ): GateRefusals {
+    const resolution = resolutionOf(
+      { sameEvent: [pair(ref('bbc', '1'), ref('guardian', '1'))], differentEvent: [] },
+      corpus,
+    );
+    return gateRefusals({ pairs: resolution.sameEvent, topics, thresholds });
+  }
+
+  it('reports a family clearing both floors as one the gate refuses nothing in', () => {
+    // The same Entity vector and the same text: there is nothing left for a floor
+    // to turn away, which is the shape two of the different-event families are in.
+    const refusals = refusalsFor([
+      scopeOf([
+        [storyA, { entities: [rare], signature: sameWords }],
+        [storyB, { entities: [rare], signature: alsoSameWords }],
+      ]),
+    ]);
+
+    expect(refusals.cleared.map((entry) => entry.leftStoryId)).toEqual([storyA]);
+  });
+
+  it('counts a family a signature floor alone admits and the conjunction refuses', () => {
+    // Two Stories sharing no Entity at all, so their cosine is exactly zero. This
+    // is the bucket the ticket's question is about: how much recall the Entity
+    // half of the gate costs, counted rather than argued.
+    const refusals = refusalsFor([
+      scopeOf([
+        [storyA, { entities: [rare], signature: sameWords }],
+        [storyB, { entities: [elsewhere], signature: alsoSameWords }],
+      ]),
+    ]);
+
+    expect(refusals.signatureAloneAdmits).toHaveLength(1);
+    expect(refusals.cleared).toEqual([]);
+    expect(refusals.entityAloneAdmits).toEqual([]);
+  });
+
+  it('counts a family an Entity floor alone admits and the conjunction refuses', () => {
+    // The other half of what the gate buys: identical as Entity vectors, plainly
+    // different as text, so no Entity floor alone would hold them apart.
+    const refusals = refusalsFor([
+      scopeOf([
+        [storyA, { entities: [rare], signature: sameWords }],
+        [storyB, { entities: [rare], signature: otherWords }],
+      ]),
+    ]);
+
+    expect(refusals.entityAloneAdmits).toHaveLength(1);
+    expect(refusals.cleared).toEqual([]);
+    expect(refusals.signatureAloneAdmits).toEqual([]);
+  });
+
+  it('counts a family no floor on either signal admits apart from the others', () => {
+    const refusals = refusalsFor([
+      scopeOf([
+        [storyA, { entities: [rare], signature: sameWords }],
+        [storyB, { entities: [elsewhere], signature: otherWords }],
+      ]),
+    ]);
+
+    expect(refusals.neitherAdmits).toHaveLength(1);
+    expect(refusals.cleared).toEqual([]);
+  });
+
+  it('judges a family in the Topic that comes nearest to admitting it', () => {
+    // The cosine is weighed by how rare each Entity is across the Stories of the
+    // Topic doing the weighing, so the same two Stories are one event in a Topic
+    // where the thing they share is rare and two in a Topic where every Story
+    // shares it. Grouping takes any Topic's merge as the verdict, so a refusal
+    // counted the other way round would be counting something else.
+    const inACrowdedTopic = scopeOf([
+      [storyA, { entities: [crowded, asideOne], signature: sameWords }],
+      [storyB, { entities: [crowded, asideTwo], signature: alsoSameWords }],
+      ...filler(16),
+    ]);
+    const inASparseTopic = scopeOf([
+      [storyA, { entities: [rare, asideOne], signature: sameWords }],
+      [storyB, { entities: [rare, asideTwo], signature: alsoSameWords }],
+      ...filler(16),
+    ]);
+
+    expect(refusalsFor([inACrowdedTopic]).signatureAloneAdmits).toHaveLength(1);
+    expect(refusalsFor([inACrowdedTopic, inASparseTopic]).cleared).toHaveLength(1);
+  });
+
+  it('leaves out a family no Topic holds both of its Stories for, and names it', () => {
+    // A gap in what the corpus can say rather than a pass, so it is reported rather
+    // than folded into the zero of a bucket it was never weighed in.
+    const refusals = refusalsFor([
+      scopeOf([
+        [storyA, { entities: [rare], signature: sameWords }],
+        [storyC, { entities: [crowded], signature: otherWords }],
+      ]),
+    ]);
+
+    expect(refusals.unshared).toEqual(['bbc: bbc headline 1 | guardian: guardian headline 1']);
+    expect(refusals.cleared).toEqual([]);
+    expect(refusals.signatureAloneAdmits).toEqual([]);
+    expect(refusals.entityAloneAdmits).toEqual([]);
+    expect(refusals.neitherAdmits).toEqual([]);
+  });
+});
+
+describe('formatGateRefusals', () => {
+  /** A resolved family, counted rather than earned: this suite is about the report. */
+  const family = (name: string): ResolvedStoryPair => ({
+    label: 'same-event',
+    leftStoryId: 'story-a',
+    rightStoryId: 'story-b',
+    name,
+  });
+  const counted = (howMany: number, name: string): ResolvedStoryPair[] =>
+    Array.from({ length: howMany }, () => family(name));
+
+  /** The counts the refusal tables in the baseline doc were read from. */
+  const measured: GateRefusals = {
+    cleared: counted(9, 'same-event cleared'),
+    signatureAloneAdmits: counted(5, 'same-event a signature floor alone admits'),
+    entityAloneAdmits: counted(1, 'same-event an Entity floor alone admits'),
+    neitherAdmits: counted(1, 'same-event neither admits'),
+    unshared: new Array<string>(14).fill('a same-event family no live Topic holds both of'),
+  };
+
+  const negatives: GateRefusals = {
+    cleared: counted(2, 'different-event cleared'),
+    signatureAloneAdmits: counted(13, 'different-event a signature floor alone admits'),
+    entityAloneAdmits: counted(1, 'different-event an Entity floor alone admits'),
+    neitherAdmits: counted(4, 'different-event neither admits'),
+    unshared: new Array<string>(29).fill('a different-event family no live Topic holds both of'),
+  };
+
+  const text = formatGateRefusals(
+    [
+      { label: 'same-event', refusals: measured },
+      { label: 'different-event', refusals: negatives },
+    ],
+    { thresholds: SHIPPED_MERGE_THRESHOLD },
+  );
+
+  it('prints the floors the counts are at, so a row is not read as the only one', () => {
+    expect(text).toContain('gate refusals at 0.45/0.04');
+  });
+
+  it('counts what each half refused and what one half alone would have admitted', () => {
+    // The two middle columns are the price of each half in the same units, which is
+    // the only way they can be read against each other: five same-event families
+    // admitted alone against fourteen different-event ones.
+    expect(text).toContain('signature-alone');
+    expect(text).toContain('entity-alone');
+    expect(text).toMatch(/same-event\s+9\s+5\s+1\s+1\s+16/);
+    expect(text).toMatch(/different-event\s+2\s+13\s+1\s+4\s+20/);
+  });
+
+  it('takes the denominator from the buckets, so a family no Topic holds is not in it', () => {
+    // The four buckets partition the families a Topic holds both Stories for, and
+    // `unshared` is in none of them: 9+5+1+1 rather than the 23 handed over.
+    expect(text).toMatch(/both\s+signature-alone\s+entity-alone\s+neither\s+weighed/);
+    expect(text).not.toContain('23');
+    expect(text).not.toContain('31');
   });
 });

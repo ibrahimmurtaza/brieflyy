@@ -6,7 +6,11 @@ how rare it is across the Topic's Stories and by what kind of thing it is — an
 the most similar pair is merged first, subject to every member of the resulting
 Cluster clearing the floor with every other member. A merge also has to clear a
 second floor, on the Story signature, and the two are stated as one
-`MergeThresholds` rather than one at a time.
+`MergeThresholds` rather than one at a time. How the two combine is a third
+statement, `MergeGate`, rather than something either floor can be read as:
+whether one of them being enough is enough is a different decision from how alike
+is enough on each, and the alternative to the conjunction this ADR ships is
+measured at the end rather than left to be imagined.
 
 This ADR decides what grouping reads: the Entities a Story names **and** the text
 it carries. The signature was the obvious next lever and is not left to the next
@@ -200,7 +204,32 @@ share no Entity at all — two reports of one event where one outlet's extractor
 found nothing the other's did — so no similarity function over Entities joins
 them. Five of those six clear a signature floor of 0.04 anyway. More than half
 of real event families still come back split, and which lever finally moves them
-is an open question rather than a settled one.
+is settled below — against a different corpus from the rest of this ADR, one
+carrying a wide Topic added so that every labelled family can be measured.
+
+**The gate stays a conjunction, and that is now measured rather than assumed.**
+The lever that reaches those families is the obvious one: let a pair qualify on
+*either* signal rather than both. `pnpm cluster:sweep` sweeps every cell of the
+floor grid under both shapes, against the whole labelled set. The wider gate
+reaches 86.2% recall against the conjunction's 41.4%, which is past the 79.3%
+Entity-only bound above — and it reaches it at 34.7% precision against 71.4%,
+with the singleton share falling from 93.3% to 53.7% and the largest Cluster going
+from five Stories to twenty-one about one thing. Its best precision anywhere on
+the grid is 49.0%, so no widened cell is admissible for a rule that sits at 71.4%.
+
+Priced one family at a time at the shipped floors, the conjunction refuses **fourteen**
+same-event families that a signature floor alone would admit and **twenty-three**
+different-event families that one floor or the other alone would admit. Through the
+all-pairs constraint that becomes thirteen more same-event families welded against
+eighteen more different-event families welded. Nine of those twenty-three are the
+families two Stories identical as Entity vectors and plainly different as text —
+every Entity-identical negative on that corpus — which no Entity floor can reach
+and which the signature floor is the only thing holding apart.
+
+That measurement is on a different corpus from the rest of this ADR, one carrying a
+wide Topic added to make every labelled family measurable, and it reads 41.4% /
+71.4% where the baseline reads 51.7% / 71.4%. `docs/cluster-grouping-baseline.md`
+carries the figures, the corpus and what widening it did to the shipped point.
 
 **More than half the different-event families score above the gate.** The
 signature is a gate, not a separator: on this negative set the median

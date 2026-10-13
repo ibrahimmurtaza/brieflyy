@@ -1,9 +1,9 @@
-/**
+﻿/**
  * What the Cluster grouping frontier looks like over a real corpus.
  *
  * `pnpm cluster:benchmark` reports the shipped point and the largest Cluster at every
  * pair of floors the rule ships, but not what the labelled pairs score *at* each of
- * those floors — so the table in `docs/cluster-grouping-baseline.md` recording where
+ * those floors â€” so the table in `docs/cluster-grouping-baseline.md` recording where
  * 0.45 and 0.04 came from could not be regenerated or checked from this repository.
  * This is that measurement: the same corpus read by the same rule as
  * `pnpm cluster:benchmark`, with every pair of floors on a grid grouped and scored.
@@ -15,30 +15,50 @@
  * rule was measured; this exists to find out whether they are still where it should
  * be, and a grid that stopped at the answer could not answer it.
  *
- * **Reading the output.** One row per pair of floors — the Entity floor, the
- * signature floor, recall, precision, how many Clusters the corpus holds at that pair,
- * and the largest of them. The signature floor runs across the rows and the Entity
- * floor down them, so a frontier is a row read sideways, and the sweep that compares
- * two corpora is the one where every cell moves the same way.
+ * **Every cell is swept twice**, once under the gate the rule ships and once under
+ * the wider one where either signal admits a pair on its own. The two sit in
+ * adjacent rows so they read against each other, because the question they settle is
+ * what the conjunction costs: a rule that merges on the signature alone reaches the
+ * same-event families no function over Entities can join, and what it costs for them
+ * is the precision it stops holding apart. The grid alone cannot answer that â€” a pair
+ * the gate refuses is refused by one half or the other, and the grouped numbers say
+ * only what happened, not which half did it â€” so the refusals are counted from the
+ * labelled families directly and printed beneath the frontier at the shipped floors.
+ *
+ * **Reading the output.** One row per gate per pair of floors â€” the gate, the Entity
+ * floor, the signature floor, recall, precision, how many Clusters the corpus holds at
+ * that pair, the largest of them, and the share of them holding a single Story. The
+ * signature floor runs across the rows and the Entity floor down them, so a frontier
+ * is a row read sideways, and the sweep that compares two corpora is the one where
+ * every cell moves the same way.
  *
  * A cell that beats another is not a better rule. The grid is large and the labelled
  * set is small, so the best cell on it is fitted to the measurement rather than found
- * by it. The sweep's value is the shape — whether the frontier moved, and where.
+ * by it. The sweep's value is the shape â€” whether the frontier moved, and where.
  */
 import Database from 'better-sqlite3';
 import { and, eq, inArray, max } from 'drizzle-orm';
 
 import {
   evaluateClusterGrouping,
+  formatGateRefusals,
+  gateRefusals,
   resolveClusterPairs,
+  type GateRefusals,
   type GroupedTopic,
+  type ResolvedStoryPair,
+  type TopicScope,
 } from '../src/benchmark/cluster-grouping-benchmark.js';
 import { createDatabase, type Db } from '../src/db/client.js';
 import { articles, sources, stories } from '../src/db/schema.js';
 import {
+  SHIPPED_MERGE_GATE,
+  SHIPPED_MERGE_THRESHOLD,
+  describeThresholds,
   groupIntoClusters,
   type GroundedEntity,
   type GroundedStory,
+  type MergeGate,
   type MergeThresholds,
 } from '../src/domain/cluster-grouping.js';
 import { clusterWindowStart } from '../src/domain/cluster-window.js';
@@ -79,6 +99,14 @@ interface TopicRead {
  */
 const ENTITY_FLOORS = [0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55];
 const SIGNATURE_FLOORS = [0.02, 0.03, 0.04, 0.05, 0.06, 0.08];
+
+/**
+ * The gates every cell is swept under, the one the rule ships first.
+ *
+ * Ordered rather than sorted so the report leads with the rule that runs and the
+ * alternative sits beside it rather than under it.
+ */
+const GATES: readonly MergeGate[] = [SHIPPED_MERGE_GATE, 'either'];
 
 /**
  * How a Story reads, from whichever Topic first held it.
@@ -200,39 +228,67 @@ async function main(): Promise<number> {
     for (const signature of SIGNATURE_FLOORS) {
       for (const entity of ENTITY_FLOORS) {
         const thresholds: MergeThresholds = { entity, signature };
-        // Grouped with no `thresholds` marker on the GroupedTopic, because
-        // `evaluateClusterGrouping` scores only the unmarked grouping: the marker is
-        // how the benchmark keeps a swept grouping out of the shipped point's totals.
-        const grouped: GroupedTopic[] = reads.map((read) => ({
-          topicId: read.topicId,
-          clusters: groupIntoClusters(
-            read.storyIds,
-            (_storyId, index) => ({
-              entities: read.grounding[index]!,
-              signature: read.signatures[index]!,
-            }),
-            { thresholds },
-          ),
-        }));
-        const report = evaluateClusterGrouping({
-          grouped,
-          resolution,
-          readingOf: (storyId) => readingForStory(reads, storyId),
-          signatureFloor: signature,
-        });
-        rows.push(
-          `${entity.toFixed(2)}/${signature.toFixed(2)}\t${percentage(report.recall.ratio)}\t` +
-            `${percentage(report.precision.ratio)}\t${report.clusters}\t${report.largestCluster}`,
-        );
+        for (const gate of GATES) {
+          // Grouped with no `thresholds` marker on the GroupedTopic, because
+          // `evaluateClusterGrouping` scores only the unmarked grouping: the marker is
+          // how the benchmark keeps a swept grouping out of the shipped point's totals.
+          const grouped: GroupedTopic[] = reads.map((read) => ({
+            topicId: read.topicId,
+            clusters: groupIntoClusters(
+              read.storyIds,
+              (_storyId, index) => ({
+                entities: read.grounding[index]!,
+                signature: read.signatures[index]!,
+              }),
+              { thresholds, gate },
+            ),
+          }));
+          const report = evaluateClusterGrouping({
+            grouped,
+            resolution,
+            readingOf: (storyId) => readingForStory(reads, storyId),
+            signatureFloor: signature,
+          });
+          rows.push(
+            `${gate}\t${describeThresholds(thresholds)}\t${percentage(report.recall.ratio)}\t` +
+              `${percentage(report.precision.ratio)}\t${report.clusters}\t${report.largestCluster}\t` +
+              `${percentage(report.singletonProportion)}`,
+          );
+        }
       }
     }
     process.stdout.write(
-      `floors\trecall\tprecision\tclusters\tlargest\n${rows.join('\n')}\n`,
+      `gate\tfloors\trecall\tprecision\tclusters\tlargest\tsingletons\n${rows.join('\n')}\n`,
+    );
+    // Which half of the gate turned each labelled family away, counted at the floors
+    // the rule ships rather than across the grid: the grid is a frontier and this is
+    // an answer, and a frontier at 96 cells cannot carry a sentence per cell.
+    const scopes: TopicScope[] = reads.map((read) => ({
+      storyIds: read.storyIds,
+      // The map was built from these Story ids, so every one of them is a key in it.
+      readings: read.storyIds.map((storyId) => read.readingByStoryId.get(storyId)!),
+    }));
+    process.stdout.write(
+      formatGateRefusals(
+        [
+          { label: 'same-event', refusals: refusalsOf(resolution.sameEvent, scopes) },
+          { label: 'different-event', refusals: refusalsOf(resolution.differentEvent, scopes) },
+        ],
+        { thresholds: SHIPPED_MERGE_THRESHOLD },
+      ),
     );
     return 0;
   } finally {
     driver.close();
   }
+}
+
+/** Which half of the shipped gate refuses these families, over these Topics. */
+function refusalsOf(
+  pairs: readonly ResolvedStoryPair[],
+  scopes: readonly TopicScope[],
+): GateRefusals {
+  return gateRefusals({ pairs, topics: scopes, thresholds: SHIPPED_MERGE_THRESHOLD });
 }
 
 /** A share of families, as a percentage, or a dash when none could be measured. */

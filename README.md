@@ -72,7 +72,7 @@ pnpm db:generate         # writes SQL into ./drizzle that nothing here applies
 pnpm db:push             # drizzle's own diff; drops the Archive index. See below
 pnpm ingest:check-feeds  # poll every registry feed live; non-zero if one is not ingestible
 pnpm cluster:benchmark   # score Cluster grouping against the labelled pairs, over DATABASE_URL
-pnpm cluster:sweep       # the same corpus at every pair of floors on a grid, for the frontier
+pnpm cluster:sweep       # the same corpus at every pair of floors on a grid and under both gates
 pnpm cluster:velocity    # the Articles-a-day distribution the Active threshold is read from
 pnpm cluster:summary     # how much of a Cluster's bullets restate the Cluster above them
 ```
@@ -120,9 +120,17 @@ tables can be regenerated and how a floor found to be wrong for the corpus can b
 seen to be wrong. It takes the same argument `pnpm cluster:benchmark` takes from
 `DATABASE_URL`, so a copy of a database can be swept before and after a migration and
 the two frontiers compared. The grid is wider than the shipped floors on purpose: a
-sweep that stopped at the shipped answer could not disagree with it. It reads no
-`DATABASE_URL` fallback for the same reason the benchmark is not in `pnpm verify` — the
-frontier is a claim about a real corpus.
+sweep that stopped at the shipped answer could not disagree with it. Every cell is
+swept twice — once under the conjunction the rule ships and once under the wider gate
+where either signal admits a pair on its own — because what the conjunction costs is a
+question about two signals rather than about two floors, and the frontier alone says
+only what happened and not which half of the gate did it. Beneath the frontier the
+sweep counts the labelled families by which half turned each one away.
+`SHIPPED_MERGE_GATE` is `'both'`, so nothing about the application changes: the
+wider gate is reachable only by naming it, and what it costs is recorded in
+`docs/cluster-grouping-baseline.md`. It reads no `DATABASE_URL` fallback for the same
+reason the benchmark is not in `pnpm verify` — the frontier is a claim about a real
+corpus.
 
 `pnpm cluster:velocity` measures the other number a Cluster carries rather than the rule
 that produces it: the Articles-a-day velocity that decides whether a Cluster is Active at
