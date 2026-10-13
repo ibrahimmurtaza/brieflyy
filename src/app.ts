@@ -56,6 +56,7 @@ import type { RandomSource } from './domain/crypto.js';
 import { nodeRandom } from './domain/crypto.js';
 import { IngestService } from './ingest/ingest-service.js';
 import { IngestScheduler, type IngestSchedulerConfig } from './ingest/ingest-scheduler.js';
+import { signInRunsIngestCycle } from './ingest/signin-ingest-window.js';
 import {
   RegistryIngestService,
   type RegistryIngestCycleReport,
@@ -308,6 +309,9 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     emailTransport: opts.emailTransport,
     clock,
     random: opts.random ?? nodeRandom,
+    // The sign-in that starts onboarding happens before any Topic exists, so it has
+    // nothing to poll. This is the first moment there is.
+    onTopicsPicked: () => requestIngestCycle('picking topics'),
   });
 
   // Every state-changing route sits behind the cross-site guard, and the guard is
@@ -444,7 +448,11 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
   // six forms that submit these answers and the page that offers them have to
   // agree about which values exist — and a route that wrote through the repository
   // would store a cadence or a Source id nothing had checked.
-  const topicSettingsService = new TopicSettingsService({ topicRepo, sourceRepo });
+  const topicSettingsService = new TopicSettingsService({
+    topicRepo,
+    sourceRepo,
+    onSourceAttached: () => requestIngestCycle('following one more Source'),
+  });
 
   // The Archive's own repository. One dependency because reading a User's Archive is
   // one question about one index, and the tier decides how far back the answer goes.
@@ -467,6 +475,33 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     },
   });
 
+  /**
+   * Run a cycle because something just made the corpus worth refreshing, and do not
+   * make the caller wait for it.
+   *
+   * The three triggers are the three moments a User can change what Brieflyy has to
+   * show them: signing in, picking Topics, and following one more Source. Each is a
+   * request that has already been answered, and each is followed by a page that
+   * reads the corpus — so a cycle belongs at the end of one, and nothing else does.
+   *
+   * Returns rather than handing back the cycle, so a route's `await` on the hook
+   * resolves at once. `tick` joins a cycle already in flight rather than stacking
+   * one behind every trigger, which is what keeps three sign-ins in a row from
+   * becoming three overlapping cycles.
+   *
+   * Declared here and used above, where the services that call it are built: safe
+   * because those are closures, invoked on a request long after this has run.
+   */
+  const requestIngestCycle = (why: string): void => {
+    // Null when ingest is off: the scheduler is only built when there is something
+    // to fetch with, and a User action must not be the thing that decides ingest
+    // should run.
+    if (ingestScheduler === null) return;
+    void ingestScheduler.tick().catch((error: unknown) => {
+      console.error(`[app] ingest triggered by ${why} failed:`, error);
+    });
+  };
+
   const rateLimits = opts.magicLinkRateLimits ?? MAGIC_LINK_RATE_LIMITS;
   const magicLinkRateLimiter = new FixedWindowRateLimiter(
     {
@@ -487,6 +522,21 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     cookieSecure: opts.cookieSecure ?? false,
     appBaseUrl: opts.appBaseUrl,
     magicLinkRateLimiter,
+    // A sign-in on the day somebody signed up is a Reader arriving, which is the one
+    // moment the application can be certain somebody is waiting to be shown what has
+    // appeared since they last closed the tab. It runs a cycle in addition to the
+    // interval loop rather than instead of it, so a server nobody signs into still
+    // refreshes on its own — and a Reader past their first day gets the same six
+    // hours of staleness the loop gives everyone else, rather than a cycle every
+    // time they log in.
+    onSignedIn: (auth) => {
+      const runs = signInRunsIngestCycle({
+        now: clock.now(),
+        createdAt: auth.user.createdAt,
+        onboardingState: auth.user.onboardingState,
+      });
+      if (runs) requestIngestCycle('a sign-in');
+    },
   });
 
   await registerOnboardingRoutes(app, {

@@ -39,6 +39,18 @@ export interface OnboardingServiceDeps {
   readonly emailTransport: EmailTransport;
   readonly clock: Clock;
   readonly random: RandomSource;
+  /**
+   * Runs once a picker's submission has been written.
+   *
+   * Picking Topics is the moment the corpus first becomes readable for a User: a
+   * cycle builds its work from the Sources live Topics name, so before this there
+   * is nothing to poll and a sign-in has nothing to fetch. Signing in cannot cover
+   * it, because the sign-in that starts onboarding happens *before* the Topics do.
+   *
+   * Fire-and-forget by contract — the caller returns before this resolves, and a
+   * throw is the caller's to log rather than a failed sign-up.
+   */
+  readonly onTopicsPicked?: () => void | Promise<void>;
 }
 
 const templateIdSchema = z.string().min(1).max(128);
@@ -91,6 +103,7 @@ export class OnboardingService {
   private readonly emailTransport: EmailTransport;
   private readonly clock: Clock;
   private readonly random: RandomSource;
+  private readonly onTopicsPicked: (() => void | Promise<void>) | undefined;
 
   constructor(deps: OnboardingServiceDeps) {
     this.topicTemplateRepo = deps.topicTemplateRepo;
@@ -101,6 +114,7 @@ export class OnboardingService {
     this.emailTransport = deps.emailTransport;
     this.clock = deps.clock;
     this.random = deps.random;
+    this.onTopicsPicked = deps.onTopicsPicked;
   }
 
   async listTemplates(): Promise<readonly TopicTemplate[]> {
@@ -371,7 +385,27 @@ export class OnboardingService {
     // Topics the User had already half-chosen, so onboarding could be neither
     // finished nor started.
     await this.topicRepo.insertMany(created);
+    if (created.length > 0) await this.notifyTopicsPicked();
     return created;
+  }
+
+  /**
+   * Tell the caller the corpus just became readable, without letting it fail the pick.
+   *
+   * A cycle polls the Sources these Topics name, which on a fresh install is every
+   * Source that has ever been polled and can take the best part of a minute. Holding
+   * the picker's redirect for that would be the same mistake as holding a sign-in
+   * for it, so the caller is expected to return without waiting; a throw is logged
+   * rather than raised, because the Topics are already written either way and a
+   * User whose first brief is late should not also have lost their Topics.
+   */
+  private async notifyTopicsPicked(): Promise<void> {
+    if (this.onTopicsPicked === undefined) return;
+    try {
+      await this.onTopicsPicked();
+    } catch (error) {
+      console.error('[onboarding] post-pick refresh failed:', error);
+    }
   }
 
   /**

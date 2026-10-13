@@ -50,7 +50,7 @@ export interface IngestSchedulerConfig {
 }
 
 export const DEFAULT_INGEST_SCHEDULER_CONFIG: IngestSchedulerConfig = {
-  intervalMs: 30 * 60 * 1000,
+  intervalMs: 6 * 60 * 60 * 1000,
   backoffBaseMs: 60 * 1000,
   backoffMaxMs: 30 * 60 * 1000,
 };
@@ -132,6 +132,18 @@ export class IngestScheduler {
    * Source nobody follows ends up holding the loop awake forever.
    */
   private reachableSourceIds: ReadonlySet<SourceId> = new Set();
+  /**
+   * The cycle running now, so a second caller joins it rather than starting one.
+   *
+   * A cycle is not re-entrant: it reads the backoffs into the map above, writes
+   * them back, and rewrites `reachableSourceIds`, so two overlapping cycles
+   * would interleave those reads and writes and leave a Source polled twice
+   * against a `nextAttemptAt` neither of them saw. The loop serialises its own
+   * ticks, but a caller outside it — the ingest route, or a sign-in — is not
+   * under the loop's control, so the guard lives here where both paths pass
+   * through it.
+   */
+  private inFlightCycle: Promise<RegistryIngestCycleReport> | null = null;
   private lastCycleAt: Date | null = null;
   private lastCycleId: string | null = null;
   private nextDueAt: Date | null = null;
@@ -167,7 +179,30 @@ export class IngestScheduler {
     return dueAt.getTime() - now.getTime();
   }
 
-  async tick(): Promise<RegistryIngestCycleReport> {
+  /**
+   * Run a cycle, or join the one already running.
+   *
+   * Joining rather than queueing is deliberate. A sign-in arriving mid-cycle has
+   * nothing left to ask for: the cycle in flight is already reading the same
+   * Sources, so waiting behind it would report a later answer than the caller
+   * already has. Both callers still get the report the one cycle produced.
+   */
+  tick(): Promise<RegistryIngestCycleReport> {
+    if (this.inFlightCycle !== null) return this.inFlightCycle;
+    const run = this.runCycle();
+    this.inFlightCycle = run;
+    // Cleared on rejection as well as on success, so a cycle that throws leaves
+    // the scheduler usable instead of failing every caller from then on. Written
+    // as `then(clear, clear)` rather than `finally` because the promise `finally`
+    // // returns would itself reject with nothing awaiting it.
+    const clear = (): void => {
+      if (this.inFlightCycle === run) this.inFlightCycle = null;
+    };
+    run.then(clear, clear);
+    return run;
+  }
+
+  private async runCycle(): Promise<RegistryIngestCycleReport> {
     // Read before the cycle rather than after it, because the answer this
     // process gives has to be the answer the last one left on the rows. A
     // scheduler that started up with nothing in memory must leave a Source
@@ -214,6 +249,10 @@ export class IngestScheduler {
    */
   async stop(): Promise<void> {
     await this.loop.stop();
+    // The loop only waits for a cycle it started. A sign-in or the ingest route
+    // can have one running that the loop knows nothing about, and that one is
+    // just as halfway through writing Articles as any other.
+    if (this.inFlightCycle !== null) await this.inFlightCycle.catch(() => undefined);
   }
 
   /**
