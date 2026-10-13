@@ -673,7 +673,7 @@ describe('BriefSnapshotRenderer bullets', () => {
       body: 'Regulators opened a review into the Acme Corp launch.',
     }),
   ];
-  const bulletPoints = bulletsFrom(articles, 3, oneLinerFrom(articles[0]!));
+  const bulletPoints = bulletsFrom(articles, 3, [oneLinerFrom(articles[0]!)]);
   const clusters = [makeCluster({ bulletPoints })];
 
   it('links every bullet it quotes, on the extractive path', async () => {

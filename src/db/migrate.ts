@@ -391,8 +391,8 @@ interface TableRebuild {
    * table shipped. SQLite cannot alter a column's type in place either, so a
    * table that has one of these as the wrong type is rebuilt even when its
    * foreign keys are already right. `clusters.velocity` is the case that
-   * needed it: velocity became a Stories-per-day rate, and an INTEGER column
-   * silently truncates every fraction of one.
+   * needed it: velocity became a rate rather than a count, and an INTEGER
+   * column silently truncates every fraction of one.
    */
   readonly types?: Readonly<Record<string, string>>;
   /**

@@ -5,6 +5,7 @@ import {
   bulletsFrom,
   extractSentences,
   oneLinerFrom,
+  restates,
 } from './cluster-text.js';
 import { makeArticle } from '../testing/fixtures.js';
 
@@ -169,7 +170,7 @@ describe('bulletsFrom', () => {
         makeArticle({ id: 'a-2', body: `${shared} Analysts were entirely unsurprised by the launch.` }),
       ],
       3,
-      shared,
+      [shared],
     );
 
     expect(bullets).toEqual([
@@ -230,13 +231,111 @@ describe('bulletsFrom', () => {
     const body = 'Acme Corp unveiled Foo today. Analysts were surprised by the launch.';
     const article = makeArticle({ id: 'a-1', body });
 
-    expect(bulletsFrom([article], 3, oneLinerFrom(article))).not.toContain(
+    expect(bulletsFrom([article], 3, [oneLinerFrom(article)])).not.toContain(
       'Acme Corp unveiled Foo today.',
     );
   });
 
+  it('never repeats the title the Cluster is named by', () => {
+    // The headline is the last thing an Article has to offer, so an Article that
+    // is only a headline offers the Cluster title — the line a User has just
+    // read above the bullets — as a bullet.
+    const title = 'Acme Corp unveils Foo at a conference in Seattle.';
+    const article = makeArticle({ id: 'a-1', title, body: 'Hi. Ok.' });
+
+    expect(bulletsFrom([article], 3, [title])).toEqual([]);
+  });
+
+  it('excludes a title that differs only in case and whitespace', () => {
+    // The same reason the one-liner is excluded through the same comparison: a
+    // headline an outlet shouted and padded with spaces is still the headline
+    // above the bullet, so a User reads it twice rather than once.
+    const article = makeArticle({
+      id: 'a-1',
+      title: '  ACME corp   unveils   FOO at a Conference in Seattle.  ',
+      body: 'Hi. Ok.',
+    });
+
+    expect(
+      bulletsFrom([article], 3, ['Acme Corp unveils Foo at a conference in Seattle.']),
+    ).toEqual([]);
+  });
+
+  it('takes the next Article along when the title is all the first one has', () => {
+    const title = 'Acme Corp unveils Foo at a conference in Seattle.';
+    const bullets = bulletsFrom(
+      [
+        makeArticle({ id: 'a-1', title, body: 'Hi. Ok.' }),
+        makeArticle({
+          id: 'a-2',
+          body: 'BrandX Inc agreed to acquire TinyCo for two billion dollars.',
+        }),
+      ],
+      3,
+      [title],
+    );
+
+    expect(bullets).toEqual([
+      'BrandX Inc agreed to acquire TinyCo for two billion dollars.',
+    ]);
+  });
+
+  it('carries fewer bullets rather than one restating the Cluster above it', () => {
+    // One Article, one sentence, and that sentence is the Cluster's own
+    // headline. There is nothing a User has not just read, so the Cluster says
+    // it with no bullets rather than with the same line twice.
+    const title = 'Acme Corp unveils Foo at a conference in Seattle.';
+    const article = makeArticle({
+      id: 'a-1',
+      title,
+      body: 'Acme Corp unveils Foo at a conference in Seattle.',
+    });
+
+    expect(bulletsFrom([article], 3, [title])).toEqual([]);
+  });
+
   it('returns nothing when there are no Articles to draw from', () => {
     expect(bulletsFrom([], 3)).toEqual([]);
+  });
+});
+
+describe('restates', () => {
+  it('says a statement restates one it differs from only in case and spacing', () => {
+    expect(
+      restates('  acme CORP   unveils foo ', [
+        'Acme Corp unveils Foo',
+        'Something else entirely',
+      ]),
+    ).toBe(true);
+  });
+
+  it('says a statement restates none of several', () => {
+    expect(restates('Regulators opened a review into the deal.', ['Acme Corp unveils Foo'])).toBe(
+      false,
+    );
+  });
+
+  it('agrees with what bulletsFrom excludes', () => {
+    // The measurement behind `pnpm cluster:summary` asks this question, so a
+    // second answer here would be a report free to disagree with the rule it is
+    // measuring. The Articles are given bodies so there are bullets to ask
+    // about: a headline-only Article draws none, and a check over nothing checks
+    // nothing.
+    const shown = ['Acme Corp unveils Foo at a conference in Seattle.'];
+    const articles = [
+      makeArticle({
+        id: 'a-1',
+        title: shown[0]!,
+        body: 'Acme Corp unveiled Foo at a conference in Seattle today. The launch drew a large crowd.',
+      }),
+      makeArticle({ id: 'a-2', body: 'Regulators opened a review into the Foo launch.' }),
+    ];
+    const bullets = bulletsFrom(articles, 3, [oneLinerFrom(articles[0]!), ...shown]);
+
+    expect(bullets).toHaveLength(2);
+    for (const bullet of bullets) {
+      expect(restates(bullet, shown)).toBe(false);
+    }
   });
 });
 

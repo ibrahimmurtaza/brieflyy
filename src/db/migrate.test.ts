@@ -158,7 +158,7 @@ CREATE INDEX stories_source_fingerprint_idx ON stories (source_id, fingerprint);
 
 /**
  * A database from after clusters gained their foreign key, but before velocity
- * became a Stories-per-day rate and before the per-Topic window existed. The
+ * became a rate rather than a count and before the per-Topic window existed. The
  * clusters table is already correct as far as foreign keys go, so only a
  * column-type change can be what rebuilds it.
  */

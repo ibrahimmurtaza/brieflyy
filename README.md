@@ -73,6 +73,8 @@ pnpm db:push             # drizzle's own diff; drops the Archive index. See belo
 pnpm ingest:check-feeds  # poll every registry feed live; non-zero if one is not ingestible
 pnpm cluster:benchmark   # score Cluster grouping against the labelled pairs, over DATABASE_URL
 pnpm cluster:sweep       # the same corpus at every pair of floors on a grid, for the frontier
+pnpm cluster:velocity    # the Articles-a-day distribution the Active threshold is read from
+pnpm cluster:summary     # how much of a Cluster's bullets restate the Cluster above them
 ```
 
 `pnpm db:migrate` is the command that applies DDL, and it is the one the "Changing
@@ -122,6 +124,16 @@ sweep that stopped at the shipped answer could not disagree with it. It reads no
 `DATABASE_URL` fallback for the same reason the benchmark is not in `pnpm verify` — the
 frontier is a claim about a real corpus.
 
+`pnpm cluster:velocity` measures the other number a Cluster carries rather than the rule
+that produces it: the Articles-a-day velocity that decides whether a Cluster is Active at
+all, and so whether a BriefPlan can select it. It forms every live Topic's Clusters with
+the function `ClusterFormationService` calls — `clusterVelocity`, exported for the same
+reason `groundingByStoryInScope` is — and prints the distribution that velocity takes
+over the corpus: a histogram of Articles a day, the exact values underneath it, and one
+row per candidate threshold saying how many Clusters and how many Stories it would leave
+Active. `docs/cluster-velocity-baseline.md` records the measurement and what the shipped
+number rests on.
+
 It also prints the numbers that bound what grouping can do, rather than leaving
 them to be discovered by disappointment. Two **ceilings**, each labelled with the
 representations it is a bound on: the **Entities-only** one is the precision a
@@ -144,6 +156,23 @@ measurement rather than an assertion, and reading across the floors against each
 other says which of the two is doing the bounding. The shipped pair itself is the
 headline `largest` line rather than one of them.
 `docs/adr/0030` records both ceilings and which of them the signature moves.
+
+`pnpm cluster:summary` measures the third number a Cluster carries: the statements its
+bullets are drawn from, and whether any of them say what the Cluster already shows.
+Bullet selection falls back to an Article's headline and a Cluster's title *is* its
+representative Article's headline, so an Article that was only a headline offered the
+Cluster its own name as a bullet — the line sitting directly above it. The headline is
+excluded now, the way the one-liner already was, and a Cluster with nothing left to
+quote carries fewer bullets rather than a repeated one. The command draws each
+Cluster's summary through `clusterSummaryOf`, the function `ClusterFormationService`
+calls, and draws the counterfactual — the same draw with the title left out of the
+exclusions — through `bulletsFrom` directly. On the corpus recorded in
+`docs/cluster-summary-baseline.md`, 501 of 748 bullets restated their Cluster's title
+before, and the 250 that remain do not, running the shipped rule; the same report
+prices the change at 470 of 726 Clusters carrying no bullets at all. A report reading
+its own copy of the rule would carry on printing a clean number the day the rule
+changed and nobody changed the report. It is not in `pnpm verify` for the same reason
+`pnpm cluster:benchmark` is not: the numbers are a claim about a real corpus.
 
 `pnpm typecheck` covers `src/`, which is where the unit tests live, and not
 `tests/e2e/`: `tsconfig.json` includes only `src/**/*.ts`, and Playwright compiles
@@ -478,8 +507,8 @@ shape change needs one of:
     before the send rather than a receipt for one.
   - A column whose declared type changed goes in the entry's `types` map, for
     the same reason: SQLite cannot alter a column in place. `clusters.velocity`
-    is the case that needed it — velocity became a Stories-per-day rate, and an
-    `INTEGER` column truncates every fraction of one.
+    is the case that needed it — velocity became a rate rather than a count, and
+    an `INTEGER` column truncates every fraction of one.
   - A column the old table does not have at all and that cannot simply default
     to nothing goes in `backfill`, as the SQL that produces it from the rows
     already stored — `magic_links.email` is worked out from the account the old
@@ -647,6 +676,8 @@ purpose, and each is reached by something other than a request:
 | `src/ingest/check-feeds.ts` | `pnpm ingest:check-feeds` |
 | `src/benchmark/` | `pnpm cluster:benchmark`, and its scoring suite |
 | `scripts/cluster-sweep.ts` | `pnpm cluster:sweep` |
+| `scripts/cluster-velocity.ts` | `pnpm cluster:velocity` |
+| `scripts/cluster-summary.ts` | `pnpm cluster:summary` |
 | `src/ingest/test-constants.ts` | the ingest suites |
 | `src/testing/`, `src/app-wiring.ts` | the suites |
 

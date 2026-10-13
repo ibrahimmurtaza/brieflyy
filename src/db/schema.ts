@@ -459,9 +459,9 @@ export const clusters = sqliteTable(
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     lastSeenAt: integer('last_seen_at', { mode: 'timestamp_ms' }).notNull(),
     articleCount: integer('article_count').notNull(),
-    // Stories per unit time, so a real number rather than a count. An INTEGER
-    // column here would truncate every rate below one Story per unit, which is
-    // most of them.
+    // Articles per unit time, so a real number rather than a count. An
+    // INTEGER column here would truncate every rate below one Article per
+    // unit, which is most of them. See ADR-0035 for what the rate is for.
     velocity: real('velocity').notNull(),
     sourceIds: text('source_ids').notNull(),
     state: text('state', { enum: ['active', 'archive'] }).notNull().default('active'),
