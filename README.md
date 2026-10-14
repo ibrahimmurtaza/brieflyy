@@ -60,7 +60,7 @@ pnpm install             # install dependencies
 pnpm dev                 # the server under --watch, with --env-file=.env
 pnpm start               # the server, once, with --env-file=.env
 pnpm build               # compile src/ to ./dist
-pnpm typecheck           # tsc --noEmit over src/, test files included
+pnpm typecheck           # tsc --noEmit over src/ and scripts/, test files included
 pnpm test                # the unit and HTTP suite (Vitest)
 pnpm test:watch          # the same suite, watching
 pnpm test:e2e:install    # fetch the Chromium the browser suite drives (once)
@@ -182,10 +182,15 @@ its own copy of the rule would carry on printing a clean number the day the rule
 changed and nobody changed the report. It is not in `pnpm verify` for the same reason
 `pnpm cluster:benchmark` is not: the numbers are a claim about a real corpus.
 
-`pnpm typecheck` covers `src/`, which is where the unit tests live, and not
-`tests/e2e/`: `tsconfig.json` includes only `src/**/*.ts`, and Playwright compiles
-the specs without checking their types, so a type error in a spec is found at run
-time or not at all.
+`pnpm typecheck` covers `src/` and `scripts/`, which is where the unit tests and the
+operator commands live, and not `tests/e2e/`: Playwright compiles the specs without
+checking their types, so a type error in a spec is found at run time or not at all.
+
+`scripts/` is in the typecheck set because it is shipped the same way `src/` is -
+run by `pnpm cluster:*` with no build step - and an uncovered script is a script
+whose errors are found by whoever runs it next rather than by CI. `outDir` and
+`rootDir` live in `tsconfig.build.json` rather than here for that reason: `pnpm build`
+emits `src/` alone, and `scripts/` is run through `tsx` from source.
 
 ## Local setup
 

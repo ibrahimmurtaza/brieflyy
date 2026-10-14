@@ -248,6 +248,25 @@ calibration measurement reproduced by no command, in the same way ADR-0030's
 single-linkage table is, and it is recorded here because the floor is a constant
 somebody chose and the corpus it was chosen on is not in the repository.
 
+**The backfill (#137) is what gives this table a command**, and until it lands the
+gap is real rather than a matter of tidiness: the floor in `cluster-grouping.ts` and
+the number the floor was chosen from are not re-derivable by anyone, including
+whoever comes back to move it. Re-deriving it needs a corpus carrying embeddings,
+and no such corpus is in the repository. The graft is the shape that command will
+take — embeddings written onto readings already read, over a copy — and #137 is
+blocked on nothing but landing.
+
+**Where a two-model corpus is concerned this ADR will be superseded, deliberately.**
+`embeddingSimilarity` answers `null` for two vectors from different models, and the
+rule above reads that as the floor *not applying* — the pair is decided by the other
+two floors and grouping continues. That is the right behaviour for a pair, and the
+wrong behaviour for a corpus: a mixed set means the model changed and only some
+Stories were recomputed, every cosine in it still looks like a number, and the only
+symptom is that grouping quietly got worse. #138 makes grouping refuse such a set
+and name the models it found. The change is to where the check happens — the corpus
+rather than the pair — and not to what `null` means, which stays "no evidence" here
+because that is still what it is about a pair carrying one vector or none.
+
 `OPENROUTER_EMBEDDINGS_URL` batches its inputs, so the 136 vectors cost seven
 requests rather than 136 — which matters, because the free tier counts requests and
 allows fifty a day. A backfill of a real corpus is a larger job than that by three
