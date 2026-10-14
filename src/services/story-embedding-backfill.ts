@@ -30,12 +30,26 @@
  */
 import type {
   BatchingEmbeddingProvider,
+  EmbeddingBatch,
   EmbeddingUsage,
   StoryEmbedding,
 } from '../domain/embedding.js';
 import { articleText } from '../domain/feed-text.js';
 import type { StoryId } from '../domain/types.js';
 import type { StoryRepo, UnembeddedStory } from '../repos/story-repo.js';
+
+/**
+ * What a whole run spent, and how much of it was actually measured.
+ *
+ * The per-call figures are the provider's, added up over the run; `reportingCalls`
+ * is this build's, and it is what keeps the total honest. A run whose replies all
+ * carried a figure and a run whose replies half carried one would otherwise print
+ * the same number, and the second of those is a sum over fewer calls than it says.
+ */
+export interface EmbeddingBackfillUsage extends EmbeddingUsage {
+  /** Calls that carried a usage figure at all, which is what a total is over. */
+  readonly reportingCalls: number;
+}
 
 /**
  * What one run of a backfill did.
@@ -53,14 +67,12 @@ export interface EmbeddingBackfillReport {
   readonly considered: number;
   /** Of those, the ones no vector was written for. */
   readonly unanswered: number;
+  /** Of those, the ones holding no Article, so there was no text to embed. */
+  readonly withoutArticle: number;
   /** Calls that came back with nothing at all, rather than with too few vectors. */
   readonly refusedCalls: number;
-  /** Calls made, which is what the run cost whatever the provider answered. */
-  readonly requests: number;
-  /** Tokens the provider counted, or nothing where it reported no figure. */
-  readonly tokens: number | null;
-  /** What the provider says it charged, in its own units. */
-  readonly credits: number | null;
+  /** What the run spent. */
+  readonly usage: EmbeddingBackfillUsage;
   /** The models the vectors this run wrote carry, sorted. */
   readonly models: readonly string[];
 }
@@ -120,8 +132,10 @@ class BackfillRun {
   private embedded = 0;
   private considered = 0;
   private unanswered = 0;
+  private withoutArticle = 0;
   private refusedCalls = 0;
   private requests = 0;
+  private reportingCalls = 0;
   private tokens: number | null = null;
   private credits: number | null = null;
   private readonly models = new Set<string>();
@@ -137,19 +151,31 @@ class BackfillRun {
    */
   async embedPage(page: readonly UnembeddedStory[]): Promise<void> {
     this.considered += page.length;
-    const vectors = await this.askAbout(page.map((story) => articleText(story.title, story.body)));
+    const embeddable = page.filter((story) => story.title !== null && story.body !== null);
+    this.withoutArticle += page.length - embeddable.length;
+    if (embeddable.length === 0) return;
+
+    const vectors = await this.askAbout(
+      embeddable.map((story) => articleText(story.title as string, story.body as string)),
+    );
 
     for (const [at, embedding] of vectors.entries()) {
+      const story = embeddable[at]!;
       if (embedding === null) {
+        this.unanswered += 1;
+        continue;
+      }
+      // A write refused because the Story acquired a vector while the call was in
+      // flight is counted as a Story this run did not embed — the report counts
+      // acts, not outcomes, and a run that reports a write it did not make is the
+      // one number here an operator would be misled by.
+      const written = await this.deps.storyRepo.backfillEmbedding(story.id, embedding);
+      if (!written) {
         this.unanswered += 1;
         continue;
       }
       this.models.add(embedding.model);
       this.embedded += 1;
-      // A write refused because the Story acquired a vector while the call was in
-      // flight still counts as embedded: the Story carries one, which is the only
-      // thing this run is for. Nothing here overwrites what it finds.
-      await this.deps.storyRepo.backfillEmbedding(page[at]!.id, embedding);
     }
   }
 
@@ -182,13 +208,17 @@ class BackfillRun {
   /**
    * Adds one call's answer to the run's totals.
    *
-   * Tokens and credits are added only where the call reported them, so a run in
-   * which some replies carried a figure and some did not reports the sum of the
-   * figures rather than a total that silently includes zeroes for the rest.
+   * Tokens and credits are added only where the call reported them, and
+   * `reportingCalls` counts the calls that did — so a run in which some replies
+   * carried a figure and some did not reports a sum over the ones that did, and
+   * the report says which those were rather than printing it as the whole.
    */
-  private add(batch: { readonly usage: EmbeddingUsage; readonly refused: boolean }): void {
+  private add(batch: EmbeddingBatch): void {
     this.requests += batch.usage.requests;
-    if (batch.usage.tokens !== null) this.tokens = (this.tokens ?? 0) + batch.usage.tokens;
+    if (batch.usage.tokens !== null) {
+      this.reportingCalls += 1;
+      this.tokens = (this.tokens ?? 0) + batch.usage.tokens;
+    }
     if (batch.usage.credits !== null) this.credits = (this.credits ?? 0) + batch.usage.credits;
     if (batch.refused) this.refusedCalls += 1;
   }
@@ -197,11 +227,15 @@ class BackfillRun {
     return {
       embedded: this.embedded,
       considered: this.considered,
-      unanswered: this.unanswered,
+      unanswered: this.unanswered + this.withoutArticle,
+      withoutArticle: this.withoutArticle,
       refusedCalls: this.refusedCalls,
-      requests: this.requests,
-      tokens: this.tokens,
-      credits: this.credits,
+      usage: {
+        requests: this.requests,
+        tokens: this.tokens,
+        credits: this.credits,
+        reportingCalls: this.reportingCalls,
+      },
       models: [...this.models].sort(),
     };
   }
@@ -256,9 +290,12 @@ function progressLines(report: EmbeddingBackfillReport): readonly string[] {
   ];
   if (report.unanswered > 0) {
     lines.push(
-      `  asked     the provider had nothing for ${report.unanswered} of them` +
+      `  asked     the provider had nothing for ${report.unanswered - report.withoutArticle} of them` +
         (report.refusedCalls > 0
-          ? `, over ${report.refusedCalls} of ${report.requests} calls that returned nothing at all`
+          ? `, over ${report.refusedCalls} of ${report.usage.requests} calls that returned nothing at all`
+          : '') +
+        (report.withoutArticle > 0
+          ? `, and ${report.withoutArticle} of them hold no Article to take a reading from`
           : ''),
     );
   }
@@ -271,15 +308,42 @@ function progressLines(report: EmbeddingBackfillReport): readonly string[] {
  *
  * Requests first, because that is the only one this build counted itself and the
  * one a free account is actually limited by. Tokens and credits are read out of
- * the replies, and a run whose replies carried neither is printed as `not
- * reported` rather than as a zero — the one reading of the pair that would be
- * certainly wrong.
+ * the replies, and a figure that came back from fewer calls than the run made is
+ * marked as one — an unmarked total over half the calls is a number the operator
+ * would take as the whole of it.
  */
 function costLine(report: EmbeddingBackfillReport): string {
-  const calls = report.requests === 0 ? 'no calls made' : report.requests === 1 ? '1 request' : `${report.requests} requests`;
+  const { requests, tokens, credits, reportingCalls } = report.usage;
+  const calls =
+    requests === 0
+      ? 'no calls made'
+      : requests === 1
+        ? '1 request'
+        : `${requests} requests`;
   return [
     calls,
-    report.tokens === null ? 'tokens not reported' : `${report.tokens} tokens`,
-    report.credits === null ? 'credits not reported' : `${report.credits} credits`,
+    figure(tokens, reportingCalls, requests, 'token'),
+    figure(credits, reportingCalls, requests, 'credit'),
   ].join(', ');
+}
+
+/**
+ * One reported figure, saying how many calls it is a sum over where that is not
+ * all of them.
+ *
+ * `null` is the absence of a measurement and prints as such — the one reading of
+ * the pair that would be certainly wrong, since a run that spent money and said it
+ * had spent none is the failure this line exists to prevent.
+ */
+function figure(
+  value: number | null,
+  reportingCalls: number,
+  requests: number,
+  unit: string,
+): string {
+  if (value === null) return `${unit}s not reported`;
+  const plural = value === 1 ? unit : `${unit}s`;
+  return reportingCalls < requests
+    ? `${value} ${plural}, as reported by ${reportingCalls} of ${requests} calls`
+    : `${value} ${plural}`;
 }

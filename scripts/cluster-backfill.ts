@@ -4,11 +4,10 @@
  * `pnpm cluster:benchmark`, `pnpm cluster:sweep`, `pnpm cluster:velocity` and
  * `pnpm cluster:summary` all read a corpus and write nothing. This one reads a
  * corpus and writes to it, so it says what it did and what it cost rather than
- * printing a measurement — and, like the rest of them, it takes the database to
- * work on as an argument, so a copy is how you run it over one.
+ * printing a measurement — and, unlike them, it **requires** the database as an
+ * argument rather than falling back to `DATABASE_URL`.
  *
- *     pnpm cluster:backfill                             # the database DATABASE_URL names
- *     pnpm cluster:backfill "D:\path\to\corpus.db"      # a copy, which is the point
+ *     pnpm cluster:backfill "D:\path\to\corpus-copy.db"     # a copy, which is the point
  *
  * **Take a copy.** Every Story already in a database was formed before anything
  * carried an embedding (ADR-0037), and this is the act that changes that. It
@@ -16,7 +15,9 @@
  * else, and it never replaces a vector that is already there — but a corpus that
  * has been through it has grouping reading a third floor where it read none
  * before, and the only way to see that is to run `pnpm cluster:benchmark` over
- * the result and compare it with the run over the copy you kept.
+ * the result and compare it with the run over the copy you kept. That is why the
+ * path is required: a run pointed at the working database by a variable nobody was
+ * thinking about is the one outcome the copy exists to prevent.
  *
  * **A second run embeds nothing and says so.** A run over an already-backfilled
  * corpus spends no calls and prints a sentence saying every Story already carries
@@ -43,14 +44,29 @@ import {
   backfillStoryEmbeddings,
   formatEmbeddingBackfillReport,
 } from '../src/services/story-embedding-backfill.js';
-import type { BatchingEmbeddingProvider } from '../src/domain/embedding.js';
-import { readEmbeddingBatchSize, readRequiredString } from '../src/env.js';
+import type { BatchingEmbeddingProvider, EmbeddingProvider } from '../src/domain/embedding.js';
+import { readEmbeddingBatchSize } from '../src/env.js';
 
-/** The file to backfill, from the first argument or from `DATABASE_URL`. */
+/**
+ * The file to backfill.
+ *
+ * **Required, and no fallback to `DATABASE_URL`.** The other three corpus
+ * commands read, so naming one is a convenience and falling back costs nothing;
+ * this one writes. A run pointed at the working database by a variable nobody was
+ * thinking about is a corpus whose grouping has silently changed, which is the
+ * one outcome the copy exists to prevent. Naming the file *is* the act — the same
+ * way `pnpm db:push` is only ever run against a database the operator has decided
+ * to lose.
+ */
 function databaseFile(): string {
   const argument = process.argv[2];
-  if (argument !== undefined) return argument;
-  return readRequiredString(process.env, 'DATABASE_URL').replace(/^file:/, '');
+  if (argument === undefined) {
+    throw new Error(
+      'name the database to backfill: this command writes, so it takes a copy rather than DATABASE_URL.\n' +
+        '  pnpm cluster:backfill "D:\\path\\to\\corpus-copy.db"',
+    );
+  }
+  return argument;
 }
 
 async function main(): Promise<number> {
@@ -99,8 +115,10 @@ async function main(): Promise<number> {
  * assumed — and a backfill on one would cost a request per Story, which on a real
  * corpus is not a run anybody should start by accident.
  */
-function isBatching(provider: unknown): provider is BatchingEmbeddingProvider {
-  return typeof (provider as BatchingEmbeddingProvider | null)?.embedBatch === 'function';
+function isBatching(
+  provider: EmbeddingProvider,
+): provider is EmbeddingProvider & BatchingEmbeddingProvider {
+  return typeof (provider as Partial<BatchingEmbeddingProvider>).embedBatch === 'function';
 }
 
 main()

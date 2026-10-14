@@ -695,7 +695,8 @@ src/
 │                          # the LivingBrief, the Archive route, ...)
 ├── services/              # clustering; the brief layer (BriefPlan, BriefSnapshot
 │                          # renderer, the scheduled job, /admin/briefs); the written
-│                          # summary client, the embedding provider; the feedback
+│                          # summary client, the embedding provider and its
+│                          # batch contract; the feedback
 │                          # layer; topic settings; the trends service; Archive
 │                          # search; and the unsubscribe state that job honours
 ├── trends/                # the trends view: inline-SVG chart + sparklines, the
@@ -803,6 +804,7 @@ double in `src/testing/`, a lambda a test supplies, or a test of its own.
 | `EmailTransport` | `send(message)`, raising `EmailRefusedError` only where the provider itself answered no — a thrown call is not a refusal (ADR-0027) | `ConsoleEmailTransport`, `ResendEmailTransport` |
 | `LLMSummaryClient` | `generateSummary(clusterTitle, clusterSummary, articles)` | `OpenAILLMSummaryService`, `RecordingSummaryClient`, or none at all |
 | `EmbeddingProvider` | `embed(text)` | `OpenRouterEmbeddingService`, `RecordingEmbeddingProvider`, or none at all |
+| `BatchingEmbeddingProvider` | `embedBatch(texts)` — the endpoint is billed per request, so a backfill has to ask about many texts in one call (ADR-0039) | `OpenRouterEmbeddingService`, a double in `story-embedding-backfill.test.ts`, or nothing at all |
 | `Clock` | `now()` | `systemClock`, `makeTestClock` (a `set`/`advance` pair) |
 | `RandomSource` | `bytes()`, `uuid()` | `nodeRandom`, `deterministicRandom` |
 | `EnvSource` | `Readonly<Record<string, string \| undefined>>` | `process.env`, a plain object in tests |
@@ -877,7 +879,7 @@ counted.
 pnpm test
 ```
 
-The suite is 108 test files across `src/` holding 1,947 cases — Vitest prints the
+The suite is 108 test files across `src/` holding 1,953 cases — Vitest prints the
 live figure at the end of every run. `docs-agreement.test.ts` checks the file
 count and cannot check the case count without running the suite it lives in, so
 that one number is worth reading off a run rather than trusting.

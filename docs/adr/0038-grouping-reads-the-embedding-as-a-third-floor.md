@@ -1,5 +1,14 @@
 # Grouping reads the embedding as a third floor
 
+> **Superseded in part by
+> [[0039-the-stories-that-predicate-the-embedding-are-backfilled]]**, which gives
+> the grafted corpus below a command. Everything this ADR decides about *grouping*
+> stands; what changes is that a corpus holding embeddings is now something an
+> operator produces rather than something only a calibration run could produce.
+> The section *How this was measured* has been amended to say so — read it as
+> written before ADR-0039 and as amended after, since the two are true of their
+> own moments.
+
 Grouping asked two questions of a pair of Stories: do they name the same rare
 things, and does their text agree. This ADR adds the third — do they mean the same
 thing — as a **floor beside** the other two rather than blended into either. A

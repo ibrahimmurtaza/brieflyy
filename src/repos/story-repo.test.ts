@@ -589,6 +589,29 @@ describe('DrizzleStoryRepo', () => {
       expect(found.map((s) => s.id)).toEqual(['story-bare']);
     });
 
+    it('offers a Story holding no Article, rather than dropping it', async () => {
+      // A Story is inserted before its first Article is attached, so this is the
+      // window every cycle runs in. Dropped by the read, a corpus holding one
+      // would report that nothing was left to do — and the report would be wrong,
+      // because that Story carries no vector and the semantic floor does not
+      // apply to it at all.
+      const { db } = await setupSource();
+      const repo = new DrizzleStoryRepo(db);
+      const t = new Date('2026-05-01T12:00:00Z');
+      await repo.insert({
+        id: 'story-orphan' as StoryId,
+        signature: signatureOf(WIRE_COPIES[0]!.body),
+        embedding: null,
+        firstSeenAt: t,
+        lastSeenAt: t,
+        published: { first: t, last: t },
+      });
+
+      const found = await repo.listUnembedded({ limit: 10 });
+
+      expect(found).toEqual([{ id: 'story-orphan', title: null, body: null }]);
+    });
+
     it('offers a Story whose two halves were migrated apart', async () => {
       // The columns were added one at a time, so a database interrupted midway
       // holds a vector with no model beside it — which reads as no embedding

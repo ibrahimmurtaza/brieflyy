@@ -24,8 +24,9 @@ import type {
  */
 export interface UnembeddedStory {
   readonly id: StoryId;
-  readonly title: string;
-  readonly body: string;
+  /** Null where the Story holds no Article to take a reading from. */
+  readonly title: string | null;
+  readonly body: string | null;
 }
 
 /**
@@ -93,6 +94,13 @@ export interface StoryRepo {
   /**
    * The Stories carrying no embedding, with the Article one would be taken from,
    * a page at a time.
+   *
+   * A Story holding **no Article** comes back with nothing to read rather than
+   * not coming back. It cannot be embedded — there is no text to embed — but it
+   * is still carrying no vector, and a reader that dropped it would let a corpus
+   * holding one print as a corpus where nothing was left to do. One Story is
+   * inserted before its first Article is attached, so this is the window a cycle
+   * runs in rather than a shape no database reaches.
    *
    * Paged by `limit` and resumable by `after`, because a backfill walks this
    * repeatedly — once per batch, and again on the next run of the command — and
@@ -294,7 +302,11 @@ export class DrizzleStoryRepo implements StoryRepo {
     const rows = await this.db
       .select({ id: stories.id, title: articles.title, body: articles.body })
       .from(stories)
-      .innerJoin(articles, and(eq(articles.storyId, stories.id), FORMING_ARTICLE))
+      // Left rather than inner, so a Story holding no Article is reported as
+      // carrying no embedding with nothing to embed from rather than being
+      // dropped: dropping it is what lets a corpus holding one read as a corpus
+      // that had nothing left to do.
+      .leftJoin(articles, and(eq(articles.storyId, stories.id), FORMING_ARTICLE))
       .where(
         input.after === undefined ? CARRIES_NO_EMBEDDING : and(CARRIES_NO_EMBEDDING, gt(stories.id, input.after)),
       )

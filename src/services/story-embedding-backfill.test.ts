@@ -4,6 +4,7 @@ import {
   backfillStoryEmbeddings,
   formatEmbeddingBackfillReport,
   type EmbeddingBackfillReport,
+  type EmbeddingBackfillUsage,
 } from './story-embedding-backfill.js';
 import { createTestDb } from '../testing/test-db.js';
 import { DrizzleSourceRepo } from '../repos/source-repo.js';
@@ -161,7 +162,7 @@ describe('backfillStoryEmbeddings', () => {
 
     expect(provider.totals).toEqual([10, 10, 5]);
     expect(report.embedded).toBe(25);
-    expect(report.requests).toBe(3);
+    expect(report.usage.requests).toBe(3);
   });
 
   it('leaves a Story already carrying an embedding exactly as it is', async () => {
@@ -195,7 +196,7 @@ describe('backfillStoryEmbeddings', () => {
     const report = await backfillStoryEmbeddings({ storyRepo: repo, provider: second, batchSize: 4 });
 
     expect(second.calls).toBe(0);
-    expect(report).toMatchObject({ embedded: 0, considered: 0, requests: 0 });
+    expect(report).toMatchObject({ embedded: 0, considered: 0, usage: { requests: 0 } });
     expect(formatEmbeddingBackfillReport(report, { batchSize: 4 })).toContain('nothing to do');
   });
 
@@ -206,11 +207,9 @@ describe('backfillStoryEmbeddings', () => {
     const report = await backfillStoryEmbeddings({ storyRepo: repo, provider, batchSize: 10 });
 
     expect(report).toMatchObject({
-      requests: 2,
-      tokens: 60,
-      credits: 0.02,
       unanswered: 0,
       refusedCalls: 0,
+      usage: { requests: 2, tokens: 60, credits: 0.02, reportingCalls: 2 },
       models: [BACKFILL_MODEL],
     });
   });
@@ -247,7 +246,7 @@ describe('backfillStoryEmbeddings', () => {
     expect(provider.totals).toEqual([3, 1, 1, 1]);
     expect(report.embedded).toBe(3);
     expect(report.refusedCalls).toBe(1);
-    expect(report.requests).toBe(4);
+    expect(report.usage.requests).toBe(4);
     expect((await repo.getById('story-002' as StoryId))?.embedding?.model).toBe(BACKFILL_MODEL);
     expect(texts).toHaveLength(3);
   });
@@ -261,7 +260,13 @@ describe('backfillStoryEmbeddings', () => {
 
     const report = await backfillStoryEmbeddings({ storyRepo: repo, provider, batchSize: 5 });
 
-    expect(report).toMatchObject({ embedded: 0, considered: 2, unanswered: 2, refusedCalls: 3, requests: 3 });
+    expect(report).toMatchObject({
+      embedded: 0,
+      considered: 2,
+      unanswered: 2,
+      refusedCalls: 3,
+      usage: { requests: 3, tokens: null, credits: null, reportingCalls: 0 },
+    });
     expect((await repo.getById('story-001' as StoryId))?.embedding).toBeNull();
 
     const printed = formatEmbeddingBackfillReport(report, { batchSize: 5 });
@@ -300,6 +305,80 @@ describe('backfillStoryEmbeddings', () => {
     expect(report.models).toEqual(['vendor/a-1', 'vendor/b-2']);
   });
 
+  it('names a Story holding no Article rather than reporting the corpus as finished', async () => {
+    // A Story is inserted before its first Article is attached, so this is the
+    // window every cycle runs in rather than a shape no database reaches. Dropped
+    // by the read it would let a corpus holding one print as a corpus where
+    // nothing was left to do — the one line a second run is judged on.
+    const { repo } = await corpusOf(1);
+    await repo.insert({
+      id: 'story-orphan' as StoryId,
+      signature: EMPTY_SIGNATURE,
+      embedding: null,
+      firstSeenAt: new Date('2026-05-01T00:00:00Z'),
+      lastSeenAt: new Date('2026-05-01T00:00:00Z'),
+      published: { first: new Date('2026-05-01T00:00:00Z'), last: new Date('2026-05-01T00:00:00Z') },
+    });
+    const provider = new AnsweringProvider();
+
+    const report = await backfillStoryEmbeddings({ storyRepo: repo, provider, batchSize: 10 });
+
+    expect(provider.calls).toBe(1);
+    expect(report).toMatchObject({
+      embedded: 1,
+      considered: 2,
+      unanswered: 1,
+      withoutArticle: 1,
+    });
+    expect(formatEmbeddingBackfillReport(report, { batchSize: 10 })).toContain(
+      '1 of them hold no Article to take a reading from',
+    );
+  });
+
+  it('does not claim to have embedded a Story whose write was refused', async () => {
+    // The `WHERE` on the write is the only thing standing between a concurrent
+    // formation and a report saying this run put a vector on a Story it did not.
+    // A run that counts an act it did not perform is worse than one that reports
+    // nothing, because the number is what an operator reads afterwards.
+    const { repo } = await corpusOf(1);
+    const provider = new AnsweringProvider();
+
+    const report = await backfillStoryEmbeddings({
+      storyRepo: {
+        listUnembedded: (input) => repo.listUnembedded(input),
+        backfillEmbedding: async () => false,
+      },
+      provider,
+      batchSize: 10,
+    });
+
+    expect(report).toMatchObject({ embedded: 0, considered: 1, unanswered: 1 });
+    expect((await repo.getById('story-001' as StoryId))?.embedding).toBeNull();
+  });
+
+  it('marks a total as the sum over the calls that reported it', async () => {
+    // Two of three calls carried a figure. Printed as a plain total it would read
+    // as the whole of what the run spent.
+    const { repo } = await corpusOf(2);
+    let call = 0;
+    const sometimes: BatchingEmbeddingProvider = {
+      embedBatch: async (texts) => {
+        const batch = await new AnsweringProvider().embedBatch(texts);
+        call += 1;
+        return call === 2
+          ? { ...batch, usage: { requests: 1, tokens: null, credits: null } }
+          : batch;
+      },
+    };
+
+    const report = await backfillStoryEmbeddings({ storyRepo: repo, provider: sometimes, batchSize: 1 });
+
+    expect(report.usage).toMatchObject({ requests: 2, tokens: 3, reportingCalls: 1 });
+    expect(formatEmbeddingBackfillReport(report, { batchSize: 1 })).toContain(
+      '3 tokens, as reported by 1 of 2 calls',
+    );
+  });
+
   it('refuses to run at all on a batch size that is no batch', async () => {
     // Zero would read a corpus as carrying nothing, spend nothing, and report the
     // same line a finished run prints. That confusion is the whole cost, so the
@@ -317,14 +396,22 @@ describe('backfillStoryEmbeddings', () => {
 });
 
 describe('formatEmbeddingBackfillReport', () => {
+  /** A run where every reply carried a figure, which is the ordinary shape. */
+  const spent = (over: Partial<EmbeddingBackfillUsage> = {}): EmbeddingBackfillUsage => ({
+    requests: 1,
+    tokens: 100,
+    credits: 0.01,
+    reportingCalls: 1,
+    ...over,
+  });
+
   const NOTHING_TO_DO: EmbeddingBackfillReport = {
     embedded: 0,
     considered: 0,
     unanswered: 0,
+    withoutArticle: 0,
     refusedCalls: 0,
-    requests: 0,
-    tokens: null,
-    credits: null,
+    usage: spent({ requests: 0, tokens: null, credits: null, reportingCalls: 0 }),
     models: [],
   };
 
@@ -345,10 +432,9 @@ describe('formatEmbeddingBackfillReport', () => {
         embedded: 136,
         considered: 136,
         unanswered: 0,
+        withoutArticle: 0,
         refusedCalls: 0,
-        requests: 7,
-        tokens: 3248,
-        credits: 0.0002,
+        usage: spent({ requests: 7, tokens: 3248, credits: 0.0002, reportingCalls: 7 }),
         models: ['private/openrouter/nvidia/nemotron-3-embed-1b'],
       }),
     ).toBe(
@@ -385,13 +471,31 @@ describe('formatEmbeddingBackfillReport', () => {
         embedded: 2,
         considered: 2,
         unanswered: 0,
+        withoutArticle: 0,
         refusedCalls: 0,
-        requests: 1,
-        tokens: null,
-        credits: null,
+        usage: spent({ tokens: null, credits: null, reportingCalls: 0 }),
         models: [],
       }),
     ).toContain('1 request, tokens not reported, credits not reported');
+  });
+
+  it('marks a total as the sum over the calls that reported it', () => {
+    // Half the replies carried a figure. Printed unmarked it would read as the
+    // whole of what the run spent, which is the one number here an operator would
+    // take at face value when deciding whether to run it again.
+    expect(
+      printed({
+        embedded: 2,
+        considered: 2,
+        unanswered: 0,
+        withoutArticle: 0,
+        refusedCalls: 0,
+        usage: spent({ requests: 3, tokens: 100, credits: 0.01, reportingCalls: 2 }),
+        models: [],
+      }),
+    ).toContain(
+      '3 requests, 100 tokens, as reported by 2 of 3 calls, 0.01 credits, as reported by 2 of 3 calls',
+    );
   });
 
   it('names the Stories it could not embed, and whether any call came back with nothing', () => {
@@ -400,13 +504,31 @@ describe('formatEmbeddingBackfillReport', () => {
         embedded: 40,
         considered: 136,
         unanswered: 96,
+        withoutArticle: 0,
         refusedCalls: 2,
-        requests: 9,
-        tokens: null,
-        credits: null,
+        usage: spent({ requests: 9, tokens: null, credits: null, reportingCalls: 0 }),
         models: [],
       }),
     ).toContain('the provider had nothing for 96 of them, over 2 of 9 calls that returned nothing at all');
+  });
+
+  it('names a Story holding no Article separately, because the provider never saw it', () => {
+    // It cannot be embedded at all — there is no text — so counting it under the
+    // provider's failures would blame the provider, and dropping it would let a
+    // corpus holding one report that nothing was left to do.
+    expect(
+      printed({
+        embedded: 4,
+        considered: 5,
+        unanswered: 1,
+        withoutArticle: 1,
+        refusedCalls: 0,
+        usage: spent(),
+        models: [],
+      }),
+    ).toContain(
+      'the provider had nothing for 0 of them, and 1 of them hold no Article to take a reading from',
+    );
   });
 
   it('does not mention refused calls when the provider answered every one of them', () => {
@@ -417,10 +539,9 @@ describe('formatEmbeddingBackfillReport', () => {
         embedded: 40,
         considered: 41,
         unanswered: 1,
+        withoutArticle: 0,
         refusedCalls: 0,
-        requests: 3,
-        tokens: null,
-        credits: null,
+        usage: spent({ requests: 3, tokens: null, credits: null, reportingCalls: 0 }),
         models: [],
       }),
     ).toContain('the provider had nothing for 1 of them\n');
