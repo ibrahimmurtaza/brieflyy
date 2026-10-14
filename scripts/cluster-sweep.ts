@@ -1,12 +1,12 @@
 ﻿/**
  * What the Cluster grouping frontier looks like over a real corpus.
  *
- * `pnpm cluster:benchmark` reports the shipped point and the largest Cluster at every
- * pair of floors the rule ships, but not what the labelled pairs score *at* each of
- * those floors â€” so the table in `docs/cluster-grouping-baseline.md` recording where
- * 0.45 and 0.04 came from could not be regenerated or checked from this repository.
- * This is that measurement: the same corpus read by the same rule as
- * `pnpm cluster:benchmark`, with every pair of floors on a grid grouped and scored.
+* `pnpm cluster:benchmark` reports the shipped point and the largest Cluster at every
+ * set of floors the rule ships, but not what the labelled pairs score *at* each of
+ * those floors — so the tables in `docs/cluster-grouping-baseline.md` recording where
+ * 0.45, 0.04 and 0.70 came from could not be regenerated or checked from this
+ * repository. This is that measurement: the same corpus read by the same rule as
+ * `pnpm cluster:benchmark`, with every point on the grid grouped and scored.
  *
  *     pnpm cluster:sweep                              # the database DATABASE_URL names
  *     pnpm cluster:sweep "D:\path\to\corpus.db"      # a copy, e.g. before a migration
@@ -16,25 +16,29 @@
  * be, and a grid that stopped at the answer could not answer it.
  *
  * **Every cell is swept twice**, once under the gate the rule ships and once under
- * the wider one where either signal admits a pair on its own. The two sit in
+ * the wider one where any single signal admits a pair on its own. The two sit in
  * adjacent rows so they read against each other, because the question they settle is
  * what the conjunction costs: a rule that merges on the signature alone reaches the
  * same-event families no function over Entities can join, and what it costs for them
- * is the precision it stops holding apart. The grid alone cannot answer that â€” a pair
- * the gate refuses is refused by one half or the other, and the grouped numbers say
- * only what happened, not which half did it â€” so the refusals are counted from the
+ * is the precision it stops holding apart. The grid alone cannot answer that — a pair
+ * the gate refuses is refused by one floor or another, and the grouped numbers say
+ * only what happened, not which floor did it — so the refusals are counted from the
  * labelled families directly and printed beneath the frontier at the shipped floors.
  *
- * **Reading the output.** One row per gate per pair of floors â€” the gate, the Entity
- * floor, the signature floor, recall, precision, how many Clusters the corpus holds at
- * that pair, the largest of them, and the share of them holding a single Story. The
- * signature floor runs across the rows and the Entity floor down them, so a frontier
- * is a row read sideways, and the sweep that compares two corpora is the one where
- * every cell moves the same way.
+ * **Reading the output.** Two tables, and the second is there because the third
+ * floor is a question of its own. The first is one row per gate per pair of the two
+ * floors that were here first — the gate, the Entity floor, the signature floor, the
+ * semantic floor pinned where the rule ships it, recall, precision, how many Clusters
+ * the corpus holds at that pair, the largest of them, and the share of them holding a
+ * single Story. The signature floor runs across the rows and the Entity floor down
+ * them, so a frontier is a row read sideways. The second moves only the semantic
+ * floor and holds the other two at the shipped point, so its rows say what that floor
+ * does on its own. The sweep that compares two corpora is the one where every cell
+ * moves the same way.
  *
  * A cell that beats another is not a better rule. The grid is large and the labelled
  * set is small, so the best cell on it is fitted to the measurement rather than found
- * by it. The sweep's value is the shape â€” whether the frontier moved, and where.
+ * by it. The sweep's value is the shape — whether the frontier moved, and where.
  */
 import Database from 'better-sqlite3';
 import { and, eq, inArray, max } from 'drizzle-orm';
@@ -52,8 +56,11 @@ import {
 import { createDatabase, type Db } from '../src/db/client.js';
 import { articles, sources, stories } from '../src/db/schema.js';
 import {
+  ENTITY_SIMILARITY_FLOOR,
+  SEMANTIC_SIMILARITY_FLOOR,
   SHIPPED_MERGE_GATE,
   SHIPPED_MERGE_THRESHOLD,
+  SIGNATURE_SIMILARITY_FLOOR,
   describeThresholds,
   groupIntoClusters,
   type GroundedEntity,
@@ -62,6 +69,7 @@ import {
   type MergeThresholds,
 } from '../src/domain/cluster-grouping.js';
 import { clusterWindowStart } from '../src/domain/cluster-window.js';
+import type { StoryEmbedding } from '../src/domain/embedding.js';
 import { EMPTY_SIGNATURE, type StorySignature } from '../src/domain/story-signature.js';
 import type { StoryId, TopicId } from '../src/domain/types.js';
 import { readRequiredString } from '../src/env.js';
@@ -80,25 +88,51 @@ import {
  *
  * The same shape `run-cluster-benchmark.ts` reads: the Entities come off
  * `groundingByStoryInScope`, so this measures the rule rather than a second reading of
- * the corpus, and the signature is the one the Story carries.
+ * the corpus, and the signature and the embedding are the ones the Story carries.
  */
 interface TopicRead {
   readonly topicId: TopicId;
   readonly storyIds: readonly StoryId[];
   readonly grounding: readonly (readonly GroundedEntity[])[];
   readonly signatures: readonly StorySignature[];
+  readonly embeddings: readonly (StoryEmbedding | null)[];
   readonly readingByStoryId: ReadonlyMap<StoryId, GroundedStory>;
 }
 
 /**
  * The grid.
  *
- * Wider than `SHIPPED_MERGE_THRESHOLDS` on both axes, and deliberately so: the point of
- * a sweep is to be able to disagree with where the rule sits, which a grid drawn round
- * the shipped answer cannot do. 0.45 and 0.04 are both interior cells.
+ * Wider than `SHIPPED_MERGE_THRESHOLDS` on both of the axes it sweeps, and
+ * deliberately so: the point of a sweep is to be able to disagree with where the
+ * rule sits, which a grid drawn round the shipped answer cannot do. 0.45 and 0.04
+ * are both interior cells.
  */
 const ENTITY_FLOORS = [0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55];
 const SIGNATURE_FLOORS = [0.02, 0.03, 0.04, 0.05, 0.06, 0.08];
+
+/**
+ * The semantic floor's own axis, swept with the other two held still.
+ *
+ * Two tables rather than one three-dimensional grid, and the reason is that this is
+ * a different measurement rather than a third axis of the same one. The grid below
+ * is a frontier over the two floors that were here first, with the semantic floor
+ * pinned where the rule ships it, so two cells of it are comparable with the run
+ * before this axis existed. The table after it moves one floor and holds the other
+ * two — which is the only way to see what a floor does on its own, since a diagonal
+ * walk across three would attribute every movement to all three at once.
+ *
+ * The shipped value is an interior cell and is written as the constant rather than
+ * as a literal, so a row of this table can never stop showing where the rule sits.
+ */
+const SEMANTIC_FLOORS = [
+  0.4,
+  SEMANTIC_SIMILARITY_FLOOR,
+  0.5,
+  0.6,
+  0.7,
+  0.8,
+  0.9,
+];
 
 /**
  * The gates every cell is swept under, the one the rule ships first.
@@ -119,7 +153,7 @@ function readingForStory(reads: readonly TopicRead[], storyId: StoryId): Grounde
     const reading = read.readingByStoryId.get(storyId);
     if (reading !== undefined) return reading;
   }
-  return { entities: [], signature: EMPTY_SIGNATURE };
+  return { entities: [], signature: EMPTY_SIGNATURE, embedding: null };
 }
 
 /**
@@ -200,10 +234,15 @@ async function main(): Promise<number> {
         storyIds,
         grounding,
         signatures: inWindow.map((story) => story.signature),
+        embeddings: inWindow.map((story) => story.embedding),
         readingByStoryId: new Map(
           storyIds.map((id, index) => [
             id,
-            { entities: grounding[index]!, signature: inWindow[index]!.signature },
+            {
+              entities: grounding[index]!,
+              signature: inWindow[index]!.signature,
+              embedding: inWindow[index]!.embedding,
+            },
           ]),
         ),
       });
@@ -224,43 +263,70 @@ async function main(): Promise<number> {
       return 1;
     }
 
-    const rows: string[] = [];
+    /**
+     * Group every Topic at these floors and score it, as one row of the report.
+     *
+     * Grouped with no `thresholds` marker on the GroupedTopic, because
+     * `evaluateClusterGrouping` scores only the unmarked grouping: the marker is
+     * how the benchmark keeps a swept grouping out of the shipped point's totals.
+     */
+    const cell = (thresholds: MergeThresholds, gate: MergeGate): string => {
+      const grouped: GroupedTopic[] = reads.map((read) => ({
+        topicId: read.topicId,
+        clusters: groupIntoClusters(
+          read.storyIds,
+          (_storyId, index) => ({
+            entities: read.grounding[index]!,
+            signature: read.signatures[index]!,
+            embedding: read.embeddings[index]!,
+          }),
+          { thresholds, gate },
+        ),
+      }));
+      const report = evaluateClusterGrouping({
+        grouped,
+        resolution,
+        readingOf: (storyId) => readingForStory(reads, storyId),
+        signatureFloor: thresholds.signature,
+        semanticFloor: thresholds.semantic,
+      });
+      return (
+        `${gate}\t${describeThresholds(thresholds)}\t${percentage(report.recall.ratio)}\t` +
+        `${percentage(report.precision.ratio)}\t${report.clusters}\t${report.largestCluster}\t` +
+        `${percentage(report.singletonProportion)}`
+      );
+    };
+
+    // The frontier over the two floors that were here first, with the semantic one
+    // pinned where the rule ships it.
+    const frontier: string[] = [];
     for (const signature of SIGNATURE_FLOORS) {
       for (const entity of ENTITY_FLOORS) {
-        const thresholds: MergeThresholds = { entity, signature };
-        for (const gate of GATES) {
-          // Grouped with no `thresholds` marker on the GroupedTopic, because
-          // `evaluateClusterGrouping` scores only the unmarked grouping: the marker is
-          // how the benchmark keeps a swept grouping out of the shipped point's totals.
-          const grouped: GroupedTopic[] = reads.map((read) => ({
-            topicId: read.topicId,
-            clusters: groupIntoClusters(
-              read.storyIds,
-              (_storyId, index) => ({
-                entities: read.grounding[index]!,
-                signature: read.signatures[index]!,
-              }),
-              { thresholds, gate },
-            ),
-          }));
-          const report = evaluateClusterGrouping({
-            grouped,
-            resolution,
-            readingOf: (storyId) => readingForStory(reads, storyId),
-            signatureFloor: signature,
-          });
-          rows.push(
-            `${gate}\t${describeThresholds(thresholds)}\t${percentage(report.recall.ratio)}\t` +
-              `${percentage(report.precision.ratio)}\t${report.clusters}\t${report.largestCluster}\t` +
-              `${percentage(report.singletonProportion)}`,
-          );
-        }
+        const thresholds: MergeThresholds = {
+          entity,
+          signature,
+          semantic: SEMANTIC_SIMILARITY_FLOOR,
+        };
+        for (const gate of GATES) frontier.push(cell(thresholds, gate));
       }
     }
+    // The semantic floor as its own axis, with the other two held at the shipped
+    // point. A separate table because a reader asking what this floor does is
+    // asking a different question from the one the frontier above answers.
+    const semantic: string[] = [];
+    for (const floor of SEMANTIC_FLOORS) {
+      const thresholds: MergeThresholds = { ...SHIPPED_MERGE_THRESHOLD, semantic: floor };
+      for (const gate of GATES) semantic.push(cell(thresholds, gate));
+    }
+
     process.stdout.write(
-      `gate\tfloors\trecall\tprecision\tclusters\tlargest\tsingletons\n${rows.join('\n')}\n`,
+      `gate\tfloors\trecall\tprecision\tclusters\tlargest\tsingletons\n${frontier.join('\n')}\n`,
     );
-    // Which half of the gate turned each labelled family away, counted at the floors
+    process.stdout.write(
+      `\nsemantic floor, with the Entity floor at ${ENTITY_SIMILARITY_FLOOR} and the signature floor at ${SIGNATURE_SIMILARITY_FLOOR}\n` +
+        `gate\tsemantic\trecall\tprecision\tclusters\tlargest\tsingletons\n${semantic.join('\n')}\n`,
+    );
+    // Which floor of the shipped gate turned each labelled family away, counted at the floors
     // the rule ships rather than across the grid: the grid is a frontier and this is
     // an answer, and a frontier at 96 cells cannot carry a sentence per cell.
     const scopes: TopicScope[] = reads.map((read) => ({

@@ -91,3 +91,57 @@ export function decodeEmbedding(
   }
   return { model: named, values: [...values] };
 }
+
+/**
+ * How much alike two Articles meant, as a cosine between the vectors a model
+ * returned for them — or `null` where the two cannot be compared at all.
+ *
+ * **`null` is the point of this function, not an edge case of it**, and it is a
+ * different answer from zero. Zero is a measurement: these two Articles mean
+ * nothing alike, which is evidence. `null` is the absence of a measurement, and a
+ * caller that treated it as a score would turn the absence into a verdict:
+ *
+ * - **Either vector missing.** A Story carrying no embedding has not been measured,
+ *   and a cosine of its zeroes would be a claim that the Article said nothing at
+ *   all. Nothing backfills (ADR-0037), so on the day this ships every Story in an
+ *   existing database is in this case, and reading it as a score would take a
+ *   working corpus from grouping to not grouping.
+ * - **Two different models.** Two vectors from two models share a width and
+ *   nothing else, so the number between them is one nobody can act on. This is the
+ *   reason the model is stored beside the vector at all. Reading it as "these mean
+ *   opposite things" would be the same false verdict as the row above.
+ * - **Two different widths.** The same thing said of a model that changed its
+ *   output size between two calls, and the same answer.
+ * - **A zero norm, or a value that is not a number.** Dividing by nothing comes out
+ *   undefined, and an undefined compared against a floor reads as evidence.
+ *
+ * So the caller gets `number | null` rather than a number and a code to read, which
+ * is what lets the rule apply its floor only where the floor had something to judge.
+ * A cosine that comes out **zero** is still a number, and a cosine that comes out
+ * negative is still a number: two Articles a model reads as opposites are a
+ * measurement, and the floor is what decides what to do about it.
+ */
+export function embeddingSimilarity(
+  left: StoryEmbedding | null,
+  right: StoryEmbedding | null,
+): number | null {
+  if (left === null || right === null) return null;
+  if (left.model !== right.model) return null;
+  const a = left.values;
+  const b = right.values;
+  if (a.length !== b.length || a.length === 0) return null;
+
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    const here = a[i] as number;
+    const there = b[i] as number;
+    if (!Number.isFinite(here) || !Number.isFinite(there)) return null;
+    dot += here * there;
+    normA += here * here;
+    normB += there * there;
+  }
+  if (normA === 0 || normB === 0) return null;
+  return dot / Math.sqrt(normA * normB);
+}

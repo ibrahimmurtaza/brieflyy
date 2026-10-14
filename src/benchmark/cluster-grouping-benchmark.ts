@@ -15,6 +15,7 @@
  */
 
 import type { EntityId, StoryId, TopicId } from '../domain/types.js';
+import { embeddingSimilarity, type StoryEmbedding } from '../domain/embedding.js';
 import {
   SHIPPED_MERGE_GATE,
   clearsMergeGate,
@@ -204,7 +205,7 @@ export interface PrecisionCeiling {
 /** The precision ceiling for a rule reading the representations named. */
 export interface CeilingsRead {
   /** What the bound is a bound on, named as the report line prints it. */
-  readonly reads: 'Entities only' | 'Entities and signature';
+  readonly reads: 'Entities only' | 'Entities and signature' | 'Entities, signature and embedding';
   /** What a family this rule cannot tell apart has to be identical in. */
   readonly indistinguishable: string;
   readonly ceiling: PrecisionCeiling;
@@ -282,8 +283,7 @@ export function entityPrecisionCeiling(
 }
 
 /**
- * How high precision can go for a rule reading both representations, which is
- * what the shipped rule is.
+ * How high precision can go for a rule reading both named representations.
  *
  * Two Stories identical in Entity vector *and* in signature are identical to
  * every comparison the rule makes, so no threshold on either can hold them apart.
@@ -300,6 +300,58 @@ export function bothSignalsPrecisionCeiling(
     const right = readingOf(pair.rightStoryId);
     return namesTheSame(left.entities, right.entities) && saysTheSame(left.signature, right.signature);
   });
+}
+
+/**
+ * How high precision can go for a rule reading all three, which is what the
+ * shipped rule is.
+ *
+ * A family this ceiling counts has to be identical in every comparison the rule
+ * makes of it. Where both Stories carry an embedding that means the same Entity
+ * vector, the same words, *and* the same vector from the same model — identical
+ * embeddings are a cosine of exactly 1, so no floor below 1 holds them apart, which
+ * is the same argument as the two ceilings above applied to the reading that was
+ * added last.
+ *
+ * Where either Story carries no embedding the semantic floor does not apply to the
+ * pair at all (see `clearsMergeGate`), so the rule compares them on the other two
+ * readings alone and a family identical in those is still one no floor can hold
+ * apart. Counting those as separable would make this bound larger than the rule
+ * could ever be, and the gap between a bound and the rule it bounds is exactly what
+ * the report is for.
+ */
+export function allThreeSignalsPrecisionCeiling(
+  differentEvent: readonly ResolvedStoryPair[],
+  readingOf: (storyId: StoryId) => GroundedStory,
+): PrecisionCeiling {
+  return ceilingOf(differentEvent, (pair) => {
+    const left = readingOf(pair.leftStoryId);
+    const right = readingOf(pair.rightStoryId);
+    return (
+      namesTheSame(left.entities, right.entities) &&
+      saysTheSame(left.signature, right.signature) &&
+      // Either the floor cannot judge this pair, or it judges it and finds the two
+      // readings identical — which is a cosine of exactly 1.
+      (embeddingSimilarity(left.embedding, right.embedding) === null ||
+        meansTheSame(left.embedding, right.embedding))
+    );
+  });
+}
+
+/**
+ * Two embeddings a cosine could not tell apart, which means the same vector from
+ * the same model.
+ *
+ * Different models and two different widths are both "no", for the same reason
+ * `embeddingSimilarity` cannot compare them: there is no pair of vectors to compare.
+ */
+function meansTheSame(
+  left: StoryEmbedding | null,
+  right: StoryEmbedding | null,
+): boolean {
+  if (!left || !right) return false;
+  if (left.model !== right.model || left.values.length !== right.values.length) return false;
+  return left.values.every((value, index) => value === right.values[index]);
 }
 
 /**
@@ -335,8 +387,97 @@ export interface MeasuredFamilies {
   readonly sameEvent: readonly ResolvedStoryPair[];
   readonly differentEvent: readonly ResolvedStoryPair[];
 }
-
 /** How the labelled families of each label score on signature alone. */
+/**
+ * How the labelled families score on the embeddings alone, at the floor the rule
+ * ships.
+ *
+ * Printed beside the floor for the reason the signature line is: this is the third
+ * number fitted to these families, and a reader is owed the distribution it was
+ * read from rather than the constant alone.
+ *
+ * **A family is only weighed where both its Stories carry an embedding**, and the
+ * count of the ones that could not be is reported beside the ones that could.
+ * That is the whole difference from the signature line, and it is not cosmetic:
+ * `embeddingSimilarity` answers zero for a pair where one side has no vector, and
+ * a range reported over those zeros would read as "every family in the corpus means
+ * nothing alike" when what it means is that this corpus embeds nothing. A floor
+ * fitted to that number would be a floor fitted to an absence.
+ */
+export interface SemanticMargins {
+  /** The floor the shipped rule gates a merge on. */
+  readonly floor: number;
+  /** The range each label's families score across, over the families that could be weighed. */
+  readonly byLabel: readonly SemanticMarginForLabel[];
+}
+
+/** The range one label's families score across, over the ones that could be weighed. */
+export interface SemanticMarginForLabel {
+  readonly label: PairLabel;
+  /** Families where both Stories carry an embedding, which is what the range is over. */
+  readonly weighed: number;
+  /** Families where one or both carry none, and so could not be scored at all. */
+  readonly unweighed: number;
+  readonly lowest: number | null;
+  readonly highest: number | null;
+}
+
+/** How the labelled families of each label score on their embeddings alone. */
+export function semanticMargins(input: {
+  readonly measured: MeasuredFamilies;
+  readonly readingOf: (storyId: StoryId) => GroundedStory;
+  readonly floor: number;
+}): SemanticMargins {
+  const range = (
+    label: PairLabel,
+    pairs: readonly ResolvedStoryPair[],
+  ): SemanticMarginForLabel => {
+    let unweighed = 0;
+    const scores: number[] = [];
+    for (const pair of pairs) {
+      // Null wherever the two cannot be compared, and not only where one of them is
+      // absent: two Stories embedded by two different models are as unweighable as
+      // two where one carries none, and counting that as a score of zero would put
+      // a refusal in the distribution.
+      const score = embeddingSimilarity(
+        input.readingOf(pair.leftStoryId).embedding,
+        input.readingOf(pair.rightStoryId).embedding,
+      );
+      if (score === null) {
+        unweighed += 1;
+        continue;
+      }
+      scores.push(score);
+    }
+    scores.sort((a, b) => a - b);
+    return {
+      label,
+      weighed: scores.length,
+      unweighed,
+      lowest: scores[0] ?? null,
+      highest: scores[scores.length - 1] ?? null,
+    };
+  };
+
+  return {
+    floor: input.floor,
+    byLabel: [
+      range('same-event', input.measured.sameEvent),
+      range('different-event', input.measured.differentEvent),
+    ],
+  };
+}
+
+/**
+ * How the labelled families of each label score on their embeddings alone.
+ *
+ * The companion of {@link semanticMargins}, and the reason that one has to say how
+ * many families it could weigh: this one scores every family whether or not either
+ * Story carries a signature, because a signature is always there to score — either
+ * a reading or an empty one, and an empty one scores zero honestly. There is no
+ * such thing as an embedding that is there and empty, so the semantic line has to
+ * report the gap rather than fill it with a zero.
+ */
 export function signatureMargins(input: {
   readonly measured: MeasuredFamilies;
   readonly readingOf: (storyId: StoryId) => GroundedStory;
@@ -386,26 +527,37 @@ export interface TopicScope {
 }
 
 /**
- * Which half of the gate turns each labelled family away, at the given floors.
+* Which floor of the gate turns each labelled family away, at the given floors.
  *
- * The four buckets partition the families that could be weighed, and each is named
- * for what a rule reading one signal alone would do with it rather than for the
- * half that stopped it — which is what makes the off-diagonal pair answerable.
+ * The buckets partition the families that could be weighed, and each is named for
+ * what a rule reading one signal alone would do with it rather than for the floor
+ * that stopped it — which is what makes the off-diagonal pairs answerable.
  * `signatureAloneAdmits` is the same-event families the conjunction costs: those no
  * function over Entities can reach and a signature floor would.
  * `entityAloneAdmits` and `signatureAloneAdmits` together are what it buys on the
- * negatives: the different-event families one half or the other would admit alone.
+ * negatives: the different-event families one floor or the other would admit alone.
  * Their sum is how many families could be weighed, which is the denominator a report
  * needs and which nothing here has to be told.
+ *
+ * **There are two more buckets than there were two floors, and they are there
+ * because a partition over three signals is not a partition over two.** A family
+ * exactly two floors would admit alone is reached by no single-signal rule and
+ * refused by the conjunction, which is a fact about it that none of the other
+ * buckets can state. Folding it into `neitherAdmits` would say it is out of reach
+ * of everything; folding it into `cleared` would say the gate let it through.
  */
 export interface GateRefusals {
-  /** Families clearing both floors, where the gate turns nothing away. */
+  /** Families clearing all three floors, where the gate turns nothing away. */
   readonly cleared: readonly ResolvedStoryPair[];
   /** Families a signature floor alone admits and the conjunction refuses. */
   readonly signatureAloneAdmits: readonly ResolvedStoryPair[];
   /** Families an Entity floor alone admits and the conjunction refuses. */
   readonly entityAloneAdmits: readonly ResolvedStoryPair[];
-  /** Families no floor on either signal admits. */
+  /** Families a semantic floor alone admits and the conjunction refuses. */
+  readonly semanticAloneAdmits: readonly ResolvedStoryPair[];
+  /** Families exactly two floors admit, so no rule reading one signal reaches them. */
+  readonly twoAloneAdmits: readonly ResolvedStoryPair[];
+  /** Families no floor on any signal admits. */
   readonly neitherAdmits: readonly ResolvedStoryPair[];
   /**
    * Families no Topic holds both Stories for.
@@ -421,11 +573,12 @@ export interface GateRefusals {
  *
  * This is the measurement a widening of the gate needs and the grouped numbers
  * cannot give: `evaluateClusterGrouping` reports what the rule did, and what it
- * did does not say which of the two floors was the reason. The gate reads both,
- * so a pair it refuses is refused by one of them or the other, and the two cost
- * opposite things — the Entity half refusing costs recall on families no
- * similarity function over Entities can reach, and the signature half refusing
- * buys precision on families Entities cannot separate.
+ * did does not say which of the floors was the reason. The gate reads all three,
+ * so a pair it refuses is refused by one of them or another, and the three cost
+ * different things — the Entity floor refusing costs recall on families no
+ * similarity function over Entities can reach, the signature floor buys precision
+ * on families Entities cannot separate, and the semantic floor refuses on whatever
+ * a model does not think means one thing.
  *
  * A family is judged in the Topic that comes nearest to admitting it, and the
  * cosine is weighed by the Entity weights of *that* Topic's Stories, because the
@@ -452,13 +605,35 @@ export function gateRefusals(input: {
   const cleared: ResolvedStoryPair[] = [];
   const signatureAloneAdmits: ResolvedStoryPair[] = [];
   const entityAloneAdmits: ResolvedStoryPair[] = [];
+  const semanticAloneAdmits: ResolvedStoryPair[] = [];
+  const twoAloneAdmits: ResolvedStoryPair[] = [];
   const neitherAdmits: ResolvedStoryPair[] = [];
   const unshared: string[] = [];
 
-  for (const pair of input.pairs) {
+  const ALONE_BY_FLOOR = {
+    entity: entityAloneAdmits,
+    signature: signatureAloneAdmits,
+    semantic: semanticAloneAdmits,
+  } as const;
+
+  /**
+ * The three floors, named, in the order a family's scores are read.
+ *
+ * A record rather than two parallel arrays indexed together, because the whole of
+ * the bucketing below is "which floor cleared" and two arrays would make a
+ * reordering mislabel every column in the report without failing anything.
+ */
+const FLOORS = [
+  { score: 'entity', bucket: 'entity' },
+  { score: 'signature', bucket: 'signature' },
+  { score: 'semantic', bucket: 'semantic' },
+] as const;
+
+for (const pair of input.pairs) {
     let entity = -1;
-    let left: StorySignature | null = null;
-    let right: StorySignature | null = null;
+    let left: GroundedStory | null = null;
+    let right: GroundedStory | null = null;
+    let semantic: number | null = null;
     for (const scope of scopes) {
       const atLeft = scope.at.get(pair.leftStoryId);
       const atRight = scope.at.get(pair.rightStoryId);
@@ -471,36 +646,64 @@ export function gateRefusals(input: {
           scope.weights,
         ),
       );
-      // A Story carries one signature whatever Topic it is read in, so the first
-      // is taken and the rest of the loop is spent on the cosine.
-      left ??= scope.readings[atLeft]!.signature;
-      right ??= scope.readings[atRight]!.signature;
+      // A Story carries one signature and one embedding whatever Topic it is read
+      // in, so the first are taken and the rest of the loop is spent on the cosine.
+      left ??= scope.readings[atLeft]!;
+      right ??= scope.readings[atRight]!;
+      semantic ??= embeddingSimilarity(left.embedding, right.embedding);
     }
     if (left === null || right === null) {
       unshared.push(pair.name);
       continue;
     }
 
-    const signature = signatureSimilarity(left, right);
-    // The conjunction itself is asked of the rule rather than restated here, and
-    // the two halves are read off the floors beside it because a question with one
-    // answer cannot say which half gave it.
-    const bucket = clearsMergeGate({
+    const scores = {
       entity,
-      signature,
-      thresholds: input.thresholds,
-      gate: SHIPPED_MERGE_GATE,
-    })
-      ? cleared
-      : signature >= input.thresholds.signature
-        ? signatureAloneAdmits
-        : entity >= input.thresholds.entity
-          ? entityAloneAdmits
-          : neitherAdmits;
-    bucket.push(pair);
+      signature: signatureSimilarity(left.signature, right.signature),
+      semantic,
+    };
+    // The conjunction itself is asked of the rule rather than restated here, and
+    // each floor is read off the thresholds beside it because a question with one
+    // answer cannot say which of them gave it.
+    if (
+      clearsMergeGate({ ...scores, thresholds: input.thresholds, gate: SHIPPED_MERGE_GATE })
+    ) {
+      cleared.push(pair);
+      continue;
+    }
+    const measured = scores as Readonly<Record<(typeof FLOORS)[number]['score'], number | null>>;
+    // A floor that does not apply cannot have refused, so it only counts as an
+    // admission where it had a chance to give one. That is what puts a family with
+    // an unembedded Story in the bucket for the floors that *did* apply rather than
+    // in a bucket of its own for a floor nobody was asked.
+    const admits = FLOORS.map(({ score }) => {
+      const value = measured[score];
+      return value !== null && value >= input.thresholds[score];
+    });
+    const clearedBy = admits.flatMap((admitted, index) => (admitted ? [index] : []));
+    const howMany = clearedBy.length;
+
+    if (howMany === 2) {
+      twoAloneAdmits.push(pair);
+    } else if (howMany === 0) {
+      neitherAdmits.push(pair);
+    } else {
+      // Exactly one floor admits, and which one is the whole of what this bucket is
+      // for: the price of each floor in the same units, readable against the others.
+      const alone = ALONE_BY_FLOOR[FLOORS[clearedBy[0]!]!.bucket];
+      alone.push(pair);
+    }
   }
 
-  return { cleared, signatureAloneAdmits, entityAloneAdmits, neitherAdmits, unshared };
+  return {
+    cleared,
+    signatureAloneAdmits,
+    entityAloneAdmits,
+    semanticAloneAdmits,
+    twoAloneAdmits,
+    neitherAdmits,
+    unshared,
+  };
 }
 
 /** One labelled set's refusals, as a row of the report beside its label. */
@@ -512,20 +715,31 @@ export interface GateRefusalRow {
 /**
  * The columns of {@link formatGateRefusals}, named for what each count is.
  *
- * The two middle ones are pairs the conjunction refuses and the wider gate would
- * admit, so they are the price of each half in the same units and are read against
- * each other rather than added up: the first is what the Entity half costs in
- * recall and the second what the signature half refuses among the negatives.
+ * The middle ones are pairs the conjunction refuses and the wider gate would
+ * admit, so they are the price of each floor in the same units and are read against
+ * each other rather than added up: the first is what the Entity floor costs in
+ * recall, the second what the signature floor refuses among the negatives, the
+ * third what the semantic one does. `two-alone` sits among them because a family
+ * two floors reach is not a family any one of them reaches, and a table of three
+ * prices with a gap in it would be read as that gap being zero.
  */
-const REFUSAL_COLUMNS = ['both', 'signature-alone', 'entity-alone', 'neither', 'weighed'] as const;
+const REFUSAL_COLUMNS = [
+  'both',
+  'signature-alone',
+  'entity-alone',
+  'embedding-alone',
+  'two-alone',
+  'neither',
+  'weighed',
+] as const;
 
 /**
- * A fixed-width count of what each half of the gate turned away, one row per label.
+ * A fixed-width count of what each floor of the gate turned away, one row per label.
  *
  * Read off the corpus rather than off the clock, so two runs diff, and printed here
  * rather than in the sweep because it is a report and the sweep's own output has no
- * suite. `weighed` is the sum of the four buckets rather than a count handed in:
- * they partition the families a Topic holds both Stories for, and a family no Topic
+ * suite. `weighed` is the sum of the buckets rather than a count handed in: they
+ * partition the families a Topic holds both Stories for, and a family no Topic
  * holds both Stories for is in none of them.
  */
 export function formatGateRefusals(
@@ -548,6 +762,8 @@ export function formatGateRefusals(
         refusals.cleared.length,
         refusals.signatureAloneAdmits.length,
         refusals.entityAloneAdmits.length,
+        refusals.semanticAloneAdmits.length,
+        refusals.twoAloneAdmits.length,
         refusals.neitherAdmits.length,
       ];
       return line(
@@ -573,17 +789,19 @@ export interface ClusterGroupingReport {
   /** Different-event pairs the rule kept apart. */
   readonly precision: PairScore;
   /**
-   * The precision a rule reading Entities alone can reach, and the precision one
-   * reading both representations can.
+   * The precision each rule reading some of the three representations can reach.
    *
    * Reported beside the measured precision so a reader can tell a rule left to
-   * tune from a negative that Entities cannot separate at all — and can tell
-   * which of the two bounds is the bound on the rule in front of them. The first
-   * is a bound on Entity-only grouping; the second is the bound on this one.
+   * tune from a negative that no reading can separate at all — and can tell which
+   * of the bounds is the bound on the rule in front of them. The first is a bound
+   * on Entity-only grouping, the second on grouping that also reads text, and the
+   * third on the rule this report is about.
    */
   readonly ceilings: readonly CeilingsRead[];
   /** How the labelled families score on signature, at the shipped floor. */
   readonly signature: SignatureMargins;
+  /** How the labelled families score on their embeddings, at the shipped floor. */
+  readonly semantic: SemanticMargins;
   /** The largest Cluster at every pair of thresholds the rule ships, so the bound is measured. */
   readonly largestByThresholds: readonly ThresholdReading[];
 }
@@ -614,6 +832,8 @@ export function evaluateClusterGrouping(input: {
   readonly readingOf: (storyId: StoryId) => GroundedStory;
   /** The signature floor this grouping was formed at, for the margins line. */
   readonly signatureFloor: number;
+  /** The semantic floor this grouping was formed at, for the margins line. */
+  readonly semanticFloor: number;
 }): ClusterGroupingReport {
   const clusterOf = new Map<TopicId, Map<StoryId, number>>();
   const distinctStories = new Set<StoryId>();
@@ -735,11 +955,25 @@ export function evaluateClusterGrouping(input: {
           input.readingOf,
         ),
       },
+      {
+        reads: 'Entities, signature and embedding',
+        indistinguishable:
+          'identical as Entity vectors and in text, and either carrying no embedding or identical in embedding',
+        ceiling: allThreeSignalsPrecisionCeiling(
+          input.resolution.differentEvent,
+          input.readingOf,
+        ),
+      },
     ],
     signature: signatureMargins({
       measured: { sameEvent: recall.measured, differentEvent: precision.measured },
       readingOf: input.readingOf,
       floor: input.signatureFloor,
+    }),
+    semantic: semanticMargins({
+      measured: { sameEvent: recall.measured, differentEvent: precision.measured },
+      readingOf: input.readingOf,
+      floor: input.semanticFloor,
     }),
     largestByThresholds,
   };
@@ -764,6 +998,10 @@ export function formatClusterReport(
     measured.lowest === null || measured.highest === null
       ? 'n/a (nothing observed)'
       : `${measured.lowest.toFixed(3)} to ${measured.highest.toFixed(3)}`;
+  const semanticRange = (measured: SemanticMarginForLabel): string =>
+    measured.weighed === 0
+      ? 'n/a (nothing weighed)'
+      : `${(measured.lowest as number).toFixed(3)} to ${(measured.highest as number).toFixed(3)}`;
 
   const lines = [
     'cluster grouping benchmark',
@@ -773,9 +1011,15 @@ export function formatClusterReport(
     `  recall      ${percent(report.recall)}  ${report.recall.correct} of ${report.recall.families} same-event pairs end up in one Cluster (${report.recall.topicObservations} topic observations)`,
     `  precision   ${percent(report.precision)}  ${report.precision.correct} of ${report.precision.families} different-event pairs stay apart (${report.precision.topicObservations} topic observations)`,
     `  signature   ${report.signature.floor.toFixed(2)}  the floor a merge's two signatures clear; ${report.signature.byLabel.map((measured) => `${measured.label} families score ${range(measured)}`).join(', ')}`,
-    // Both bounds, one after another, because the measured precision above sits
+    // Carries the share of each label that could be weighed at all, because a
+    // range printed over a corpus that embeds nothing would read as evidence about
+    // meaning rather than as the absence of it.
+    `  semantic    ${report.semantic.floor.toFixed(2)}  the floor a merge's two embeddings clear; ${report.semantic.byLabel.map((measured) => `${measured.label} families score ${semanticRange(measured)} (${measured.weighed} of ${measured.weighed + measured.unweighed} weighed)`).join(', ')}`,
+    // Every bound, one after another, because the measured precision above sits
     // between them and a reader who has only one of them will mistake the gap for
-    // a threshold left untuned.
+    // a threshold left untuned. Each is labelled with the representations it is a
+    // bound on, so a reader chooses which number to take rather than finding one of
+    // them first.
     ...report.ceilings.flatMap((bound) =>
       bound.ceiling.ceiling === null
         ? []

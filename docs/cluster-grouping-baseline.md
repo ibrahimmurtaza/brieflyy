@@ -22,12 +22,13 @@ family six do rests on six.
 | --- | --- |
 | **recall** | Same-event families the rule put in one Cluster, over the same-event families it could measure. |
 | **precision** | Different-event families it kept apart, over the different-event families it could measure. |
-| **signature** | The signature floor a merge has to clear, and the range each label's families score across. Printed because the floor is a second number fitted to the same families, and a reader is owed the distribution it was read from rather than the constant alone. |
-| **ceiling** | The precision a rule can reach reading the representations named beside it: Entities only, or Entities and signature. The second is the bound on the shipped rule; the first is not, and the two are printed together so neither is read as the other. |
+| **signature** | The signature floor a merge has to clear, and the range each label's families score across. Printed because the floor is a number fitted to the same families, and a reader is owed the distribution it was read from rather than the constant alone. |
+| **semantic** | The embedding floor a merge has to clear, and the range each label's families score across, with the share of each label that could be weighed at all. Printed for the reason the signature line is, and carrying the weighed share because a range over a corpus that embeds nothing would read as evidence about meaning rather than as the absence of it. |
 | **clusters** | Every Cluster formed across every live Topic, counting a Story once per Topic it is in scope for. |
 | **largest** | The most Stories any one of them holds. |
 | **singletons** | The share of Clusters holding exactly one Story. |
-| **at *e*/*s*** | The largest Cluster when every Topic is grouped again at Entity floor *e* and signature floor *s*, over the shipped pairs. |
+| **at *e*/*s*/*m*** | The largest Cluster when every Topic is grouped again at Entity floor *e*, signature floor *s* and semantic floor *m*, over the shipped grid. |
+| **ceiling** | The precision a rule can reach reading the representations named beside it: Entities only; Entities and signature; or Entities, signature and embedding. The last is the bound on the shipped rule and the first two are not, and all three are printed together so a reader chooses which to take rather than finding one of them first. |
 
 A family no live Topic holds both Stories for is left out of the denominator and
 printed by name, because it is a gap in what the corpus can say rather than a
@@ -105,6 +106,91 @@ cluster grouping benchmark
 Every labelled pair is measured, on the corpus widened by the two Topics recorded
 at the end of this file — so the numbers before and after this rule changed are
 over the same families and the same Topics, and the comparison is like for like.
+
+### What the semantic floor is, and what it was read from
+
+**These two sections are over a different corpus from the one above.** The baseline
+above is the 1,804-Article, 14-Topic corpus this file opens with; these numbers come
+from the wider corpus recorded at the end of this file, which is the one holding every
+labelled pair. Read the two apart rather than as one series — the largest Cluster is
+5 here and 6 there for that reason and not because the rule moved.
+
+ADR-0038 added a third floor: a cosine between the two Stories' **Story
+embeddings**, at 0.45. On that corpus, with the Entity and signature floors held at
+the shipped 0.45 and 0.04, moving only that one floor gives:
+
+| semantic floor | recall | precision | largest Cluster | singletons |
+| --- | --- | --- | --- | --- |
+| — (not applied) | 41.4% | 71.4% | 5 | 93.3% |
+| 0.30 | 41.4% | 71.4% | 5 | 93.3% |
+| 0.34 | 41.4% | 75.5% | 5 | 93.4% |
+| 0.36 | 37.9% | 77.6% | 5 | 93.4% |
+| 0.38 | 41.4% | 79.6% | 5 | 93.4% |
+| 0.40 | 44.8% | 79.6% | 5 | 93.4% |
+| 0.41 | 44.8% | 79.6% | 5 | 93.4% |
+| **0.42 – 0.45** | **44.8%** | **81.6%** | **5** | **93.5%** |
+| 0.46 – 0.49 | 41.4% | 81.6% | 5 | 93.5% |
+| 0.50 | 37.9% | 83.7% | 5 | 93.6% |
+| 0.55 | 37.9% | 87.8% | 5 | 93.8% |
+| 0.60 | 37.9% | 89.8% | 5 | 93.8% |
+| 0.65 | 24.1% | 93.9% | 4 | 94.0% |
+| 0.70 | 20.7% | 93.9% | 4 | 94.1% |
+| 0.75 | 10.3% | 95.9% | 4 | 94.2% |
+| 0.80 | 6.9% | 95.9% | 4 | 94.3% |
+| 0.85 | 0.0% | 95.9% | 4 | 94.4% |
+
+The shipped value is the **top** of a four-cell plateau, which is where to take a
+plateau: the conservative end of the cells that behave alike, so the measurement has
+to move before the rule does. It is worth **3.4 points of recall and 10.2 of
+precision** over the two floors alone, with the largest Cluster unmoved.
+
+The distribution it was read from is the more useful half, and it is a caution. The
+two columns the report prints are the ends; the medians come from the calibration run,
+which printed every score in order:
+
+| label | families | minimum | median | maximum |
+| --- | --- | --- | --- | --- |
+| same-event | 29 | 0.373 | 0.646 | 0.812 |
+| different-event | 49 | 0.134 | 0.471 | 1.000 |
+
+**The two ranges overlap, and two negatives carry identical embeddings.** This is a
+gate and never was a separator: the same-event minimum of 0.373 is below the median
+of the negatives, and the different-event maximum of 1.000 is a pair no floor below
+1 can hold apart. That is why precision tops out at 95.9% rather than 100%, and why
+the benchmark prints a third ceiling rather than two.
+
+An earlier reading of the same model over ten vectors — four wire copies of one story
+against six reports about other things — found the classes cleanly separated at
+0.822–0.870 against 0.064–0.411, with a gap between them. **That sample did not
+hold.** Over the labelled families there is no gap. A floor chosen from it would
+have shipped above 0.8, where this table shows recall at 6.9%.
+
+### The largest Cluster across the whole grid
+
+`SHIPPED_MERGE_THRESHOLDS` is twenty-seven cells rather than nine, because the
+bound it carries is a claim about the rule over all of its floors and a floor added
+without its neighbourhood would leave the claim covering part of the rule. Measured
+on the wider corpus, the largest Cluster is **5 Stories at every one of the
+twenty-seven cells** and never more, against the 5 the two-floor rule holds at the
+shipped point. Every cell, with the corpus's Cluster count beside it:
+
+| Entity / signature | largest at 0.40 | largest at 0.45 | largest at 0.50 |
+| --- | --- | --- | --- |
+| 0.40/0.03 | 5 over 4,471 | 5 over 4,473 | 5 over 4,477 |
+| 0.40/0.04 | 5 over 4,546 | 5 over 4,547 | 5 over 4,552 |
+| 0.40/0.05 | 5 over 4,604 | 5 over 4,605 | 5 over 4,607 |
+| 0.45/0.03 | 5 over 4,577 | 5 over 4,580 | 5 over 4,584 |
+| 0.45/0.04 | 5 over 4,637 | 5 over 4,638 | 5 over 4,642 |
+| 0.45/0.05 | 5 over 4,685 | 5 over 4,686 | 5 over 4,688 |
+| 0.50/0.03 | 5 over 4,665 | 5 over 4,666 | 5 over 4,670 |
+| 0.50/0.04 | 5 over 4,715 | 5 over 4,716 | 5 over 4,720 |
+| 0.50/0.05 | 5 over 4,750 | 5 over 4,751 | 5 over 4,753 |
+
+A Story carrying no embedding is grouped exactly as it was, which is what makes the
+floor landable ahead of a backfill — and also why the corpus above has to be a
+copy with embeddings grafted on to measure anything. On a working corpus holding
+none, the floor measures as though it had done nothing, and the report says so by
+printing that zero families could be weighed.
 
 ### What Entity canonicalisation did to it
 
@@ -274,14 +360,20 @@ their overlap.
 
 ### What the conjunction costs, and what it buys
 
-The gate above is a conjunction — a pair merges only where the cosine *and* the
-signature clear their floors — and until now the two halves had never been priced
-against each other. The frontier shows what each floor does while the other sits
-still; it does not show what happens if a pair may qualify on **either** signal,
-which is the one reading that would reach the same-event families no function over
-Entities can join. `pnpm cluster:sweep` sweeps every cell twice to price it: once
-under the conjunction, once under the wider gate where either signal admits a pair
-on its own.
+The gate above is a conjunction — a pair merges only where the cosine, the
+signature *and* the embedding clear their floors — and until now the halves had
+never been priced against each other. The frontier shows what each floor does while
+the others sit still; it does not show what happens if a pair may qualify on **any**
+one signal, which is the one reading that would reach the same-event families no
+function over Entities can join. `pnpm cluster:sweep` sweeps every cell twice to
+price it: once under the conjunction, once under the wider gate where any single
+signal admits a pair on its own.
+
+**The wider gate got wider.** It is still not what ships, but it is now a disjunction
+over three signals rather than two, so the figures below are re-measured rather than
+carried over. They read the same as they did under two floors — the embedding
+adds a third way in and moves nothing here, because on a corpus carrying no
+embeddings that floor never admits anything.
 
 Measured over 15 live Topics holding 1,757 Stories, window ending
 2026-10-12T19:38:02.384Z. This is a **different corpus from the one the rest of
@@ -331,16 +423,24 @@ ADR-0030 took recall *away* to get precision — "Precision above 71.4% is reach
 one band is that decision reversed rather than a better answer to it.
 
 **The conjunction refuses 28 same-event families and 23 different-event ones.**
-The sweep counts each labelled family by which half turned it away, at the shipped
-floors:
+The sweep counts each labelled family by which floor turned it away, at the shipped
+floors — six buckets now rather than four, because a partition over three
+signals is not a partition over two:
 
-| label | both clear | signature alone admits | Entity alone admits | neither admits | weighed |
-| --- | --- | --- | --- | --- | --- |
-| same-event | 14 | **14** | 0 | 1 | 29 |
-| different-event | 19 | 14 | **9** | 7 | 49 |
+| label | both clear | signature alone | Entity alone | embedding alone | two alone | neither admits | weighed |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| same-event | 14 | **14** | 0 | 0 | 0 | 1 | 29 |
+| different-event | 19 | 14 | **9** | 0 | 0 | 7 | 49 |
 
-The middle two columns are pairs the conjunction refuses and the wider gate would
-admit, so they are the price of each half in the same units.
+The middle columns are pairs the conjunction refuses and the wider gate would admit,
+so they are the price of each floor in the same units. **Two alone** is a bucket of
+its own because it says something none of the other five can: two floors reach the
+family, so no single-signal rule does, and the conjunction refuses it anyway.
+
+**The embedding columns are zero here and that is not a finding about the floor.**
+Nothing on this corpus carries an embedding, so the floor applies to no pair and is
+counted neither as an admission nor as a refusal. A corpus holding some would move
+them.
 
 Read across: **fourteen of the twenty-nine same-event families clear the signature
 floor and not the Entity floor**, and none the other way round. Those are the

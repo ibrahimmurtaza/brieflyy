@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   EMBEDDING_ENCODING,
   decodeEmbedding,
+  embeddingSimilarity,
   encodeEmbedding,
   type StoryEmbedding,
 } from './embedding.js';
@@ -100,5 +101,57 @@ describe('decodeEmbedding', () => {
 
   it('reads the model it is given beside the vector', () => {
     expect(decodeEmbedding(stored(A_VECTOR), 'another/model')?.model).toBe('another/model');
+  });
+});
+
+describe('embeddingSimilarity', () => {
+  const of = (values: readonly number[], model = 'm'): StoryEmbedding => ({ model, values });
+
+  it('scores a vector against itself as exactly 1', () => {
+    expect(embeddingSimilarity(A_VECTOR, A_VECTOR)).toBe(1);
+  });
+
+  it('scores two vectors pointing the same way above two pointing the other', () => {
+    // Two pairs of the same shape, differing only in which way the second leans.
+    // The reading is what a model says two Articles mean alike, so a pair meaning
+    // opposite things has to score low however long either vector is — this is
+    // about the cosine reaching both ends rather than about any floor.
+    const together = embeddingSimilarity(of([1, 0, 0, 0]), of([0.9, 0.1, 0, 0]));
+    const apart = embeddingSimilarity(of([0, 1, 0, 0]), of([0.1, -0.9, 0, 0]));
+
+    expect(together).toBeGreaterThan(0.9);
+    expect(apart).toBeLessThan(-0.9);
+  });
+
+  it('scores two vectors at right angles as zero, which is a measurement and not a refusal', () => {
+    // Zero here is a reading — these Articles mean nothing alike — and it is a
+    // different answer from the null below. The floor is what tells the two apart,
+    // which is the same division the Entity cosine makes and the reason this is a
+    // floor of its own rather than a third reading blended into the first.
+    expect(embeddingSimilarity(of([1, 0, 0, 0]), of([0, 0, 0, 1]))).toBe(0);
+  });
+
+  it('says it cannot compare rather than saying the pair means nothing alike', () => {
+    // Every one of these is the absence of a measurement, and a floor reading any of
+    // them as a low score would be recording a verdict it has no evidence for. Two
+    // Stories embedded by two different models are not more different than two that
+    // carry none: there is simply nothing to compare.
+    expect(embeddingSimilarity(A_VECTOR, null)).toBeNull();
+    expect(embeddingSimilarity(null, A_VECTOR)).toBeNull();
+    expect(embeddingSimilarity(null, null)).toBeNull();
+    expect(embeddingSimilarity(of([1, 0, 0, 0], 'one'), of([1, 0, 0, 0], 'two'))).toBeNull();
+    expect(embeddingSimilarity(of([1, 0, 0, 0]), of([1, 0, 0, 0, 0]))).toBeNull();
+    expect(embeddingSimilarity(of([0, 0, 0, 0]), of([1, 0, 0, 0]))).toBeNull();
+    expect(embeddingSimilarity(of([1, Number.NaN, 0, 0]), of([1, 0, 0, 0]))).toBeNull();
+  });
+
+  it('scores a stored vector the same as the one it was stored from', () => {
+    // Read back through the decoder rather than through the column, so the score a
+    // Story is grouped on is the score of the vector a reader would find there.
+    // Every value is one a float32 holds exactly, because the storage is float32
+    // and the assertion is about the comparison rather than about the rounding.
+    const exact: StoryEmbedding = { model: 'm', values: [0.5, 0.25, -1, 0] };
+
+    expect(embeddingSimilarity(exact, decodeEmbedding(stored(exact), exact.model))).toBe(1);
   });
 });

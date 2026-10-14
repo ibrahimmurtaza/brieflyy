@@ -202,7 +202,7 @@ export class ClusterFormationService {
    * measures against real Topics as well, so that what is measured is what runs
    * here. What is left here is the reading of it: the Entities of the Articles of
    * a Story that this Topic actually follows, the signature the Story carries,
-   * and the order each group comes back in.
+   * the embedding the Story carries, and the order each group comes back in.
    *
    * The signature is read off the Story rather than off its Articles. A Story
    * carries the signature of the Article that formed it and does not grow one as
@@ -210,6 +210,11 @@ export class ClusterFormationService {
    * union over the Articles was measured against the same labelled families and
    * costs recall at the floor that holds it in place, because the union widens
    * both sides of the comparison without widening their overlap.
+   *
+   * The embedding is read the same way and for the same reason — it is the second
+   * reading of that same Article, fixed at formation (ADR-0037). A Story carrying
+   * none reads as carrying none rather than as reading as zeroes, which is what
+   * keeps a corpus that embeds nothing grouping exactly as it did before.
    */
   private async groupStories(
     topic: Topic,
@@ -225,6 +230,7 @@ export class ClusterFormationService {
     const groups = groupIntoClusters(stories, (story, index) => ({
       entities: groundingByStory[index]!,
       signature: story.signature,
+      embedding: story.embedding,
     }));
     return groups.map((group) =>
       [...group].sort((a, b) => a.lastSeenAt.getTime() - b.lastSeenAt.getTime()),

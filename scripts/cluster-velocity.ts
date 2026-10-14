@@ -113,6 +113,7 @@ async function measureTopic(
   return groupIntoClusters(stories, (_storyId, index) => ({
     entities: grounding[index]!,
     signature: stories[index]!.signature,
+    embedding: stories[index]!.embedding,
   })).map((group): Measured => {
     const articles = group.flatMap((story) => byStory.get(story.id) ?? []);
     return {

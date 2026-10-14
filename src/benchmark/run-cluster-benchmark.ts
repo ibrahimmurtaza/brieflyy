@@ -33,6 +33,7 @@ import { createDatabase, type Db } from '../db/client.js';
 import { articles, sources, stories } from '../db/schema.js';
 import {
   ENTITY_SIMILARITY_FLOOR,
+  SEMANTIC_SIMILARITY_FLOOR,
   SHIPPED_MERGE_THRESHOLD,
   SHIPPED_MERGE_THRESHOLDS,
   SIGNATURE_SIMILARITY_FLOOR,
@@ -41,6 +42,7 @@ import {
   type GroundedStory,
   type MergeThresholds,
 } from '../domain/cluster-grouping.js';
+import type { StoryEmbedding } from '../domain/embedding.js';
 import { clusterWindowStart } from '../domain/cluster-window.js';
 import { EMPTY_SIGNATURE, type StorySignature } from '../domain/story-signature.js';
 import type { StoryId, Topic, TopicId } from '../domain/types.js';
@@ -86,12 +88,20 @@ async function main(): Promise<number> {
         // the same reading `ClusterFormationService` groups on, read here so the
         // gate measured is the gate that runs.
         signatures: inWindow.map((story) => story.signature),
+        // The embedding each Story carries, or none. Read off the same Story rather
+        // than recomputed, so what is measured is what is stored; a Story holding
+        // none is read as holding none rather than as a vector of zeroes.
+        embeddings: inWindow.map((story) => story.embedding),
         // Both readings keyed by Story, in one map, so the ceilings and the
         // margins cannot be handed one Story's Entities and another's signature.
         readingByStoryId: new Map(
           storyIds.map((id, index) => [
             id,
-            { entities: grounding[index]!, signature: inWindow[index]!.signature },
+            {
+              entities: grounding[index]!,
+              signature: inWindow[index]!.signature,
+              embedding: inWindow[index]!.embedding,
+            },
           ]),
         ),
       });
@@ -120,11 +130,12 @@ async function main(): Promise<number> {
       resolution,
       readingOf: (storyId) => readingForStory(reads, storyId),
       signatureFloor: SIGNATURE_SIMILARITY_FLOOR,
+      semanticFloor: SEMANTIC_SIMILARITY_FLOOR,
     });
 
     process.stdout.write(
       formatClusterReport(report, {
-        rule: `IDF-weighted cosine over Entities at a floor of ${ENTITY_SIMILARITY_FLOOR} and a Story signature floor of ${SIGNATURE_SIMILARITY_FLOOR}, merged most-similar first with an all-pairs floor over both`,
+        rule: `IDF-weighted cosine over Entities at a floor of ${ENTITY_SIMILARITY_FLOOR}, a Story signature floor of ${SIGNATURE_SIMILARITY_FLOOR} and a Story embedding floor of ${SEMANTIC_SIMILARITY_FLOOR}, merged most-similar first with an all-pairs floor over all three`,
         corpus: `${reads.length} topics, window ending ${now.toISOString()}`,
       }),
     );
@@ -186,8 +197,8 @@ function corpusNow(db: Db): Date {
  * `groundingByStoryInScope`, the read the service groups with too, rather than a
  * second copy of it — over the Stories in the order they were read, so the
  * Entities at an index are the ones belonging to the Story at that index. The
- * signature comes off the same Story at the same index, so the two cannot
- * disagree about which Story they are describing.
+ * signature and the embedding come off that same Story at that index, so the three
+ * halves of one Story's reading cannot disagree about which Story they describe.
  */
 function groupTopic(
   read: TopicRead,
@@ -198,6 +209,7 @@ function groupTopic(
     (_storyId, index) => ({
       entities: read.grounding[index]!,
       signature: read.signatures[index]!,
+      embedding: read.embeddings[index]!,
     }),
     thresholds === undefined ? {} : { thresholds },
   );
@@ -210,11 +222,13 @@ interface TopicRead {
   readonly grounding: readonly (readonly GroundedEntity[])[];
   /** The signature each Story carries, by the same position as the grounding. */
   readonly signatures: readonly StorySignature[];
+  /** The embedding each Story carries, or none, by the same position again. */
+  readonly embeddings: readonly (StoryEmbedding | null)[];
   /**
-   * Both readings keyed by Story, for the ceilings and the margins.
+   * All three readings keyed by Story, for the ceilings and the margins.
    *
    * The rule reads them by position and everything downstream reads them by id, so
-   * the keyed copy is built here in one pass rather than searched per pair: two
+   * the keyed copy is built here in one pass rather than searched per pair: three
    * lookups over one map cannot disagree about which Story they are describing.
    */
   readonly readingByStoryId: ReadonlyMap<StoryId, GroundedStory>;
@@ -224,8 +238,9 @@ interface TopicRead {
  * How a Story reads, from whichever Topic first held it.
  *
  * A property of the Story rather than of a Topic: a Story's Entity set is the
- * union over its Articles, its signature is the one it was formed from, and the
- * Topics holding it read those alike.
+ * union over its Articles, its signature is the one it was formed from, its
+ * embedding is the second reading of that same Article, and the Topics holding it
+ * read those alike.
  */
 function readingForStory(
   reads: readonly TopicRead[],
@@ -235,7 +250,7 @@ function readingForStory(
     const reading = read.readingByStoryId.get(storyId);
     if (reading !== undefined) return reading;
   }
-  return { entities: [], signature: EMPTY_SIGNATURE };
+  return { entities: [], signature: EMPTY_SIGNATURE, embedding: null };
 }
 
 /** Every labelled Article the corpus holds, read in one query. */
