@@ -9,10 +9,11 @@
  * It is computed once, where the Story is formed, and stored beside the model that
  * produced it rather than left in configuration. The model is the point of storing
  * it beside: two Stories embedded by two different models are not comparable, and
- * nothing downstream should be the thing that discovers it. `null` is a state this
- * is designed for rather than a failure — a deployment with no credential forms
- * Stories carrying no embedding, and a caller reads that as no evidence rather
- * than as a vector of zeroes.
+ * the two things that say so — {@link embeddingSimilarity} for a pair and
+ * {@link mixedEmbeddingSet} for a whole set — are the two questions a corpus can be
+ * in a bad state about. `null` is a state this is designed for rather than a
+ * failure — a deployment with no credential forms Stories carrying no embedding,
+ * and a caller reads that as no evidence rather than as a vector of zeroes.
  *
  * Nothing here knows about HTTP or about any vendor. That is what lets the
  * contract be a domain type and lets the implementation be swapped for one that
@@ -179,7 +180,9 @@ export function decodeEmbedding(
  * - **Two different models.** Two vectors from two models share a width and
  *   nothing else, so the number between them is one nobody can act on. This is the
  *   reason the model is stored beside the vector at all. Reading it as "these mean
- *   opposite things" would be the same false verdict as the row above.
+ *   opposite things" would be the same false verdict as the row above. The pair is
+ *   the right place for that answer and it stays here; what a *set* of them means
+ *   is a different question, answered by {@link mixedEmbeddingSet}.
  * - **Two different widths.** The same thing said of a model that changed its
  *   output size between two calls, and the same answer.
  * - **A zero norm, or a value that is not a number.** Dividing by nothing comes out
@@ -214,4 +217,55 @@ export function embeddingSimilarity(
   }
   if (normA === 0 || normB === 0) return null;
   return dot / Math.sqrt(normA * normB);
+}
+
+/**
+ * A set of embeddings that came from more than one model, and which ones.
+ *
+ * A report rather than a yes or a no, because the question an operator asks about a
+ * corpus holding two models is *which* two: the corpus has to be brought back onto
+ * one model, and a refusal naming nothing would leave the work undone with the run
+ * apparently finished.
+ */
+export interface MixedEmbeddingSet {
+  /** Every model found in the set, sorted. Two is what makes it a refusal. */
+  readonly models: readonly string[];
+}
+
+/**
+ * Whether a set of embeddings came from more than one model, or `null` where it did
+ * not — the same question one level up from {@link embeddingSimilarity}.
+ *
+ * The pair above and the set here are the two halves of one rule, and they answer
+ * different questions. A pair carrying two models has nothing to compare, so its
+ * cosine is `null` and the caller falls back to the floors that do apply. **A set
+ * carrying two models is a corpus that changed its model halfway**, which is not a
+ * pair that cannot be compared but every pair in it being compared against nothing:
+ * the pairs that share a model still score, and the ones that do not quietly stop
+ * being judged on this signal at all. Nothing about that failure looks like a
+ * failure — every cosine in the corpus is still a number — so the only symptom is
+ * that grouping got worse, which is exactly the thing nobody is watching. Hence a
+ * refusal rather than a smaller number.
+ *
+ * **Zero models is not a refusal.** A set holding no embedding at all is the state
+ * every Story in a database predating ADR-0037 is in, and it holds zero models
+ * rather than one, so a check that asked "is there exactly one?" would refuse the
+ * corpus that has never been measured and take it from grouping to not grouping in
+ * one change. `null` here means "nothing to refuse", and it is the answer for both
+ * the empty set and the consistent one.
+ *
+ * The name is read off each vector rather than off configuration, which is the
+ * reason ADR-0037 stores it: `OPENROUTER_EMBEDDING_MODEL` says what the next Story
+ * will be embedded by, and a corpus whose old Stories were embedded by the model
+ * before it agrees with configuration perfectly while comparing nothing.
+ */
+export function mixedEmbeddingSet(
+  embeddings: readonly (StoryEmbedding | null)[],
+): MixedEmbeddingSet | null {
+  const models = new Set<string>();
+  for (const embedding of embeddings) {
+    if (embedding !== null) models.add(embedding.model);
+  }
+  if (models.size < 2) return null;
+  return { models: [...models].sort() };
 }

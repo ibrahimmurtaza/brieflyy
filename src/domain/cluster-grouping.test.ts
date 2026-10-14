@@ -10,12 +10,15 @@ import {
   SIGNATURE_SIMILARITY_FLOOR,
   clearsMergeGate,
   describeThresholds,
+  formatGroupingRefusal,
   groupIntoClusters,
   inverseDocumentFrequencies,
+  refusedSets,
   sharedEntityCount,
   similarityBetween,
   type GroundedEntity,
   type GroundedStory,
+  type Grouping,
   type MergeGate,
   type MergeThresholds,
 } from './cluster-grouping.js';
@@ -82,13 +85,31 @@ function meaning(along: 'x' | 'y'): StoryEmbedding {
  *
  * The floors and the gate that combines them stay separate parameters, because
  * they are separate decisions in the rule and a spread of one into the place of
- * the other reads as the other's move.
+ * the other reads as the other's move. This is the helper for the tests about the
+ * *shape* of a grouping, which is all but the refusal tests: a refusal carries no
+ * clusters at all, so a helper that returned them as an empty list would report a
+ * corpus that refused as one that grouped every Story on its own.
  */
 function groupsOf(
   readings: readonly GroundedStory[],
   thresholds?: MergeThresholds,
   gate?: MergeGate,
 ): readonly (readonly number[])[] {
+  const grouping = groupingOf(readings, thresholds, gate);
+  if (grouping.clusters === null) {
+    throw new Error(
+      `this set was refused for holding embeddings from ${grouping.refusal.models.join(', ')}`,
+    );
+  }
+  return grouping.clusters;
+}
+
+/** Group these readings, reported as whatever came back — clusters, or a refusal. */
+function groupingOf(
+  readings: readonly GroundedStory[],
+  thresholds?: MergeThresholds,
+  gate?: MergeGate,
+): Grouping<number> {
   const stories = readings.map((_reading, index) => index);
   return groupIntoClusters(stories, (story) => readings[story]!, {
     ...(thresholds === undefined ? {} : { thresholds }),
@@ -723,18 +744,59 @@ describe('the semantic floor', () => {
     expect(groupsOf(readings)).not.toContainEqual([0, 1]);
   });
 
-  it('leaves the semantic floor out of a pair two different models embedded', () => {
-    // The reason the model is stored beside the vector rather than left in
-    // configuration. Two models' vectors share a width and nothing else, so there
-    // is nothing to compare — and reading that as a cosine of zero would be the same
-    // false verdict as reading a missing embedding as one: a claim that the two
-    // Articles mean opposite things, made on no evidence at all.
-    const readings = sameWordsAboutDifferentThings(
-      { model: 'one/model', values: [1, 0, 0, 0] },
-      { model: 'another/model', values: [1, 0, 0, 0] },
+  it('reports a set two models embedded rather than grouping it', () => {
+    // The state ADR-0037 stores the model beside the vector to make findable, and
+    // what it looks like when nobody found it: the configured model changed, only
+    // some Stories were recomputed, and every cosine in the corpus is still a
+    // number. Pairwise this set is fine — each pair that shares a model scores, and
+    // each pair that does not falls back to the two older floors — which is why the
+    // check has moved up a level rather than down. The report names both models,
+    // because a corpus to be brought back onto one of them cannot be brought back
+    // without knowing which.
+    const grouping = groupingOf(
+      sameWordsAboutDifferentThings(
+        { model: 'vendor/a-1', values: [1, 0, 0, 0] },
+        { model: 'vendor/b-2', values: [1, 0, 0, 0] },
+      ),
     );
 
-    expect(groupsOf(readings)).toContainEqual([0, 1]);
+    expect(grouping.clusters).toBeNull();
+    expect(grouping.refusal?.models).toEqual(['vendor/a-1', 'vendor/b-2']);
+  });
+
+  it('reports a set two models embedded however one Story carries no embedding', () => {
+    // The mixed set is not two Stories facing each other — it is a corpus, so the
+    // Stories between them count, and one holding nothing is not a third model. A
+    // check over pairs would never have found this: no pair here is a pair two
+    // models embedded.
+    const shared = entity();
+    const grouping = groupingOf([
+      reading([shared], SAME_TEXT, { model: 'vendor/a-1', values: [1, 0, 0, 0] }),
+      reading([shared], SAME_TEXT, null),
+      reading([shared], SAME_TEXT, { model: 'vendor/b-2', values: [1, 0, 0, 0] }),
+    ]);
+
+    expect(grouping.clusters).toBeNull();
+    expect(grouping.refusal?.models).toEqual(['vendor/a-1', 'vendor/b-2']);
+  });
+
+  it('reports nothing about a set carrying no embedding, and groups it as it did before', () => {
+    // The other half of the same rule, and the one that decides where the check is
+    // allowed to live. "No models at all" is a set holding zero models rather than
+    // one, and refusing it would take every corpus predating ADR-0037 from grouping
+    // to not grouping in the same change that made the floor landable. Compared as a
+    // shape rather than asserted: the same Stories, once embedded and once not,
+    // have to form the same Clusters.
+    const pairs = 6;
+    const embedded = Array.from({ length: pairs }, () => entity()).flatMap((shared) => [
+      reading([shared], SAME_TEXT, { model: 'vendor/a-1', values: [1, 0, 0, 0] }),
+      reading([shared], SAME_TEXT, { model: 'vendor/a-1', values: [1, 0, 0, 0] }),
+    ]);
+    const none = embedded.map((story) => reading(story.entities, story.signature, null));
+    const grouping = groupingOf(none);
+
+    expect(grouping.refusal).toBeNull();
+    expect(grouping.clusters).toEqual(groupsOf(embedded));
   });
 
   it('holds a Story out of a Cluster whose other members do not mean what it does', () => {
@@ -839,5 +901,76 @@ describe('sharedEntityCount', () => {
         new Set(['b', 'c', 'd'] as EntityId[]),
       ),
     ).toBe(2);
+  });
+});
+
+describe('refusedSets', () => {
+  const of = (model: string): StoryEmbedding => ({ model, values: [1, 0, 0, 0] });
+
+  it('finds the sets whose embeddings came from more than one model, and leaves the rest', () => {
+    // What the four corpus commands ask before they print: a corpus read whole, so
+    // the answer is per set rather than for the corpus — two Topics each holding one
+    // model are two consistent sets, and their Stories are never compared with each
+    // other, so there is nothing to refuse.
+    const refusals = refusedSets([
+      { label: 'fusion-energy', embeddings: [of('vendor/a-1'), null] },
+      { label: 'ai-regulation', embeddings: [of('vendor/a-1'), of('vendor/b-2')] },
+      { label: 'semiconductors', embeddings: [null, null] },
+      { label: 'shipping', embeddings: [of('vendor/c-3'), of('vendor/c-3')] },
+    ]);
+
+    expect(refusals).toEqual([
+      { label: 'ai-regulation', models: ['vendor/a-1', 'vendor/b-2'] },
+    ]);
+  });
+
+  it('leaves a corpus that embeds nothing with nothing to refuse', () => {
+    expect(
+      refusedSets([
+        { label: 'fusion-energy', embeddings: [null, null] },
+        { label: 'shipping', embeddings: [null] },
+      ]),
+    ).toEqual([]);
+  });
+});
+
+describe('formatGroupingRefusal', () => {
+  it('names every model of every set it refused, and what to do about them', () => {
+    // The whole job of these lines: a corpus carrying two models is the one state an
+    // operator can fix, and it cannot be fixed without knowing which two and where
+    // they are — so a line each, not a count of how many there were.
+    const text = formatGroupingRefusal(
+      [
+        { label: 'fusion-energy', models: ['vendor/a-1', 'vendor/b-2'] },
+        { label: 'ai-regulation', models: ['vendor/a-1', 'vendor/c-3'] },
+      ],
+      { corpus: '12 topics, window ending now' },
+    );
+
+    expect(text).toContain('  set       fusion-energy  vendor/a-1, vendor/b-2');
+    expect(text).toContain('  set       ai-regulation  vendor/a-1, vendor/c-3');
+    expect(text).toContain('12 topics, window ending now');
+    expect(text).toContain('pnpm cluster:backfill');
+  });
+
+  it('says a benchmark over this corpus would mean nothing rather than print one', () => {
+    // What a reader of the command's output needs to be told, because the report it
+    // would have printed is not obviously worthless: every cosine in the corpus is
+    // still a number, and the only symptom is a benchmark that looks merely
+    // disappointing.
+    const text = formatGroupingRefusal([{ label: 'one topic', models: ['a', 'b'] }], {
+      corpus: 'one topic',
+    });
+
+    expect(text).toContain('no report is printed');
+    expect(text).toContain('cluster grouping refused');
+  });
+
+  it('ends in a newline, because every other line this repository prints does', () => {
+    const text = formatGroupingRefusal([{ label: 'one topic', models: ['a', 'b'] }], {
+      corpus: 'one topic',
+    });
+
+    expect(text.endsWith('\n')).toBe(true);
   });
 });

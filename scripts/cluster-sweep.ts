@@ -44,6 +44,7 @@ import Database from 'better-sqlite3';
 import { and, eq, inArray, max } from 'drizzle-orm';
 
 import {
+  clustersOf,
   evaluateClusterGrouping,
   formatGateRefusals,
   gateRefusals,
@@ -62,7 +63,9 @@ import {
   SHIPPED_MERGE_THRESHOLD,
   SIGNATURE_SIMILARITY_FLOOR,
   describeThresholds,
+  formatGroupingRefusal,
   groupIntoClusters,
+  refusedSets,
   type GroundedEntity,
   type GroundedStory,
   type MergeGate,
@@ -92,6 +95,8 @@ import {
  */
 interface TopicRead {
   readonly topicId: TopicId;
+  /** What a refusal names this set by, which is a Topic's own title. */
+  readonly label: string;
   readonly storyIds: readonly StoryId[];
   readonly grounding: readonly (readonly GroundedEntity[])[];
   readonly signatures: readonly StorySignature[];
@@ -231,6 +236,7 @@ async function main(): Promise<number> {
       const grounding = await groundingByStoryInScope(topic, inWindow, articleRepo);
       reads.push({
         topicId: topic.id,
+        label: topic.title,
         storyIds,
         grounding,
         signatures: inWindow.map((story) => story.signature),
@@ -253,6 +259,20 @@ async function main(): Promise<number> {
       { sameEvent: SAME_EVENT_PAIRS, differentEvent: DIFFERENT_EVENT_PAIRS },
       (ref) => storyIdByRef.get(corpusRefKey(ref.source, ref.externalId)) ?? null,
     );
+    // On the same grounds as the families below, and ahead of them: a set whose
+    // embeddings came from more than one model cannot be swept, because the floor
+    // being swept has nothing to judge on the pairs between two models.
+    const refusals = refusedSets(
+      reads.map((read) => ({ label: read.label, embeddings: read.embeddings })),
+    );
+    if (refusals.length > 0) {
+      process.stdout.write(
+        formatGroupingRefusal(refusals, {
+          corpus: `${reads.length} topics, window ending ${now.toISOString()}`,
+        }),
+      );
+      return 1;
+    }
     // A cell scored against a different set of families is not comparable with a cell
     // scored against this one, so the sweep refuses rather than prints a frontier that
     // silently changed its own denominator halfway down.
@@ -273,14 +293,16 @@ async function main(): Promise<number> {
     const cell = (thresholds: MergeThresholds, gate: MergeGate): string => {
       const grouped: GroupedTopic[] = reads.map((read) => ({
         topicId: read.topicId,
-        clusters: groupIntoClusters(
-          read.storyIds,
-          (_storyId, index) => ({
-            entities: read.grounding[index]!,
-            signature: read.signatures[index]!,
-            embedding: read.embeddings[index]!,
-          }),
-          { thresholds, gate },
+        clusters: clustersOf(
+          groupIntoClusters(
+            read.storyIds,
+            (_storyId, index) => ({
+              entities: read.grounding[index]!,
+              signature: read.signatures[index]!,
+              embedding: read.embeddings[index]!,
+            }),
+            { thresholds, gate },
+          ),
         ),
       }));
       const report = evaluateClusterGrouping({

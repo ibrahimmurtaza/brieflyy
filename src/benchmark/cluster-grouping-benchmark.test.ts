@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   bothSignalsPrecisionCeiling,
+  clustersOf,
   evaluateClusterGrouping,
   formatClusterReport,
   formatGateRefusals,
@@ -27,6 +28,7 @@ import {
   SEMANTIC_SIMILARITY_FLOOR,
   SHIPPED_MERGE_THRESHOLD,
   SIGNATURE_SIMILARITY_FLOOR,
+  groupIntoClusters,
 } from '../domain/cluster-grouping.js';
 import type { StoryEmbedding } from '../domain/embedding.js';
 import { EMPTY_SIGNATURE, type StorySignature } from '../domain/story-signature.js';
@@ -418,6 +420,43 @@ describe('bothSignalsPrecisionCeiling', () => {
     expect(ceiling.unseparable).toEqual([
       'bbc: bbc headline 2 | cnbc: cnbc headline 2',
     ]);
+  });
+});
+
+describe('clustersOf', () => {
+  const oneModel: readonly GroundedStory[] = [
+    {
+      entities: [{ id: 'entity-1' as EntityId, kind: 'concept' }],
+      signature: { words: ['acme', 'foo'], phrases: [] },
+      embedding: { model: 'vendor/a-1', values: [1, 0, 0, 0] },
+    },
+    {
+      entities: [{ id: 'entity-2' as EntityId, kind: 'concept' }],
+      signature: { words: ['ruling', 'overturns'], phrases: [] },
+      embedding: { model: 'vendor/a-1', values: [1, 0, 0, 0] },
+    },
+  ];
+  const mixedModels: readonly GroundedStory[] = [
+    oneModel[0]!,
+    { ...oneModel[1]!, embedding: { model: 'vendor/b-2', values: [1, 0, 0, 0] } },
+  ];
+  const group = (readings: readonly GroundedStory[]) =>
+    groupIntoClusters(readings, (_story, index) => readings[index]!);
+
+  it('hands back the Clusters of a grouping that was not refused', () => {
+    // Two Stories about different things, holding the same model throughout, so the
+    // answer is two Clusters rather than one — the shape every command that has
+    // already asked about its corpus is left holding.
+    expect(clustersOf(group(oneModel))).toHaveLength(2);
+  });
+
+  it('says so rather than dropping a refused set out of the report', () => {
+    // The failure it is here rather than a skip: a sweep cell that quietly left a
+    // Topic out would change its own denominator halfway down, which is what the
+    // command refuses outright over the labelled pairs. Both commands ask the whole
+    // corpus first, so this is where a refusal that has no business being here stops
+    // being one.
+    expect(() => clustersOf(group(mixedModels))).toThrow(/vendor\/a-1, vendor\/b-2/);
   });
 });
 

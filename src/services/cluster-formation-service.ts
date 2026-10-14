@@ -4,6 +4,7 @@ import {
   groupIntoClusters,
   sharedEntityCount,
   type GroundedEntity,
+  type Grouping,
 } from '../domain/cluster-grouping.js';
 import { bulletsFrom, oneLinerFrom } from '../domain/cluster-text.js';
 import { clusterWindowStart } from '../domain/cluster-window.js';
@@ -65,12 +66,35 @@ const MIN_VELOCITY_SPAN_DAYS = 1;
 export const MAX_BULLET_POINTS = 3;
 
 export interface ClusterFormationReport {
-  /** How many Topics were formed. */
+  /**
+   * How many Topics were formed, which is every Topic that was **not** refused.
+   *
+   * The two counts together cover the Topics the pass walked, and neither would be
+   * worth having alone: a report saying it formed six Topics and listing no Clusters
+   * for one of them is the silence this refusal exists to end.
+   */
   readonly topicsFormed: number;
   /** Every Cluster formed across those Topics. */
   readonly clusters: readonly Cluster[];
   /** How many Clusters a re-form left behind and archived. */
   readonly archived: number;
+  /**
+   * The Topics whose Stories carry embeddings from more than one model, and which.
+   *
+   * A Topic in here was not formed at all: grouping refused it, so it keeps the
+   * Clusters it had rather than being emptied into a grouping nobody can act on.
+   * There is nowhere else inside the application this can be seen — a mixed corpus
+   * produces cosines that all still look like numbers, so a User finds their
+   * Clusters quietly worse and nothing anywhere says why.
+   */
+  readonly refused: readonly RefusedTopic[];
+}
+
+/** One Topic grouping refused, named by its id rather than by its Stories. */
+export interface RefusedTopic {
+  readonly topicId: TopicId;
+  /** Every model found in its Stories' embeddings, sorted. */
+  readonly models: readonly string[];
 }
 
 export interface ClusterFormationServiceDeps {
@@ -120,13 +144,21 @@ export class ClusterFormationService {
   ): Promise<ClusterFormationReport> {
     const topics = await this.deps.topicRepo.listAll();
     const clusters: Cluster[] = [];
+    const refused: RefusedTopic[] = [];
     let archived = 0;
     for (const topic of topics) {
       const formed = await this.formTopic(topic, now);
-      clusters.push(...formed.clusters);
-      archived += formed.archived;
+      // One refused Topic does not stop the rest: the loop is over every Topic the
+      // database holds, and a model change is not a property of the User who owns
+      // the one that changed. The refusal is reported rather than thrown, so the
+      // cycle that called this finishes and says what it could not do.
+      if (formed.refusal !== null) refused.push(formed.refusal);
+      else {
+        clusters.push(...formed.clusters);
+        archived += formed.archived;
+      }
     }
-    return { topicsFormed: topics.length, clusters, archived };
+    return { topicsFormed: topics.length - refused.length, clusters, archived, refused };
   }
 
   /**
@@ -154,14 +186,26 @@ export class ClusterFormationService {
    * Clusters a User has been reading — and given Feedback on — stay the same rows
    * as Stories join them and age out of them, and the Archive does not accumulate
    * a copy of every Cluster for every way its membership has ever moved.
+   *
+   * **A Topic grouping refuses is left alone rather than emptied.** Grouping
+   * refuses a set whose Stories carry embeddings from more than one model, and the
+   * alternative here — carrying on with two of three floors for the pairs that
+   * cannot be compared — is a clustering nobody chose, reported nowhere. Archiving
+   * what the Topic had would be the other half of that silence: a User whose model
+   * changed would open their brief to nothing at all, with no reason given. So the
+   * Clusters stay, the refusal is reported, and an operator backfills the corpus.
    */
   private async formTopic(
     topic: Topic,
     now: Date,
-  ): Promise<{ clusters: readonly Cluster[]; archived: number }> {
+  ): Promise<{
+    clusters: readonly Cluster[];
+    archived: number;
+    refusal: RefusedTopic | null;
+  }> {
     // A Topic the User never gave a Source has nothing to form Clusters from.
     if (topic.sourceIds.length === 0) {
-      return { clusters: [], archived: 0 };
+      return { clusters: [], archived: 0, refusal: null };
     }
 
     const windowStart = clusterWindowStart(now, topic.clusterWindowDays);
@@ -170,7 +214,12 @@ export class ClusterFormationService {
       windowStart,
     });
 
-    const groups = await this.groupStories(topic, stories);
+    const grouping = await this.groupStories(topic, stories);
+    if (grouping.refusal !== null) {
+      return { clusters: [], archived: 0, refusal: { topicId: topic.id, models: grouping.refusal.models } };
+    }
+    const groups = grouping.clusters;
+
     const ids = assignClusterIds(
       topic.id,
       groups.map((group) => group.map((story) => story.id)),
@@ -192,11 +241,11 @@ export class ClusterFormationService {
       clusters.map((c) => c.id),
       now,
     );
-    return { clusters, archived };
+    return { clusters, archived, refusal: null };
   }
 
   /**
-   * Split Stories into the groups that become Clusters.
+   * Split Stories into the groups that become Clusters, or report why not.
    *
    * The rule itself is in `domain/cluster-grouping.ts`, which the benchmark
    * measures against real Topics as well, so that what is measured is what runs
@@ -214,27 +263,33 @@ export class ClusterFormationService {
    * The embedding is read the same way and for the same reason — it is the second
    * reading of that same Article, fixed at formation (ADR-0037). A Story carrying
    * none reads as carrying none rather than as reading as zeroes, which is what
-   * keeps a corpus that embeds nothing grouping exactly as it did before.
+   * keeps a corpus that embeds nothing grouping exactly as it did before. A Topic
+   * carrying two models' worth is the other end of that: grouping returns a refusal
+   * naming both, and this passes it on rather than grouping what is left.
    */
   private async groupStories(
     topic: Topic,
     stories: readonly Story[],
-  ): Promise<readonly (readonly Story[])[]> {
-    if (stories.length === 0) return [];
+  ): Promise<Grouping<Story>> {
+    if (stories.length === 0) return { clusters: [], refusal: null };
     const groundingByStory = await groundingByStoryInScope(
       topic,
       stories,
       this.deps.articleRepo,
     );
 
-    const groups = groupIntoClusters(stories, (story, index) => ({
+    const grouping = groupIntoClusters(stories, (story, index) => ({
       entities: groundingByStory[index]!,
       signature: story.signature,
       embedding: story.embedding,
     }));
-    return groups.map((group) =>
-      [...group].sort((a, b) => a.lastSeenAt.getTime() - b.lastSeenAt.getTime()),
-    );
+    if (grouping.clusters === null) return grouping;
+    return {
+      clusters: grouping.clusters.map((group) =>
+        [...group].sort((a, b) => a.lastSeenAt.getTime() - b.lastSeenAt.getTime()),
+      ),
+      refusal: null,
+    };
   }
 
   /**

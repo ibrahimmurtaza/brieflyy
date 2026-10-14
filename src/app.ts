@@ -482,7 +482,18 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     // Clusters are a grouping of the Stories a cycle wrote, so they are formed
     // once the cycle is done rather than alongside it.
     afterCycle: async () => {
-      await clusterFormationService.formForAllTopics();
+      const { refused } = await clusterFormationService.formForAllTopics();
+      // Said rather than swallowed. A Topic whose Stories carry embeddings from two
+      // models is not grouped at all, and it keeps the Clusters it had — so from
+      // here it looks like a corpus that has stopped changing, which is the one
+      // reading of it that is wrong. `pnpm cluster:benchmark` refuses such a corpus
+      // and names the models; this is the same answer reaching an operator who is
+      // not running commands.
+      for (const topic of refused) {
+        console.error(
+          `[app] Topic ${topic.topicId} was not grouped: its Stories carry embeddings from ${topic.models.join(', ')}`,
+        );
+      }
     },
   });
 

@@ -321,8 +321,9 @@ export interface Story {
    * identity that shifted every time a syndication copy landed would be a different
    * Story each time. `null` is a state rather than a failure — a deployment with no
    * embedding credential forms Stories that hold none, and a caller reads that as no
-   * evidence rather than as a vector of zeroes. Nothing reads it yet; grouping is
-   * unchanged while it is carried.
+   * evidence rather than as a vector of zeroes. Grouping reads it as the third of
+   * its three floors, and refuses a set of Stories whose embeddings came from more
+   * than one model rather than scoring the pairs it cannot compare.
    */
   readonly embedding: StoryEmbedding | null;
   readonly firstSeenAt: Date;
