@@ -109,6 +109,7 @@ describe('configuration surface', () => {
       'OPENAI_API_URL',
       'OPENROUTER_API_KEY',
       'OPENROUTER_EMBEDDINGS_URL',
+      'OPENROUTER_EMBEDDING_BATCH_SIZE',
       'OPENROUTER_EMBEDDING_MODEL',
       'PORT',
       'RESEND_API_KEY',

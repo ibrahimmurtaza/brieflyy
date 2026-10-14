@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { eq } from 'drizzle-orm';
 
 import { createTestDb } from '../testing/test-db.js';
 import { DrizzleSourceRepo } from './source-repo.js';
 import { DrizzleArticleRepo } from './article-repo.js';
 import { DrizzleStoryRepo } from './story-repo.js';
+import { stories } from '../db/schema.js';
 import { EMPTY_SIGNATURE, isSameStory } from '../domain/story-signature.js';
 import type { StoryEmbedding } from '../domain/embedding.js';
 import { NO_BACKOFF } from '../domain/types.js';
@@ -493,5 +495,217 @@ describe('DrizzleStoryRepo', () => {
     });
 
     expect(found).toEqual([]);
+  });
+
+  describe('the Stories a backfill has to reach', () => {
+    /**
+     * A Story formed from Articles published at the instants given, plus the
+     * embedding it formed carrying. Separate from `givenStory` because these
+     * tests are about which Article a Story's second reading is taken from, and
+     * that needs the publication dates to differ.
+     */
+    async function givenDatedStory(
+      db: ReturnType<typeof createTestDb>['db'],
+      repo: DrizzleStoryRepo,
+      input: {
+        readonly id: string;
+        readonly articles: readonly { readonly id: string; readonly at: Date }[];
+        readonly embedding: StoryEmbedding | null;
+      },
+    ): Promise<StoryId> {
+      const storyId = input.id as StoryId;
+      const first = input.articles[0]!.at;
+      await repo.insert({
+        id: storyId,
+        signature: signatureOf(WIRE_COPIES[0]!.body),
+        embedding: input.embedding,
+        firstSeenAt: first,
+        lastSeenAt: first,
+        published: { first, last: input.articles.at(-1)?.at ?? first },
+      });
+      const articleRepo = new DrizzleArticleRepo(db);
+      for (const article of input.articles) {
+        await articleRepo.insert({
+          article: makeArticle({
+            id: article.id as ArticleId,
+            sourceId: 'src-test',
+            externalId: article.id,
+            publishedAt: article.at,
+            ingestedAt: article.at,
+          }),
+          entityIds: [],
+        });
+        await articleRepo.assignToStory(article.id as ArticleId, storyId);
+      }
+      return storyId;
+    }
+
+    const A_DAY = 24 * 60 * 60 * 1000;
+    const at = (day: number): Date => new Date(`2026-05-0${day}T12:00:00Z`);
+
+    it('offers the Story carrying none, with the Article it was formed from', async () => {
+      // The oldest Article, because that is the one the signature is a reading of
+      // and so the one the embedding has to be a reading of too. Embedding the
+      // newest copy instead would make the vector describe a syndication wire
+      // story rather than the report the Story exists for.
+      const { db } = await setupSource();
+      const repo = new DrizzleStoryRepo(db);
+      await givenDatedStory(db, repo, {
+        id: 'story-1',
+        articles: [
+          { id: 'a-newest', at: at(3) },
+          { id: 'a-oldest', at: at(1) },
+          { id: 'a-middle', at: at(2) },
+        ],
+        embedding: null,
+      });
+
+      const found = await repo.listUnembedded({ limit: 10 });
+
+      expect(found).toHaveLength(1);
+      expect(found[0]?.id).toBe('story-1');
+      expect(found[0]?.title).toBe('Title a-oldest');
+    });
+
+    it('leaves out a Story already carrying an embedding', async () => {
+      // The formation path covers every Story formed from here on, and a backfill
+      // over a corpus holding both kinds has to leave the formed ones exactly as
+      // they are.
+      const { db } = await setupSource();
+      const repo = new DrizzleStoryRepo(db);
+      await givenDatedStory(db, repo, {
+        id: 'story-embedded',
+        articles: [{ id: 'a-1', at: at(1) }],
+        embedding: A_VECTOR,
+      });
+      await givenDatedStory(db, repo, {
+        id: 'story-bare',
+        articles: [{ id: 'a-2', at: at(1) }],
+        embedding: null,
+      });
+
+      const found = await repo.listUnembedded({ limit: 10 });
+
+      expect(found.map((s) => s.id)).toEqual(['story-bare']);
+    });
+
+    it('offers a Story holding no Article, rather than dropping it', async () => {
+      // A Story is inserted before its first Article is attached, so this is the
+      // window every cycle runs in. Dropped by the read, a corpus holding one
+      // would report that nothing was left to do — and the report would be wrong,
+      // because that Story carries no vector and the semantic floor does not
+      // apply to it at all.
+      const { db } = await setupSource();
+      const repo = new DrizzleStoryRepo(db);
+      const t = new Date('2026-05-01T12:00:00Z');
+      await repo.insert({
+        id: 'story-orphan' as StoryId,
+        signature: signatureOf(WIRE_COPIES[0]!.body),
+        embedding: null,
+        firstSeenAt: t,
+        lastSeenAt: t,
+        published: { first: t, last: t },
+      });
+
+      const found = await repo.listUnembedded({ limit: 10 });
+
+      expect(found).toEqual([{ id: 'story-orphan', title: null, body: null }]);
+    });
+
+    it('offers a Story whose two halves were migrated apart', async () => {
+      // The columns were added one at a time, so a database interrupted midway
+      // holds a vector with no model beside it — which reads as no embedding
+      // everywhere else, so it is a Story that only a backfill can fill.
+      const { db } = await setupSource();
+      const repo = new DrizzleStoryRepo(db);
+      await givenDatedStory(db, repo, {
+        id: 'story-half',
+        articles: [{ id: 'a-1', at: at(1) }],
+        embedding: null,
+      });
+      await db.update(stories).set({ embeddingModel: '   ' }).where(eq(stories.id, 'story-half'));
+
+      expect((await repo.getById('story-half' as StoryId))?.embedding).toBeNull();
+      expect((await repo.listUnembedded({ limit: 10 })).map((s) => s.id)).toEqual(['story-half']);
+    });
+
+    it('pages through a corpus in id order, and leaves out the ones already done', async () => {
+      // A backfill walks this repeatedly — once per batch, and again on the next
+      // run of the command. The ones written fall away behind it, so each pass
+      // takes the next; the ones that could not be written are still carrying
+      // none, which is what `after` is for.
+      const { db } = await setupSource();
+      const repo = new DrizzleStoryRepo(db);
+      for (const id of ['story-1', 'story-2', 'story-3']) {
+        await givenDatedStory(db, repo, {
+          id,
+          articles: [{ id: `a-${id}`, at: at(1) }],
+          embedding: null,
+        });
+      }
+
+      const first = await repo.listUnembedded({ limit: 2 });
+      expect(first.map((s) => s.id)).toEqual(['story-1', 'story-2']);
+      // And it can be asked to carry on from where it stopped, which is what a run
+      // moves forwards on whether or not the page it last read was a success.
+      expect((await repo.listUnembedded({ limit: 2, after: 'story-2' as StoryId })).map((s) => s.id)).toEqual([
+        'story-3',
+      ]);
+
+      await repo.backfillEmbedding('story-1' as StoryId, A_VECTOR);
+      await repo.backfillEmbedding('story-2' as StoryId, A_VECTOR);
+
+      expect((await repo.listUnembedded({ limit: 2 })).map((s) => s.id)).toEqual(['story-3']);
+      // So a Story the run could not write is offered again on the next run of
+      // the command, and is not asked about twice in the middle of this one.
+      expect(
+        (await repo.listUnembedded({ limit: 2, after: 'story-1' as StoryId })).map((s) => s.id),
+      ).toEqual(['story-3']);
+    });
+
+    it('puts an embedding on a Story that carries none, beside the model', async () => {
+      const { db } = await setupSource();
+      const repo = new DrizzleStoryRepo(db);
+      await givenDatedStory(db, repo, {
+        id: 'story-1',
+        articles: [{ id: 'a-1', at: at(1) }],
+        embedding: null,
+      });
+
+      expect(await repo.backfillEmbedding('story-1' as StoryId, A_VECTOR)).toBe(true);
+
+      const found = await repo.getById('story-1' as StoryId);
+      expect(found?.embedding?.values).toEqual([1, -2.5, 0, 3.5]);
+      expect(found?.embedding?.model).toBe('vendor/some-embedding-1');
+    });
+
+    it('leaves an embedding it already holds exactly as it is', async () => {
+      // The load-bearing claim of the whole command. An existing vector is the
+      // Article's own second reading, computed once where the Story was formed;
+      // replacing it would make the Story disagree with every other Story formed
+      // since, and a run that reports progress while doing it is worse than one
+      // that reports nothing.
+      const { db } = await setupSource();
+      const repo = new DrizzleStoryRepo(db);
+      await givenDatedStory(db, repo, {
+        id: 'story-1',
+        articles: [{ id: 'a-1', at: at(1) }],
+        embedding: A_VECTOR,
+      });
+
+      const later: StoryEmbedding = { model: 'vendor/some-other-embedding-2', values: [9, 9] };
+      expect(await repo.backfillEmbedding('story-1' as StoryId, later)).toBe(false);
+
+      const found = await repo.getById('story-1' as StoryId);
+      expect(found?.embedding?.model).toBe('vendor/some-embedding-1');
+      expect(found?.embedding?.values).toEqual([1, -2.5, 0, 3.5]);
+    });
+
+    it('says nothing was written for a Story that is not there', async () => {
+      const { db } = await setupSource();
+      const repo = new DrizzleStoryRepo(db);
+
+      expect(await repo.backfillEmbedding('story-missing' as StoryId, A_VECTOR)).toBe(false);
+    });
   });
 });

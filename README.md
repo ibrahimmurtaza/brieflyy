@@ -75,6 +75,7 @@ pnpm cluster:benchmark   # score Cluster grouping against the labelled pairs, ov
 pnpm cluster:sweep       # the same corpus at every pair of floors on a grid and under both gates
 pnpm cluster:velocity    # the Articles-a-day distribution the Active threshold is read from
 pnpm cluster:summary     # how much of a Cluster's bullets restate the Cluster above them
+pnpm cluster:backfill    # embed the Stories a corpus held before anything carried one
 ```
 
 `pnpm db:migrate` is the command that applies DDL, and it is the one the "Changing
@@ -182,6 +183,32 @@ its own copy of the rule would carry on printing a clean number the day the rule
 changed and nobody changed the report. It is not in `pnpm verify` for the same reason
 `pnpm cluster:benchmark` is not: the numbers are a claim about a real corpus.
 
+`pnpm cluster:backfill` is the one command here that writes. Every Story already in
+a database was formed before anything carried an embedding (ADR-0037), so it carries
+none, and grouping reads a missing embedding as no evidence — which means a corpus
+that has not been through this measures the semantic floor as though it had done
+nothing, and `pnpm cluster:benchmark` prints `n/a (nothing weighed)` for both labels
+in place of the distribution the floor was read from (ADR-0038). So it takes the
+database as an argument the way `pnpm cluster:summary` does, and **the operator
+copies the file first**: a corpus that has been through this has grouping reading a
+third floor where it read none before, and the only way to see that is to benchmark
+the result and diff it against the run over the copy you kept.
+
+It embeds only the Stories carrying nothing. The condition is in the `UPDATE` rather
+than in the caller, so a Story that already has a vector is never asked about and
+never overwritten — which is also what makes a second run cost nothing (ADR-0039).
+The vector is of the **oldest** Article in the Story, the one its signature is a
+reading of. Batches are `OPENROUTER_EMBEDDING_BATCH_SIZE` texts to a call because
+the endpoint is billed per request rather than per text; nothing upstream publishes a
+maximum for the array it takes, so a call the endpoint refuses is asked again one
+text at a time rather than ending the run. The report says how many Stories it
+embedded, what the run cost in requests, tokens and credits, and which model it
+wrote — and a second run says *nothing to do: every Story in this corpus already
+carries an embedding*, which is the one line that separates a finished job from a
+command that did not run. It needs `OPENROUTER_API_KEY` and refuses without one,
+because a run with no provider would otherwise print that same line having done no
+work.
+
 `pnpm typecheck` covers `src/` and `scripts/`, which is where the unit tests and the
 operator commands live, and not `tests/e2e/`: Playwright compiles the specs without
 checking their types, so a type error in a spec is found at run time or not at all.
@@ -276,15 +303,21 @@ would otherwise hold the cycle rather than one Story's second reading. A call th
 outruns it forms a Story with no embedding, which is what it did before this
 existed.
 
-No Story is backfilled. Every Story already in the database was formed before
-anything carried a vector, so it carries none — and a Story carrying none is one
-the semantic floor does not apply to at all, rather than one the floor refuses. That
-is why this can land ahead of the backfill: a corpus holding no embeddings groups
-exactly as it did before, and `ClusterFormationService` needs no change to say so. It
-is also why such a corpus cannot measure the floor, which is why `docs/adr/0038`
-records the corpus those numbers were read from. The backfill is its own operator
-command, over a copy of the database the way the corpus commands work, so that
-running it is an act rather than something that happened at boot.
+Nothing backfills itself at boot. Every Story already in the database was formed
+before anything carried a vector, so it carries none — and a Story carrying none is
+one the semantic floor does not apply to at all, rather than one the floor refuses.
+That is why the floor could land ahead of the backfill: a corpus holding no
+embeddings groups exactly as it did before, and `ClusterFormationService` needs no
+change to say so. It is also why such a corpus cannot measure the floor, and why
+`pnpm cluster:backfill` exists (ADR-0039). Take a copy, run it over the copy, and
+benchmark the result.
+
+`OPENROUTER_EMBEDDING_BATCH_SIZE` is the only setting the backfill reads and
+formation does not. Sixteen texts to a call, configurable because the endpoint
+publishes no maximum for the array it takes and the free tier counts requests
+rather than tokens — which makes this number the whole of what a backfill costs. It
+is under the twenty the ADR-0038 calibration run used, which is the largest anyone
+has evidence for rather than a limit anyone has published.
 
 ### Seeing whether it worked
 
@@ -662,7 +695,8 @@ src/
 │                          # the LivingBrief, the Archive route, ...)
 ├── services/              # clustering; the brief layer (BriefPlan, BriefSnapshot
 │                          # renderer, the scheduled job, /admin/briefs); the written
-│                          # summary client, the embedding provider; the feedback
+│                          # summary client, the embedding provider and its
+│                          # batch contract; the feedback
 │                          # layer; topic settings; the trends service; Archive
 │                          # search; and the unsubscribe state that job honours
 ├── trends/                # the trends view: inline-SVG chart + sparklines, the
@@ -738,6 +772,8 @@ purpose, and each is reached by something other than a request:
 | `scripts/cluster-sweep.ts` | `pnpm cluster:sweep` |
 | `scripts/cluster-velocity.ts` | `pnpm cluster:velocity` |
 | `scripts/cluster-summary.ts` | `pnpm cluster:summary` |
+| `scripts/cluster-backfill.ts` | `pnpm cluster:backfill` |
+| `src/services/story-embedding-backfill.ts` | that command, and its own suite |
 | `src/ingest/test-constants.ts` | the ingest suites |
 | `src/testing/`, `src/app-wiring.ts` | the suites |
 
@@ -768,6 +804,7 @@ double in `src/testing/`, a lambda a test supplies, or a test of its own.
 | `EmailTransport` | `send(message)`, raising `EmailRefusedError` only where the provider itself answered no — a thrown call is not a refusal (ADR-0027) | `ConsoleEmailTransport`, `ResendEmailTransport` |
 | `LLMSummaryClient` | `generateSummary(clusterTitle, clusterSummary, articles)` | `OpenAILLMSummaryService`, `RecordingSummaryClient`, or none at all |
 | `EmbeddingProvider` | `embed(text)` | `OpenRouterEmbeddingService`, `RecordingEmbeddingProvider`, or none at all |
+| `BatchingEmbeddingProvider` | `embedBatch(texts)` — the endpoint is billed per request, so a backfill has to ask about many texts in one call (ADR-0039) | `OpenRouterEmbeddingService`, a double in `story-embedding-backfill.test.ts`, or nothing at all |
 | `Clock` | `now()` | `systemClock`, `makeTestClock` (a `set`/`advance` pair) |
 | `RandomSource` | `bytes()`, `uuid()` | `nodeRandom`, `deterministicRandom` |
 | `EnvSource` | `Readonly<Record<string, string \| undefined>>` | `process.env`, a plain object in tests |
@@ -842,12 +879,12 @@ counted.
 pnpm test
 ```
 
-The suite is 107 test files across `src/` holding 1,888 cases — Vitest prints the
+The suite is 108 test files across `src/` holding 1,953 cases — Vitest prints the
 live figure at the end of every run. `docs-agreement.test.ts` checks the file
 count and cannot check the case count without running the suite it lives in, so
 that one number is worth reading off a run rather than trusting.
 
-The layout is **86 of the 149 modules** under `src/` having a sibling test file of
+The layout is **87 of the 150 modules** under `src/` having a sibling test file of
 the same name. The other 63 are reached by a suite named for what it covers rather
 than for one module — `repos/oauth-repos.test.ts` over four repositories,
 `pages/topic-page.test.ts` over the routes that render a Topic — and some are

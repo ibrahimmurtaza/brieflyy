@@ -39,6 +39,76 @@ export interface EmbeddingProvider {
 }
 
 /**
+ * What a run of embedding calls cost.
+ *
+ * Counted rather than estimated, because the caller is usually an operator
+ * deciding whether to run the job again, and a number nobody can trust for that
+ * is not worth printing. `null` wherever the provider reported no such figure,
+ * which is a different answer from zero: **zero is a measurement** of nothing
+ * spent, and `null` is the absence of a measurement. A reply that carries no
+ * usage says nothing about what the run cost, and reading that silence as free
+ * would be the one answer that is certainly wrong.
+ *
+ * Not money, and named so. `credits` is whatever the provider billed in its own
+ * units; a deployment on a free model legitimately reaches `0`, and one paying per
+ * token reaches a number this build has no way to turn into a price.
+ */
+export interface EmbeddingUsage {
+  /** Calls made, counted by the caller rather than read off a reply. */
+  readonly requests: number;
+  /** Tokens the provider counted over those calls. */
+  readonly tokens: number | null;
+  /** What the provider says it charged for them, in its own units. */
+  readonly credits: number | null;
+}
+
+/**
+ * One call's answer to many texts at once.
+ *
+ * The vectors are in the order they were asked for, and a text the provider had
+ * nothing for is `null` at its own position rather than shortening the list — the
+ * same answer `EmbeddingProvider.embed` gives, one place, so a caller cannot
+ * line a vector up with the wrong Article by counting what it did get back.
+ */
+export interface EmbeddingBatch {
+  readonly embeddings: readonly (StoryEmbedding | null)[];
+  readonly usage: EmbeddingUsage;
+  /**
+   * Whether the call itself produced nothing at all.
+   *
+   * A different answer from "it answered, and had no vector for these". A call
+   * that was refused, threw, timed out or came back in a shape nobody can read
+   * has told the caller nothing about any of the texts in it — while a call that
+   * answered has told it about the ones it could and nothing about the ones it
+   * could not. A caller that cannot tell the two apart cannot tell a dead
+   * credential from one unembeddable Article, and the two are fixed in opposite
+   * ways.
+   *
+   * Never true beside a vector: a refused call carries no embeddings.
+   */
+  readonly refused: boolean;
+}
+
+/**
+ * Asks a model about many pieces of text in one call.
+ *
+ * A second contract rather than a second method on the one above, and the
+ * distinction is worth keeping: **formation asks about one Article** and holds the
+ * answer in the middle of an ingest cycle, while a backfill asks about every
+ * Story an existing corpus holds. A provider that can only do one at a time is a
+ * complete implementation of `EmbeddingProvider` and is not obliged to answer
+ * this — the backfill then costs one request per Story rather than one per batch,
+ * which is a price and not a failure.
+ *
+ * OpenRouter's endpoint takes an array of texts in a single request and is billed
+ * per request rather than per text, so batching is what makes a backfill
+ * affordable at all rather than a convenience.
+ */
+export interface BatchingEmbeddingProvider {
+  embedBatch(texts: readonly string[]): Promise<EmbeddingBatch>;
+}
+
+/**
  * How a vector is written down: little-endian float32, base64, version 1.
  *
  * Recorded in the value itself rather than implied by the column, because the

@@ -53,6 +53,24 @@ export const OPENROUTER_EMBEDDING_MODEL_DEFAULT = 'openai/text-embedding-3-small
  */
 export const EMBEDDING_CALL_TIMEOUT_MS_DEFAULT = 5000;
 
+/**
+ * How many Stories an operator's backfill asks about in one call.
+ *
+ * The endpoint is billed per request rather than per text, so this is the whole
+ * of what decides whether a corpus costs thousands of calls or hundreds of
+ * thousands — and the free tier counts requests rather than tokens, which is why
+ * batching is what makes a backfill runnable at all.
+ *
+ * **Sixteen, and configurable, because the endpoint publishes no maximum for the
+ * array it takes.** The only figure anyone has evidence for is the twenty the
+ * ADR-0038 calibration run used, which is the largest that has been seen to work
+ * rather than a limit; shipping it as a default would be inheriting a measurement
+ * as though it were a spec. Sixteen is under it, and a size that is too large is
+ * not a failed run — the backfill asks the same texts again one at a time and
+ * carries on, so turning this up is a thing an operator can try rather than a bet.
+ */
+export const OPENROUTER_EMBEDDING_BATCH_SIZE_DEFAULT = 16;
+
 /** Where the payment provider's API lives, and the only Stripe host this asks. */
 export const STRIPE_API_BASE_URL_DEFAULT = 'https://api.stripe.com';
 
