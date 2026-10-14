@@ -15,6 +15,7 @@ import {
   BRIEF_MAX_CLUSTERS_DEFAULT,
   EMBEDDING_CALL_TIMEOUT_MS_DEFAULT,
   OPENAI_API_URL_DEFAULT,
+  OPENROUTER_EMBEDDING_BATCH_SIZE_DEFAULT,
   OPENROUTER_EMBEDDING_MODEL_DEFAULT,
   OPENROUTER_EMBEDDINGS_URL_DEFAULT,
 } from './config.js';
@@ -116,6 +117,42 @@ export function readNonNegativeInt(env: EnvSource, name: string, fallback: numbe
     throw unrecognised(name, readRaw(env, name) ?? String(value), 'zero or a whole number above it');
   }
   return value;
+}
+
+/**
+ * A count that has to be at least one.
+ *
+ * A batch size of zero is not a batch that would have embedded nothing: a
+ * backfill that asked about no Stories at a time would read a corpus as carrying
+ * none, spend no calls, and report that it had nothing to do — the exact report
+ * a finished run prints. Failing to start is the only answer that cannot be
+ * mistaken for one.
+ */
+export function readPositiveInt(env: EnvSource, name: string, fallback: number): number {
+  const value = readInt(env, name, fallback);
+  if (value < 1) {
+    throw unrecognised(name, readRaw(env, name) ?? String(value), 'a whole number of one or more');
+  }
+  return value;
+}
+
+/**
+ * How many Stories the operator's backfill asks about in one call.
+ *
+ * Read here rather than in the command, because `src/env-example.test.ts` holds
+ * the application and `.env.example` to the variables this module reads — and a
+ * setting documented nowhere is one nobody can find. Not part of `ServerConfig`
+ * because nothing at boot reads it: formation asks about one Article at a time,
+ * and the only caller of this is `pnpm cluster:backfill`. A deployment with a
+ * batch size the endpoint will not take finds out when that command splits the
+ * batch rather than when the server starts.
+ */
+export function readEmbeddingBatchSize(env: EnvSource): number {
+  return readPositiveInt(
+    env,
+    'OPENROUTER_EMBEDDING_BATCH_SIZE',
+    OPENROUTER_EMBEDDING_BATCH_SIZE_DEFAULT,
+  );
 }
 
 export type EmailTransportDriver = 'console' | 'resend';

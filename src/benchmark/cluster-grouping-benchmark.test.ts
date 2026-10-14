@@ -500,6 +500,62 @@ it('prints the signature floor beside the range each label scores across', () =>
     expect(text).toContain('at 0.50/0.05');
   });
 
+  it('weighs the semantic floor on a corpus that has been through the backfill', () => {
+    // The before-and-after `pnpm cluster:backfill` exists to produce, stated where
+    // it can be decided. On a corpus that predates the embedding every Story
+    // carries none, the same-event family cannot be weighed at all and the line
+    // says so; once the backfill has written a vector for every Story, the same
+    // command over the same corpus prints the floor's own result for **both**
+    // labels. The `n/a` is the signal that a corpus has not been through that
+    // command, which is why it is kept rather than tidied away.
+    const sets = {
+      sameEvent: [pair(ref('bbc', '1'), ref('guardian', '1'))],
+      differentEvent: [pair(ref('bbc', '2'), ref('cnbc', '2'))],
+    };
+    const grouped: readonly GroupedTopic[] = [
+      { topicId: topicOne, clusters: [[storyA, storyB], [storyC], [storyD]] },
+    ];
+
+    const before = formatClusterReport(
+      evaluate({ grouped, resolution: resolutionOf(sets, corpus) }),
+      { rule: 'r', corpus: 'c' },
+    );
+    expect(before).toContain('n/a (nothing weighed)');
+    expect(
+      evaluate({ grouped, resolution: resolutionOf(sets, corpus) }).semantic.byLabel,
+    ).toEqual([
+      expect.objectContaining({ label: 'same-event', weighed: 0, unweighed: 1 }),
+      expect.objectContaining({ label: 'different-event', weighed: 1, unweighed: 0 }),
+    ]);
+
+    // A and B given vectors, which is the only thing the backfill changes about
+    // these readings.
+    const backfilled = (storyId: StoryId): GroundedStory => {
+      const read = readingOf(storyId);
+      if (read.embedding !== null) return read;
+      return {
+        ...read,
+        embedding: storyId === storyA ? SAME_MEANING : OTHER_MEANING,
+      };
+    };
+    const after = evaluateClusterGrouping({
+      grouped,
+      resolution: resolutionOf(sets, corpus),
+      readingOf: backfilled,
+      signatureFloor: SIGNATURE_SIMILARITY_FLOOR,
+      semanticFloor: SEMANTIC_SIMILARITY_FLOOR,
+    });
+
+    expect(after.semantic.byLabel).toEqual([
+      expect.objectContaining({ label: 'same-event', weighed: 1, unweighed: 0 }),
+      expect.objectContaining({ label: 'different-event', weighed: 1, unweighed: 0 }),
+    ]);
+    const text = formatClusterReport(after, { rule: 'r', corpus: 'c' });
+    expect(text).not.toContain('n/a (nothing weighed)');
+    expect(text).toContain('same-event families score');
+    expect(text).toContain('(1 of 1 weighed)');
+  });
+
   it('is the same text for the same numbers, so two runs diff', () => {
     const build = () =>
       formatClusterReport(

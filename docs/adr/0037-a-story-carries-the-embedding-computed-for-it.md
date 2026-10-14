@@ -91,13 +91,14 @@ column would report no embedding, and a reader of that would conclude the
 deployment embeds nothing — which is a wrong answer a future floor would be built
 on.
 
-Nothing is backfilled. Every Story already in the database was formed before
+Nothing is backfilled here. Every Story already in the database was formed before
 anything carried a vector, so it carries none and groups exactly as it did — which
 is the second reason this lands ahead of the semantic floor rather than with it:
 the floor reads a missing embedding as no evidence, so an un-backfilled corpus
 would measure the floor as though it had done nothing at all. The backfill is a
 separate decision, taken as its own operator command over a copy of the database,
-so that running it is an act rather than something that happened at boot.
+so that running it is an act rather than something that happened at boot —
+[[0039-the-stories-that-predicate-the-embedding-are-backfilled]].
 
 ## Related
 

@@ -30,6 +30,27 @@ function embeddings(values: readonly number[], model: unknown = 'openai/text-emb
   return { ok, json: async () => ({ model, data: [{ index: 0, embedding: values }] }) };
 }
 
+/**
+ * The reply shape for a call that carried several texts: one entry per vector,
+ * each saying which of the inputs it answers, and what the call cost.
+ */
+function batchReply(
+  vectors: readonly (readonly number[] | undefined)[],
+  extras: Record<string, unknown> = {},
+): unknown {
+  return {
+    ok: true,
+    json: async () => ({
+      model: 'openai/text-embedding-3-small',
+      usage: { prompt_tokens: 24, total_tokens: 24, cost: 0.0002 },
+      ...extras,
+      data: vectors.map((embedding, index) =>
+        embedding === undefined ? { index, object: 'embedding' } : { index, embedding },
+      ),
+    }),
+  };
+}
+
 function aProvider(overrides: Partial<EmbeddingServiceOptions> = {}): OpenRouterEmbeddingService {
   return new OpenRouterEmbeddingService({
     apiKey: 'test-key',
@@ -165,6 +186,179 @@ describe('OpenRouterEmbeddingService', () => {
     );
 
     expect(await aProvider({ timeoutMs: 5 }).embed(TEXT)).toBeNull();
+  });
+});
+
+describe('OpenRouterEmbeddingService.embedBatch', () => {
+  it('answers one vector per text, in the order it asked in', async () => {
+    // The whole reason the batch exists: several Articles reach the provider in
+    // one call, and each one has to come back as the vector of *its* Article
+    // rather than of whichever position happened to be answered.
+    const calls = stubEndpoint(() => batchReply([[0.1], [0.2], [0.3]]));
+
+    const batch = await aProvider().embedBatch([`${TEXT} one`, `${TEXT} two`, `${TEXT} three`]);
+
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(String(calls[0]?.init.body)).input).toEqual([
+      `${TEXT} one`,
+      `${TEXT} two`,
+      `${TEXT} three`,
+    ]);
+    expect(batch.embeddings.map((e) => e?.values)).toEqual([[0.1], [0.2], [0.3]]);
+  });
+
+  it('puts each vector on the text its index names, whatever order they arrive in', async () => {
+    // `index` is documented as the position in the input list, so a reply that
+    // lists its vectors out of order still has to land them correctly. Reading
+    // the array position instead would silently attach the wrong vector to the
+    // wrong Article, which is a corpus quietly made of unrelated readings.
+    stubEndpoint(() => ({
+      ok: true,
+      json: async () => ({
+        model: 'openai/text-embedding-3-small',
+        data: [
+          { index: 1, embedding: [0.2] },
+          { index: 0, embedding: [0.1] },
+        ],
+      }),
+    }));
+
+    const batch = await aProvider().embedBatch([`${TEXT} one`, `${TEXT} two`]);
+
+    expect(batch.embeddings.map((e) => e?.values)).toEqual([[0.1], [0.2]]);
+  });
+
+  it('falls back to the order the reply lists them in when it names no index', async () => {
+    stubEndpoint(() => ({
+      ok: true,
+      json: async () => ({
+        model: 'openai/text-embedding-3-small',
+        data: [{ embedding: [0.1] }, { embedding: [0.2] }],
+      }),
+    }));
+
+    const batch = await aProvider().embedBatch([`${TEXT} one`, `${TEXT} two`]);
+
+    expect(batch.embeddings.map((e) => e?.values)).toEqual([[0.1], [0.2]]);
+  });
+
+  it('answers nothing for one text without losing the rest', async () => {
+    // The per-text answer is the same `null` `embed` gives rather than a
+    // shortened list, so a caller cannot line a vector up with the wrong Article
+    // by counting what it did get back.
+    stubEndpoint(() => batchReply([undefined, [0.2]]));
+
+    const batch = await aProvider().embedBatch([`${TEXT} one`, `${TEXT} two`]);
+
+    expect(batch.embeddings).toEqual([null, { model: 'openai/text-embedding-3-small', values: [0.2] }]);
+  });
+
+  it('refuses a vector it cannot read whole rather than storing half of one', async () => {
+    stubEndpoint(() => batchReply([[0.1, 'two' as unknown as number], [0.3]]));
+
+    const batch = await aProvider().embedBatch([`${TEXT} one`, `${TEXT} two`]);
+
+    expect(batch.embeddings).toEqual([null, { model: 'openai/text-embedding-3-small', values: [0.3] }]);
+  });
+
+  it('asks about the texts it has something to embed, and no others', async () => {
+    // The endpoint refuses an empty string, so sending one would turn a single
+    // unembeddable Article into a call the whole batch pays for. It keeps its
+    // place in the answer as `null`, which is what `embed` answers with too.
+    const calls = stubEndpoint(() => batchReply([[0.1]]));
+
+    const batch = await aProvider().embedBatch(['   ', `${TEXT} two`, '']);
+
+    expect(JSON.parse(String(calls[0]?.init.body)).input).toEqual([`${TEXT} two`]);
+    expect(batch.embeddings).toEqual([null, { model: 'openai/text-embedding-3-small', values: [0.1] }, null]);
+  });
+
+  it('reports what the run cost, in requests, tokens and credits', async () => {
+    // Three numbers a caller cannot work out for itself and has to be given: what
+    // it spent, what the provider says it cost in tokens, and what it billed.
+    // The last is the provider's own unit, so it is named as credits rather than
+    // as money this build has no way to price.
+    stubEndpoint(() => batchReply([[0.1], [0.2]]));
+
+    const batch = await aProvider().embedBatch([`${TEXT} one`, `${TEXT} two`]);
+
+    expect(batch.usage).toEqual({ requests: 1, tokens: 24, credits: 0.0002 });
+  });
+
+  it('says nothing was reported rather than that it was free', async () => {
+    // A reply carrying no usage is the absence of a measurement, and reading it
+    // as zero would be the one answer that is certainly wrong: a run that spent
+    // money would report that it had spent none.
+    stubEndpoint(() => batchReply([[0.1]], { usage: undefined }));
+
+    const batch = await aProvider().embedBatch([`${TEXT} one`]);
+
+    expect(batch.usage).toEqual({ requests: 1, tokens: null, credits: null });
+  });
+
+  it('counts a refused call as a call, because it was billed as one', async () => {
+    stubEndpoint(() => ({ ok: false, json: async () => ({}) }));
+
+    const batch = await aProvider().embedBatch([`${TEXT} one`]);
+
+    expect(batch.embeddings).toEqual([null]);
+    expect(batch.usage.requests).toBe(1);
+  });
+
+  it('says a call was refused rather than that it had nothing for these texts', async () => {
+    // The two are fixed in opposite ways, and a caller that cannot tell them apart
+    // cannot tell a batch the endpoint would not take — the case where the batch
+    // is too large — from one Article nothing could be embedded for.
+    stubEndpoint(() => ({ ok: false, json: async () => ({}) }));
+    expect((await aProvider().embedBatch([`${TEXT} one`])).refused).toBe(true);
+
+    stubEndpoint(() => batchReply([undefined]));
+    expect((await aProvider().embedBatch([`${TEXT} one`])).refused).toBe(false);
+
+    stubEndpoint(() => ({ ok: true, json: async () => ({ data: 'not a list' }) }));
+    expect((await aProvider().embedBatch([`${TEXT} one`])).refused).toBe(false);
+  });
+
+  it('answers nothing without spending a call when the deployment has no credential', async () => {
+    const calls = stubEndpoint(() => batchReply([[0.1]]));
+    const switchedOff = new OpenRouterEmbeddingService({ endpointUrl: ENDPOINT });
+
+    expect(await switchedOff.embedBatch([`${TEXT} one`, `${TEXT} two`])).toEqual({
+      embeddings: [null, null],
+      usage: { requests: 0, tokens: null, credits: null },
+      refused: false,
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it('answers nothing without spending a call when there is no text to embed', async () => {
+    const calls = stubEndpoint(() => batchReply([[0.1]]));
+
+    expect(await aProvider().embedBatch([])).toEqual({
+      embeddings: [],
+      usage: { requests: 0, tokens: null, credits: null },
+      refused: false,
+    });
+    expect(await aProvider().embedBatch(['  ', '\n'])).toEqual({
+      embeddings: [null, null],
+      usage: { requests: 0, tokens: null, credits: null },
+      refused: false,
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it('answers nothing for a call that outruns its timeout or throws', async () => {
+    vi.stubGlobal('fetch', (_url: string, init: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+      }),
+    );
+    expect((await aProvider({ timeoutMs: 5 }).embedBatch([`${TEXT} one`])).usage.requests).toBe(1);
+
+    vi.stubGlobal('fetch', async () => {
+      throw new Error('socket hang up');
+    });
+    expect((await aProvider().embedBatch([`${TEXT} one`])).embeddings).toEqual([null]);
   });
 });
 

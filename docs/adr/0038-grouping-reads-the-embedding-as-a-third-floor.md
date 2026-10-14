@@ -224,10 +224,10 @@ benchmark prints twenty-six `at` lines rather than eight.
 
 **A floor that cannot be measured is a floor nobody can move.** On a corpus holding
 no embeddings this floor measures as though it had done nothing at all — which is
-the correct behaviour and also why `docs/cluster-grouping-baseline.md` records the
-corpus these numbers were read from, and why the measurement over the labelled
-families had to be taken on a copy of a corpus with the embeddings grafted on rather
-than on the working one.
+the correct behaviour, and why `docs/cluster-grouping-baseline.md` records the
+corpus these numbers were read from. The measurement over the labelled families
+had to be taken on a copy of a corpus with the embeddings grafted on rather than on
+the working one, until ADR-0039 gave that graft a command.
 
 ## How this was measured, and what would re-derive it
 
@@ -238,23 +238,25 @@ Two commands reproduce almost all of it, and neither of them needs a credential:
 - `pnpm cluster:sweep` prints the semantic axis as its own table with the other two
   floors held still, which is the sweep above.
 
-**One step has no command, and it is the one the floor was chosen on.** The corpus in
-this repository holds no embeddings — nothing is backfilled (ADR-0037) — so on it the
-semantic floor does not apply to a single pair and the report says so by printing
-that zero families could be weighed. The table above was taken on a **copy** of a
-corpus holding the labelled pairs, with embeddings computed for the 136 Stories those
-78 families reach and grafted onto the readings before grouping. That is a
+**One step had no command when this was written, and it is the one the floor was
+chosen on.** The corpus in this repository holds no embeddings — nothing was
+backfilled when this ADR was recorded (ADR-0037) — so on it the semantic floor
+does not apply to a single pair and the report says so by printing that zero
+families could be weighed. The table above was taken on a **copy** of a corpus
+holding the labelled pairs, with embeddings computed for the 136 Stories those 78
+families reach and grafted onto the readings before grouping. That was a
 calibration measurement reproduced by no command, in the same way ADR-0030's
 single-linkage table is, and it is recorded here because the floor is a constant
 somebody chose and the corpus it was chosen on is not in the repository.
 
-**The backfill (#137) is what gives this table a command**, and until it lands the
-gap is real rather than a matter of tidiness: the floor in `cluster-grouping.ts` and
-the number the floor was chosen from are not re-derivable by anyone, including
-whoever comes back to move it. Re-deriving it needs a corpus carrying embeddings,
-and no such corpus is in the repository. The graft is the shape that command will
-take — embeddings written onto readings already read, over a copy — and #137 is
-blocked on nothing but landing.
+**`pnpm cluster:backfill` is what gave that table a command**
+([[0039-the-stories-that-predicate-the-embedding-are-backfilled]]), so the graft
+is no longer a step anyone has to reproduce by hand: copy the corpus, run the
+backfill over the copy, and `pnpm cluster:benchmark` over that copy prints the
+floor's own distribution rather than `n/a`. The table below was still read on the
+grafted copy, and it should be re-measured over a backfilled corpus before the
+floor is moved — which is the same thing every other number here says about
+itself.
 
 **Where a two-model corpus is concerned this ADR will be superseded, deliberately.**
 `embeddingSimilarity` answers `null` for two vectors from different models, and the
@@ -270,7 +272,8 @@ because that is still what it is about a pair carrying one vector or none.
 `OPENROUTER_EMBEDDINGS_URL` batches its inputs, so the 136 vectors cost seven
 requests rather than 136 — which matters, because the free tier counts requests and
 allows fifty a day. A backfill of a real corpus is a larger job than that by three
-orders of magnitude, and it is an operator command over a copy for the same reason.
+orders of magnitude, and it is an operator command over a copy for the same reason
+(ADR-0039).
 
 The embedding model the numbers were read from is
 `private/openrouter/nvidia/nemotron-3-embed-1b` — the vendor OpenRouter says served

@@ -26,7 +26,8 @@
     "cluster:benchmark": "tsx src/benchmark/run-cluster-benchmark.ts",
     "cluster:sweep": "tsx scripts/cluster-sweep.ts",
     "cluster:velocity": "tsx scripts/cluster-velocity.ts",
-    "cluster:summary": "tsx scripts/cluster-summary.ts"
+    "cluster:summary": "tsx scripts/cluster-summary.ts",
+      "cluster:backfill": "tsx scripts/cluster-backfill.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.0",

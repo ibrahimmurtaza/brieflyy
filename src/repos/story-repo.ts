@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, gte, inArray, lte, sql } from 'drizzle-orm';
 
 import type { Db } from '../db/client.js';
 import { articles, stories, type StoryRow } from '../db/schema.js';
@@ -12,6 +12,68 @@ import type {
   Story,
   StoryId,
 } from '../domain/types.js';
+
+/**
+ * A Story carrying no embedding, and the Article whose text one would be taken
+ * from.
+ *
+ * Title and body rather than the text itself, because joining a headline to a
+ * body is `articleText`'s decision and it is the same decision formation makes —
+ * two readers joining them differently is how the two halves of one Story's
+ * identity came to disagree once (see ADR-0037).
+ */
+export interface UnembeddedStory {
+  readonly id: StoryId;
+  readonly title: string;
+  readonly body: string;
+}
+
+/**
+ * The rows `decodeEmbedding` reads as carrying no embedding.
+ *
+ * Every case the decoder answers `null` for that SQL can see: an absent column,
+ * and a vector or a model half-migrated away from its other. The two are named
+ * separately in `stories` and were added separately by the migration, so a row
+ * carrying one without the other is a state this database can actually be in —
+ * and it reads as no embedding everywhere else, so leaving it there would leave a
+ * Story nothing will ever fill in.
+ *
+ * Deliberately *not* everything the decoder refuses: a value it cannot decode is
+ * not detectable here, and a Story carrying one is left alone rather than
+ * overwritten, because the vector is the only reading that Story has.
+ *
+ * One predicate for the read and the write, so the Stories a backfill offers and
+ * the Stories it will accept are the same set. Two copies of this would be two
+ * answers, and the gap between them would be a re-run that quietly replaces
+ * vectors.
+ */
+const CARRIES_NO_EMBEDDING = sql`(
+  ${stories.embedding} IS NULL
+  OR ${stories.embeddingModel} IS NULL
+  OR TRIM(${stories.embeddingModel}) = ''
+)`;
+
+/**
+ * The Article that formed a Story, which is its oldest.
+ *
+ * A Story's signature and its embedding are both fixed by the Article that created
+ * it, and the oldest Article in a Story is that one by construction: a Story's
+ * published range can only grow towards newer Articles, since `listCandidates`
+ * only offers a Story an Article fits inside the window of. Taking the newest
+ * instead would embed a syndication copy rather than the report the Story is a
+ * reading of, and two Stories whose newest copies happened to match would compare
+ * alike for a reason nobody chose.
+ *
+ * Ordered by publication and then by id so the choice is the same one every time
+ * the row is read: two Articles published at the same instant are ordered by
+ * something stored rather than by whatever SQLite happened to return first.
+ */
+const FORMING_ARTICLE = sql`${articles}.id = (
+  SELECT a.id FROM ${articles} a
+  WHERE a.story_id = ${stories}.id
+  ORDER BY a.published_at, a.id
+  LIMIT 1
+)`;
 
 export interface StoryRepo {
   listCandidates(input: {
@@ -28,6 +90,23 @@ export interface StoryRepo {
     readonly sourceIds: readonly SourceId[];
     readonly windowStart: Date;
   }): Promise<readonly Story[]>;
+  /**
+   * The Stories carrying no embedding, with the Article one would be taken from,
+   * a page at a time.
+   *
+   * Paged by `limit` and resumable by `after`, because a backfill walks this
+   * repeatedly — once per batch, and again on the next run of the command — and
+   * has to move forwards whether or not the last page was a success. A Story
+   * nothing could embed is still carrying none when the next page is asked for, so
+   * a reader that started at the beginning every time would ask about the same
+   * failures for ever. Ordered by id because that is a fact stored rather than one
+   * SQLite returns differently twice.
+   */
+  listUnembedded(input: {
+    readonly limit: number;
+    /** Start after this Story, so a run continues where the last one stopped. */
+    readonly after?: StoryId | undefined;
+  }): Promise<readonly UnembeddedStory[]>;
   insert(input: {
     readonly id: StoryId;
     readonly signature: StorySignature;
@@ -43,6 +122,21 @@ export interface StoryRepo {
     readonly lastSeenAt: Date;
     readonly published: PublishedRange;
   }): Promise<Story>;
+  /**
+   * Put an embedding on a Story carrying none, and say whether it did.
+   *
+   * The condition is in the statement rather than in the caller, because this is
+   * the one write in the application that can be aimed at a row that already
+   * holds a vector — a backfill over a corpus formed while the deployment was
+   * embedding carries both. **It never overwrites one**: an existing vector is
+   * the Article's own second reading, computed once at formation, and replacing
+   * it with a later model would make the Story disagree with every other Story
+   * formed since — and would report progress while doing it.
+   *
+   * The answer is `false` in that case rather than a throw, because a second run
+   * of a backfill that finds nothing is the correct outcome and not a failure.
+   */
+  backfillEmbedding(id: StoryId, embedding: StoryEmbedding): Promise<boolean>;
   touch(id: StoryId, at: Date): Promise<void>;
   /** Widen a Story's published range to take in an Article joining it. */
   widenPublishedRange(id: StoryId, publishedAt: Date): Promise<void>;
@@ -185,6 +279,30 @@ export class DrizzleStoryRepo implements StoryRepo {
     };
   }
 
+  /**
+   * The Stories carrying no embedding, each with the Article one would be taken
+   * from, a page at a time.
+   *
+   * One query rather than a page of reads: a corpus of any size is walked in
+   * batches, and asking each Story for its own oldest Article would turn a
+   * backfill into a query per Story before a single vector was asked for.
+   */
+  async listUnembedded(input: {
+    readonly limit: number;
+    readonly after?: StoryId | undefined;
+  }): Promise<readonly UnembeddedStory[]> {
+    const rows = await this.db
+      .select({ id: stories.id, title: articles.title, body: articles.body })
+      .from(stories)
+      .innerJoin(articles, and(eq(articles.storyId, stories.id), FORMING_ARTICLE))
+      .where(
+        input.after === undefined ? CARRIES_NO_EMBEDDING : and(CARRIES_NO_EMBEDDING, gt(stories.id, input.after)),
+      )
+      .orderBy(asc(stories.id))
+      .limit(input.limit);
+    return rows.map((row) => ({ id: row.id as StoryId, title: row.title, body: row.body }));
+  }
+
   async insert(input: {
     readonly id: StoryId;
     readonly signature: StorySignature;
@@ -225,6 +343,15 @@ export class DrizzleStoryRepo implements StoryRepo {
       state: 'active',
     };
     return story;
+  }
+
+  async backfillEmbedding(id: StoryId, embedding: StoryEmbedding): Promise<boolean> {
+    const rows = await this.db
+      .update(stories)
+      .set({ embedding: encodeEmbedding(embedding), embeddingModel: embedding.model })
+      .where(and(eq(stories.id, id), CARRIES_NO_EMBEDDING))
+      .returning({ id: stories.id });
+    return rows.length > 0;
   }
 
   async touch(id: StoryId, at: Date): Promise<void> {
