@@ -8,30 +8,36 @@
  *
  * The rule is two steps, and they are two decisions rather than one:
  *
- * - **Similarity**: two Stories are scored twice over, once by the cosine between
- *   their Entity vectors — where an Entity's weight is how rare it is across the
- *   Topic's Stories (its inverse document frequency) times what its kind is worth,
- *   so an Entity most Stories name is worth almost nothing and a rare one a lot —
- *   and once by their Story signatures, which is the signal that tells two reports
- *   about the same company apart (ADR-0007).
+ * - **Similarity**: two Stories are scored three times over — once by the cosine
+ *   between their Entity vectors, where an Entity's weight is how rare it is across
+ *   the Topic's Stories (its inverse document frequency) times what its kind is
+ *   worth, so an Entity most Stories name is worth almost nothing and a rare one a
+ *   lot; once by their Story signatures, which is the signal that tells two reports
+ *   about the same company apart (ADR-0007); and once by their Story embeddings,
+ *   which is the signal that tells two articles mean the same thing whether or not
+ *   they agree about words or named things at all (ADR-0037).
  * - **Linkage**: the most similar pair of Stories is merged first, and a merge
  *   only happens when every member of the resulting Cluster clears the gate with
  *   every other member of it.
  *
  * The second step is what stops a chain of individually reasonable links
  * running away into one Cluster: a Story can only join a Cluster it is similar
- * to all of, so a hub that is a bit like everything is left on its own.
+ * to all of, so a hub that is a bit like everything is left on its own. That is
+ * why this is the third floor rather than a third vote: single linkage over the
+ * same similarity reaches a Cluster of nineteen Stories on the corpus ADR-0030
+ * measured, where this rule holds one of six.
  *
- * What clears that gate is three separate statements rather than one. Both floors
- * are stated in one {@link MergeThresholds} rather than one at a time, because a
- * rule reading two signals cannot be described by one number and a caller passing
- * a bare one cannot say which of the two they meant. The way they combine is a
- * third — a {@link MergeGate}, shipped as a conjunction — because how alike is
- * enough on each signal and whether one of them being enough is enough are two
- * different decisions, and widening the rule is the second one rather than the
- * first.
+ * What clears that gate is four separate statements rather than one. The three
+ * floors are stated in one {@link MergeThresholds} rather than one at a time,
+ * because a rule reading three signals cannot be described by one number and a
+ * caller passing a bare one cannot say which of them they meant. The way they
+ * combine is a fourth — a {@link MergeGate}, shipped as a conjunction — because
+ * how alike is enough on each signal and whether one of them being enough is
+ * enough are two different decisions, and widening the rule is the second one
+ * rather than the first.
  */
 
+import { embeddingSimilarity, type StoryEmbedding } from './embedding.js';
 import { signatureSimilarity, type StorySignature } from './story-signature.js';
 import type { EntityId, EntityKind } from './types.js';
 
@@ -42,50 +48,66 @@ export interface GroundedEntity {
 }
 
 /**
- * A Story as grouping sees it: the Entities it names, and the text it carries.
+ * A Story as grouping sees it: the Entities it names, the text it carries, and
+ * what that text meant.
  *
- * Read in one go rather than through two callbacks because the rule compares two
- * representations of the same Story, and a caller passing one of them by position
- * and the other by id can hand it two different Stories' readings and get a
- * grouping nobody could have meant.
+ * Read in one go rather than through three callbacks because the rule compares
+ * three representations of the same Story, and a caller passing one of them by
+ * position and the others by id can hand it two different Stories' readings and
+ * get a grouping nobody could have meant.
  *
  * `signature` is whatever the caller reads for this Story in this Topic, so long
  * as it is a signature: the one the Story was formed from, or one taken over its
  * Articles. Grouping does not know or care which, because both are the same thing
  * to it — how alike two Stories are as text.
+ *
+ * `embedding` is `null` for a Story carrying none, which is a state this is
+ * designed for rather than a gap (ADR-0037): a deployment with no embedding
+ * credential forms Stories that hold none, and every Story predating that feature
+ * holds none. The field is required so that a caller cannot forget it — a reading
+ * that left it out would be a Story nothing has measured, and the semantic floor
+ * would then be deciding pairs it cannot judge.
  */
 export interface GroundedStory {
   readonly entities: readonly GroundedEntity[];
   readonly signature: StorySignature;
+  readonly embedding: StoryEmbedding | null;
 }
 
 /**
- * The two floors a merge has to clear, stated separately.
+ * The three floors a merge has to clear, stated separately.
  *
- * A merge happens only where a pair clears both, so neither floor can be moved
- * by passing the other: a caller lowering the Entity cosine to widen the rule has
- * still left the signature floor where the rule ships it, and a caller loosening
- * the signature gate has not widened the cosine at all. How the two combine is
- * {@link MergeGate}, which is a third statement and not something either of these
- * two can be read as.
+ * A merge happens only where a pair clears all of them, so none can be moved by
+ * passing another: a caller lowering the Entity cosine to widen the rule has still
+ * left the signature floor and the semantic floor where the rule ships them, and a
+ * caller loosening either of those has not widened the others at all. How the
+ * three combine is {@link MergeGate}, which is a fourth statement and not
+ * something any of these three can be read as.
  */
 export interface MergeThresholds {
   /** How alike two Stories' Entity vectors have to be, as a share of 0 to 1. */
   readonly entity: number;
   /** How much two Stories' signatures have to agree, as a share of 0 to 1. */
   readonly signature: number;
+  /** How alike two Stories' meanings have to be, as a cosine of 0 to 1. */
+  readonly semantic: number;
 }
 
 /**
- * How the two floors combine into the one test a pair has to clear.
+ * How the three floors combine into the one test a pair has to clear.
  *
- * `both` is a conjunction — the pair clears it only where the cosine and the
- * signature are both above their floors — and `either` is a disjunction, where
- * either signal on its own admits the pair. They are stated apart from
- * {@link MergeThresholds} because they are a different decision: the floors say
- * how alike is enough on each signal, and this says whether one of them being
- * enough is enough. Reading them as one value would let a caller widen the rule
- * by naming a floor rather than by saying what they meant.
+ * `both` is a conjunction — the pair clears it only where all three scores are
+ * above their floors — and `either` is a disjunction, where any single signal on
+ * its own admits the pair. They are stated apart from {@link MergeThresholds}
+ * because they are a different decision: the floors say how alike is enough on
+ * each signal, and this says whether one of them being enough is enough. Reading
+ * them as one value would let a caller widen the rule by naming a floor rather
+ * than by saying what they meant.
+ *
+ * Widening the gate is a widening over three signals rather than two, which is a
+ * larger question than it was and is measured beside the conjunction rather than
+ * assumed: a rule admitting a pair on its meaning alone welds every pair of
+ * reports about one company that a model thinks are about one thing.
  */
 export type MergeGate = 'both' | 'either';
 
@@ -102,27 +124,52 @@ export type MergeGate = 'both' | 'either';
 export const SHIPPED_MERGE_GATE: MergeGate = 'both';
 
 /**
- * Whether two scores clear the gate, at the floors given.
+ * Whether three scores clear the gate, at the floors given.
+ *
+ * `semantic` is `null` rather than a number where the semantic floor does not apply
+ * to the pair at all, which is wherever the two embeddings cannot be compared:
+ * either Story carries none, or they came from two different models, or they are of
+ * different widths. That is the one floor with no backfill behind it — ADR-0037
+ * backfills nothing, and everything in the database predates it — so the floor has
+ * to be *inapplicable* to a pair it cannot judge rather than blocking it.
+ * Fail-closed here would strand every Story in a corpus that has not been through
+ * the backfill: a shipped rule that grouped every pair before this one and then
+ * grouped none of them the moment it landed. So the pair is decided by the two
+ * floors that do apply, exactly as it was, and the corpus reads as though this
+ * floor were not here yet.
+ *
+ * `null` is about the floor, not about the Story. A Story carrying no embedding is
+ * still a complete Story; it simply has not been measured on this signal, which is
+ * the same position a Story formed before ADR-0037 is in. Two Stories from two
+ * models are in the same position for the same reason: there is nothing to compare,
+ * and reading that as a score would be a claim that two Articles mean opposite
+ * things, made on no evidence at all.
  *
  * Stated once here because two things need it and the measurement must not be able
  * to disagree with the rule: `groupIntoClusters` decides merges with it, and
- * `gateRefusals` prices the halves with it, which it cannot do by asking a question
- * that only has one answer — so a change to how the two signals combine has to
- * happen here and not twice.
+ * `gateRefusals` prices the floors with it, which it cannot do by asking a question
+ * that only has one answer — so a change to how the signals combine has to happen
+ * here and not twice.
  */
 export function clearsMergeGate(scores: {
   /** How alike two Stories' Entity vectors are. */
   readonly entity: number;
   /** How much two Stories' signatures agree. */
   readonly signature: number;
+  /** How alike two Stories' meanings are, or null where the floor cannot judge. */
+  readonly semantic: number | null;
   readonly thresholds: MergeThresholds;
   readonly gate: MergeGate;
 }): boolean {
   const clearsEntity = scores.entity >= scores.thresholds.entity;
   const clearsSignature = scores.signature >= scores.thresholds.signature;
+  // Whether the floor had a chance to refuse, which is a different question from
+  // whether it refused: only a floor that applies can do either.
+  const semanticApplies = scores.semantic !== null;
+  const clearsSemantic = semanticApplies && scores.semantic >= scores.thresholds.semantic;
   return scores.gate === 'either'
-    ? clearsEntity || clearsSignature
-    : clearsEntity && clearsSignature;
+    ? clearsEntity || clearsSignature || clearsSemantic
+    : clearsEntity && clearsSignature && (clearsSemantic || !semanticApplies);
 }
 
 /**
@@ -171,48 +218,121 @@ export const ENTITY_SIMILARITY_FLOOR = 0.45;
 export const SIGNATURE_SIMILARITY_FLOOR = 0.04;
 
 /**
+ * How much alike two Articles have to have meant before their Stories can end up
+ * in one Cluster, as a cosine between the vectors a model returned for them.
+ *
+ * The third of the three questions grouping asks, and the only one of them that
+ * reads what the text said rather than what it names or how it reads: two reports
+ * of one event by two outlets name the same things and share no wording, and two
+ * reports of different events about the same company do the opposite. Neither the
+ * Entity cosine nor the signature can tell those apart, and the ceilings the
+ * benchmark prints say how much of the negative set is out of their reach.
+ *
+ * **A floor on its own rather than a term blended into the Entity cosine.** A blend
+ * would make it impossible to say afterwards which signal carried a merge, and the
+ * other two are deliberately independent so that moving one does not move another.
+ * It is also a whole order of magnitude away from both of the others — a cosine
+ * between dense vectors of the same text lands far higher than an IDF-weighted
+ * cosine over named things or a Jaccard over words — so tuning it to either of them
+ * would be borrowing a constant rather than reading a distribution. The number
+ * being the same as {@link ENTITY_SIMILARITY_FLOOR} is a coincidence and means
+ * nothing: the two are measured on different things and neither is a fraction of
+ * the other.
+ *
+ * Chosen from the labelled families on the corpus `docs/adr/0038` names, over a
+ * sweep from 0.30 to 0.85 rather than from the point alone. It sits at the **top**
+ * of a four-cell plateau — 0.42 through 0.45 score identically on every number the
+ * benchmark reports — which is where to take a plateau: the conservative end of the
+ * cells that behave alike, so the measurement has to move before the rule does. On
+ * that corpus it is worth 3.4 points of recall and 10.2 of precision over the two
+ * floors alone, with the largest Cluster unmoved at 5. `pnpm cluster:sweep` reports
+ * the axis on demand, and `pnpm cluster:benchmark` prints the distribution each
+ * label scores across beside the floor, so neither the point nor the plateau can go
+ * stale without a reader seeing it move.
+ *
+ * **Where the two embeddings cannot be compared this floor does not apply**, and the
+ * pair is decided by the other two as it was — that is, where either Story carries
+ * none, or they came from two different models. That is the whole reason this floor
+ * is safe to land ahead of a backfill: ADR-0037 backfills nothing, so on the day it
+ * ships every Story in the database holds none, and a floor that refused those
+ * pairs would take a corpus from grouping to not grouping in one change. The second
+ * half of the same claim is that a floor which does apply has to actually bite — it
+ * is read as a refusal, not as advice, and it is weighed against every member of a
+ * resulting Cluster like the other two.
+ */
+export const SEMANTIC_SIMILARITY_FLOOR = 0.45;
+
+/**
  * The floors the rule runs at, as one link.
  *
- * Kept as a value rather than written out at each call site, because the two
+ * Kept as a value rather than written out at each call site, because the three
  * floors were measured against each other — the Entity floor chosen with the gate
- * in place, the signature floor for the gain it adds on top of it — and a rule
- * reading one without the other is not the rule either was measured as.
+ * in place, the signature floor for the gain it adds on top of it, and this one
+ * over the same labelled families again — and a rule reading one without the others
+ * is not the rule any of them was measured as.
  */
 export const SHIPPED_MERGE_THRESHOLD: MergeThresholds = {
   entity: ENTITY_SIMILARITY_FLOOR,
   signature: SIGNATURE_SIMILARITY_FLOOR,
+  semantic: SEMANTIC_SIMILARITY_FLOOR,
 };
+
+/**
+ * The neighbourhood each shipped floor is measured over, one axis per floor.
+ *
+ * Three cells each rather than two because a cell either side of the shipped value
+ * is what makes the bound a claim about a neighbourhood rather than about a point:
+ * a floor that only ever sat alone could not be seen to behave like anything.
+ *
+ * The Entity and semantic axes carry the same three numbers, which is a coincidence
+ * of where the two floors were measured rather than a statement that they are
+ * comparable. They are not: one is a cosine between dense vectors and the other
+ * between IDF-weighted named things, and tuning one to the other would be borrowing
+ * a constant rather than reading a distribution.
+ */
+const ENTITY_NEIGHBOURHOOD = [0.4, ENTITY_SIMILARITY_FLOOR, 0.5] as const;
+const SIGNATURE_NEIGHBOURHOOD = [0.03, SIGNATURE_SIMILARITY_FLOOR, 0.05] as const;
+// Chosen from the measured sweep rather than by eye: 0.40 is two points of precision
+// below the shipped value and 0.50 nearly seven points of recall below it, so each
+// cell is one the floor can be seen to move and neither is a duplicate of the middle.
+const SEMANTIC_NEIGHBOURHOOD = [0.4, SEMANTIC_SIMILARITY_FLOOR, 0.5] as const;
 
 /**
  * The floors the rule is meant to be read at, and the range over which the
  * largest Cluster is claimed to stay bounded.
  *
  * A grid rather than a line through the neighbourhood, because the bound is a
- * claim about the rule over both of its floors and a diagonal walk would attribute
- * every movement to neither of them: holding one floor still and moving the other
- * is what says which floor is doing the work. A grid makes the Entity floor's
- * effect and the signature floor's separately readable, and a reader who moves
- * only one of them afterwards can find where that lands.
+ * claim about the rule over all of its floors and a diagonal walk would attribute
+ * every movement to none of them: holding two floors still and moving the third is
+ * what says which floor is doing the work. A grid makes each floor's effect
+ * separately readable, and a reader who moves only one of them afterwards can find
+ * where that lands.
+ *
+ * Twenty-seven cells rather than the nine the two-floor grid held, and that is the
+ * cost of adding an axis to a claim rather than a number to a rule: the third floor
+ * has a neighbourhood too, and a bound that only covered the two that were here
+ * first would be a bound over part of the rule.
  *
  * `docs/cluster-grouping-baseline.md` records the largest Cluster measured at
- * every pair in it. Outside the grid the rule is not what this was measured at,
+ * every cell in it. Outside the grid the rule is not what this was measured at,
  * and the benchmark is how to find out.
  */
-export const SHIPPED_MERGE_THRESHOLDS: readonly MergeThresholds[] = [
-  { entity: 0.4, signature: 0.03 },
-  { entity: 0.4, signature: 0.04 },
-  { entity: 0.4, signature: 0.05 },
-  SHIPPED_MERGE_THRESHOLD,
-  { entity: 0.45, signature: 0.03 },
-  { entity: 0.45, signature: 0.05 },
-  { entity: 0.5, signature: 0.03 },
-  { entity: 0.5, signature: 0.04 },
-  { entity: 0.5, signature: 0.05 },
-];
+export const SHIPPED_MERGE_THRESHOLDS: readonly MergeThresholds[] = ENTITY_NEIGHBOURHOOD.flatMap(
+  (entity) =>
+    SIGNATURE_NEIGHBOURHOOD.flatMap((signature) =>
+      SEMANTIC_NEIGHBOURHOOD.map((semantic) =>
+        entity === ENTITY_SIMILARITY_FLOOR &&
+        signature === SIGNATURE_SIMILARITY_FLOOR &&
+        semantic === SEMANTIC_SIMILARITY_FLOOR
+          ? SHIPPED_MERGE_THRESHOLD
+          : { entity, signature, semantic },
+      ),
+    ),
+);
 
-/** The two floors as one fixed-width string, so a report and a failure name both. */
+/** The three floors as one fixed-width string, so a report and a failure name both. */
 export function describeThresholds(thresholds: MergeThresholds): string {
-  return `${thresholds.entity.toFixed(2)}/${thresholds.signature.toFixed(2)}`;
+  return `${thresholds.entity.toFixed(2)}/${thresholds.signature.toFixed(2)}/${thresholds.semantic.toFixed(2)}`;
 }
 
 /**
@@ -310,25 +430,36 @@ export function similarityBetween(
  * Split Stories into the groups that become Clusters.
  *
  * A merge happens only where a pair clears the gate {@link groupIntoClusters} is
- * given — both {@link MergeThresholds} under {@link SHIPPED_MERGE_GATE}, or either
- * of them under the wider one — and each floor decides how alike is enough on its
- * own signal: the cosine answers whether two Stories are about the same named
- * things, and the signature answers whether they are about the same thing. The
- * linkage below then decides which Clusters those pairs make. Comparison is
- * against every other Story rather than against the one immediately before it in
- * time, because comparing only neighbours would make the grouping a function of
- * when things happened to arrive — one Story landing between two related ones
- * would pull them apart. The order merges go in is by descending Entity similarity
- * and then by position, so the same set of Stories always forms the same Clusters:
- * the cosine picks which pair to consider first, and the signature only ever
- * refuses one.
+ * given — all three {@link MergeThresholds} under {@link SHIPPED_MERGE_GATE}, or
+ * any of them under the wider one — and each floor decides how alike is enough on
+ * its own signal: the Entity cosine answers whether two Stories name the same rare
+ * things, the signature whether they read alike, and the embedding whether they
+ * mean the same thing. The linkage below then decides which Clusters those pairs
+ * make. Comparison is against every other Story rather than against the one
+ * immediately before it in time, because comparing only neighbours would make the
+ * grouping a function of when things happened to arrive — one Story landing
+ * between two related ones would pull them apart. The order merges go in is by
+ * descending Entity similarity and then by position, so the same set of Stories
+ * always forms the same Clusters: the cosine picks which pair to consider first,
+ * and the other two floors only ever refuse one.
  *
  * A Story whose signature says nothing is never merged on the strength of its
  * Entities under the gate the rule ships, the same way one naming no Entity is
  * never merged. Reading nothing is not evidence of anything, and a gate exists to
  * hold two Stories apart — failing it open would leave the corpus's unsigned rows
- * grouping by the one signal the gate was added to check them on. Widening the gate
- * to `either` gives that up, which is part of what the wider gate costs.
+ * grouping by the one signal the gate was added to check them on. That one is safe
+ * to fail closed because a signature backfill runs at boot (ADR-0030), so a
+ * database opened by this build is signed before anything is grouped.
+ *
+ * **The semantic floor is the exception, and the exception is the backfill.** A pair
+ * whose embeddings cannot be compared — because a Story carries none, or the two
+ * came from different models — is not held out: the floor does not apply and the
+ * other two decide it, because there is no backfill behind this one and a corpus
+ * that had not been through one would stop grouping altogether. Every other reading
+ * here is unchanged, which is what "a Story carrying no embedding groups exactly as
+ * it did before" means — checked across every cell of the floor grid rather than at
+ * the shipped point. Widening the gate to `either` gives the unsigned rows up as
+ * well, which is part of what the wider gate costs.
  *
  * Groups come back in the order their first member appeared.
  */
@@ -345,12 +476,15 @@ export function groupIntoClusters<T>(
   const inverseDocumentFrequency = inverseDocumentFrequencies(entitySets);
 
   /** A score per pair, worked out once however many times it is asked for. */
-  const perPair = (score: (i: number, j: number) => number): ((i: number, j: number) => number) => {
-    const known = new Map<string, number>();
+  const perPair = <T,>(
+    score: (i: number, j: number) => T,
+  ): ((i: number, j: number) => T) => {
+    const known = new Map<string, T>();
     return (i, j) => {
       const key = i < j ? `${i}:${j}` : `${j}:${i}`;
-      const read = known.get(key);
-      if (read !== undefined) return read;
+      // `has` rather than a check against the value, because a floor that does not
+      // apply to a pair is a cached `null` and has to be cached as itself.
+      if (known.has(key)) return known.get(key)!;
       const scored = score(i, j);
       known.set(key, scored);
       return scored;
@@ -363,10 +497,16 @@ export function groupIntoClusters<T>(
   const signatureScoreOf = perPair((i, j) =>
     signatureSimilarity(readings[i]!.signature, readings[j]!.signature),
   );
+  // Null wherever the two cannot be compared, which is how the floor says it has
+  // nothing to judge rather than saying the pair means nothing alike.
+  const semanticScoreOf = perPair((i, j) =>
+    embeddingSimilarity(readings[i]!.embedding, readings[j]!.embedding),
+  );
   const clearsTheGate = (i: number, j: number): boolean =>
     clearsMergeGate({
       entity: entityScoreOf(i, j),
       signature: signatureScoreOf(i, j),
+      semantic: semanticScoreOf(i, j),
       thresholds,
       gate,
     });

@@ -243,9 +243,11 @@ refuses a pair that does rather than leaving the budget unreachable.
 A Story carries two readings of the Article that formed it: the **Story signature**
 of its words and phrases, and the **Story embedding** — a dense vector of what
 that Article said. The embedding is computed once, where the Story is formed, and
-stored beside the model that produced it (ADR-0037). Nothing reads it yet:
-grouping is unchanged, and a Story carrying one groups exactly as it did before,
-which is what makes it safe to land before the floor that will.
+stored beside the model that produced it (ADR-0037). Grouping reads it as the third
+of the three floors a merge has to clear (ADR-0038): two Stories merge only where
+their embeddings also say they mean the same thing, as a floor beside the other two
+rather than blended into either, so a reader can still say which signal carried a
+merge.
 
 `OPENROUTER_API_KEY` is optional and its absence is a complete configuration, in
 the same shape as `OPENAI_API_KEY` above: `createEmbeddingProvider` returns
@@ -270,11 +272,14 @@ outruns it forms a Story with no embedding, which is what it did before this
 existed.
 
 No Story is backfilled. Every Story already in the database was formed before
-anything carried a vector, so it carries none and groups exactly as it did — and
-an un-backfilled corpus would measure a semantic floor as though it had done
-nothing. The backfill is its own operator command, over a copy of the database the
-way the corpus commands work, so that running it is an act rather than something
-that happened at boot.
+anything carried a vector, so it carries none — and a Story carrying none is one
+the semantic floor does not apply to at all, rather than one the floor refuses. That
+is why this can land ahead of the backfill: a corpus holding no embeddings groups
+exactly as it did before, and `ClusterFormationService` needs no change to say so. It
+is also why such a corpus cannot measure the floor, which is why `docs/adr/0038`
+records the corpus those numbers were read from. The backfill is its own operator
+command, over a copy of the database the way the corpus commands work, so that
+running it is an act rather than something that happened at boot.
 
 ### Seeing whether it worked
 

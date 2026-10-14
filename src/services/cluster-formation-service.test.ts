@@ -19,6 +19,7 @@ import { DrizzleUserRepo } from '../repos/user-repo.js';
 import { normalizeSignature } from '../domain/story-signature.js';
 import { extractSignature } from '../domain/extract.js';
 import { canonicalEntityKey } from '../domain/entity-extraction.js';
+import type { StoryEmbedding } from '../domain/embedding.js';
 import { CLUSTER_ACTIVE_VELOCITY_THRESHOLD } from './cluster-formation-service.js';
 import { ClusterFormationService } from './cluster-formation-service.js';
 import type { Clock } from '../domain/clock.js';
@@ -56,6 +57,16 @@ const BODY = {
   bridge: 'Acme Corp and BrandX Inc ended months of speculation by announcing a joint venture.',
   unrelated: 'A regional council voted to change its parking rules after a long consultation.',
 } as const;
+
+/**
+ * What two Stories' Articles meant, as vectors a cosine can read.
+ *
+ * Hand-written rather than generated because a fixture that drew them from a seed
+ * would make the floor's behaviour depend on the seed: two orthogonal vectors and
+ * two identical ones have to be obvious from the shape.
+ */
+const MEANING_LAUNCH: StoryEmbedding = { model: 'test/model', values: [1, 0, 0, 0] };
+const MEANING_EARNINGS: StoryEmbedding = { model: 'test/model', values: [0, 1, 0, 0] };
 
 interface Harness {
   readonly service: ClusterFormationService;
@@ -172,6 +183,14 @@ async function givenStory(
     readonly sourceId?: SourceId;
     /** Outlets besides the first that carried the same event, an hour apart each. */
     readonly syndicatedFrom?: SourceId | readonly SourceId[];
+    /**
+     * What the Article meant, when the test is about the semantic floor.
+     *
+     * Left off rather than defaulted, because `null` is a state the rule is designed
+     * around and a fixture that supplied one everywhere would stop being able to
+     * say what a corpus with no embeddings does.
+     */
+    readonly embedding?: StoryEmbedding;
   },
 ): Promise<readonly EntityId[]> {
   const seenAt = new Date((input.now ?? NOW).getTime() - input.hoursAgo * HOUR);
@@ -195,7 +214,7 @@ async function givenStory(
     // is what the gate reads. A fixture that wrote an empty one would be testing
     // the gate's refusal rather than the grouping it is here to hold up.
     signature: normalizeSignature(extractSignature(input.body)),
-    embedding: null,
+    embedding: input.embedding ?? null,
     firstSeenAt: seenAt,
     lastSeenAt: seenAt,
     published: { first: seenAt, last: seenAt }
@@ -404,6 +423,83 @@ describe('ClusterFormationService', () => {
     }
     expect(byStory.get('story-acme')).toBe(byStory.get('story-acme-follow-up'));
     expect(byStory.get('story-brandx')).not.toBe(byStory.get('story-acme'));
+  });
+
+  it('holds apart two Stories the other two readings cannot tell apart', async () => {
+    // The service reads the third floor rather than the domain merely holding it.
+    // Both Stories carry the same Entities and are written about the same thing in
+    // overlapping words, and mean opposite things — the shape the benchmark's
+    // precision ceilings say is out of the reach of the first two signals. Written
+    // through the repository so the column is what the service reads, rather than
+    // by calling the rule directly.
+    const h = await buildHarness();
+    await givenStory(h, {
+      storyId: 'story-acme',
+      entities: ['acme', 'foo'],
+      body: BODY.acme,
+      hoursAgo: 5,
+      embedding: MEANING_LAUNCH,
+    });
+    await givenStory(h, {
+      storyId: 'story-acme-follow-up',
+      entities: ['acme', 'foo'],
+      body: BODY.acmeFollowUp,
+      hoursAgo: 4,
+      embedding: MEANING_EARNINGS,
+    });
+
+    const clusters = await h.service.formClustersForTopic('topic-1');
+
+    expect(clusters).toHaveLength(2);
+  });
+
+  it('joins two Stories whose meanings agree once the other two readings do', async () => {
+    // The other direction, and the one the floor costs: nothing that grouped before
+    // this floor existed stops grouping because of it.
+    const h = await buildHarness();
+    await givenStory(h, {
+      storyId: 'story-acme',
+      entities: ['acme', 'foo'],
+      body: BODY.acme,
+      hoursAgo: 5,
+      embedding: MEANING_LAUNCH,
+    });
+    await givenStory(h, {
+      storyId: 'story-acme-follow-up',
+      entities: ['acme', 'foo'],
+      body: BODY.acmeFollowUp,
+      hoursAgo: 4,
+      embedding: MEANING_LAUNCH,
+    });
+
+    const clusters = await h.service.formClustersForTopic('topic-1');
+
+    expect(clusters).toHaveLength(1);
+  });
+
+  it('groups a corpus holding no embeddings exactly as it grouped before', async () => {
+    // The safety property the whole floor is landable on: ADR-0037 backfills
+    // nothing, so every Story in an existing database carries none, and that corpus
+    // has to read exactly as it did. These two clear the Entity and signature floors,
+    // so they merge rather than sitting alone — which is what "the floor does not
+    // apply" means in practice and not only in the rule.
+    const h = await buildHarness();
+    await givenStory(h, {
+      storyId: 'story-acme',
+      entities: ['acme', 'foo'],
+      body: BODY.acme,
+      hoursAgo: 5,
+    });
+    await givenStory(h, {
+      storyId: 'story-acme-follow-up',
+      entities: ['acme', 'foo'],
+      body: BODY.acmeFollowUp,
+      hoursAgo: 4,
+    });
+
+    const clusters = await h.service.formClustersForTopic('topic-1');
+
+    expect(clusters).toHaveLength(1);
   });
 
   it('leaves a Story carrying no readable text in a Cluster of its own', async () => {

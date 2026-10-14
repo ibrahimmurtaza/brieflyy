@@ -113,6 +113,7 @@ async function measureTopic(
   const grouped = groupIntoClusters(stories, (_storyId, index) => ({
     entities: grounding[index]!,
     signature: stories[index]!.signature,
+    embedding: stories[index]!.embedding,
   }));
 
   const measured: Measured[] = [];
