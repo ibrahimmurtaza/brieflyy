@@ -209,6 +209,24 @@ command that did not run. It needs `OPENROUTER_API_KEY` and refuses without one,
 because a run with no provider would otherwise print that same line having done no
 work.
 
+It also cannot repair a corpus holding embeddings from two models, which is why the
+refusal below names that command only to say why it will not help: embedding the
+Stories that carry nothing is not what a corpus of vectors from two models needs.
+
+Grouping refuses a Topic whose Stories carry embeddings from more than one model, and
+names the models rather than grouping it: a corpus that changed its model halfway
+produces cosines that all still look like numbers, so the only symptom otherwise is
+that grouping quietly got worse (ADR-0040). `pnpm cluster:benchmark` prints that
+refusal in place of its report — a measurement over a mixed corpus is worse than no
+measurement, because it reads as a rule that regressed — and so do `pnpm
+cluster:sweep`, `pnpm cluster:summary` and `pnpm cluster:velocity`. One refused set
+stops the whole run rather than one cell of it, because the report is summed over
+every Topic and dropping one would change its own denominator halfway down. In the
+application, a refused Topic keeps the Clusters it already had and the refusal is
+named in `ClusterFormationReport`. A Topic holding *no* embeddings is not refused:
+it holds zero models rather than one, so a corpus that has never been backfilled
+still groups exactly as it did before.
+
 `pnpm typecheck` covers `src/` and `scripts/`, which is where the unit tests and the
 operator commands live, and not `tests/e2e/`: Playwright compiles the specs without
 checking their types, so a type error in a spec is found at run time or not at all.
@@ -726,8 +744,9 @@ Four of the six have a directory of their own, and two do not:
   Feedback given on a Cluster is still on it afterwards rather than on the row it has
   become (ADR-0034). A Story formed from an Article also carries that Article's
   **Story embedding**, computed once at formation and stored beside the model that
-  produced it; nothing reads it yet, so grouping is unchanged while it is carried
-  (ADR-0037).
+  produced it. Grouping reads it as the third of its three floors (ADR-0038) and
+  refuses a set of Stories whose embeddings came from more than one model rather
+  than scoring cosines between two models' vectors (ADR-0040).
 - **Brief** — no directory: it is `services/brief-plan-service.ts`,
   `services/brief-snapshot-renderer.ts`, `services/scheduled-brief-service.ts` and
   `services/brief-status-routes.ts`, plus `repos/brief-*-repo.ts` and
@@ -879,7 +898,7 @@ counted.
 pnpm test
 ```
 
-The suite is 108 test files across `src/` holding 1,953 cases — Vitest prints the
+The suite is 108 test files across `src/` holding 1,967 cases — Vitest prints the
 live figure at the end of every run. `docs-agreement.test.ts` checks the file
 count and cannot check the case count without running the suite it lives in, so
 that one number is worth reading off a run rather than trusting.

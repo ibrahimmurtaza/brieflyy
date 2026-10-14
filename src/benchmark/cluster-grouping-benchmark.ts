@@ -24,6 +24,7 @@ import {
   similarityBetween,
   type GroundedEntity,
   type GroundedStory,
+  type Grouping,
   type MergeThresholds,
 } from '../domain/cluster-grouping.js';
 import { signatureSimilarity, type StorySignature } from '../domain/story-signature.js';
@@ -161,6 +162,31 @@ export interface GroupedTopic {
   readonly clusters: readonly (readonly StoryId[])[];
   /** The thresholds these Clusters were formed at, when they were not the shipped ones. */
   readonly thresholds?: MergeThresholds;
+}
+
+/**
+ * The Clusters of a grouping the caller has already refused the refusals of.
+ *
+ * Both corpus commands ask `refusedSets` (in `domain/cluster-grouping.ts`) about the
+ * whole corpus before they group anything, which is what turns "this set cannot be
+ * scored" into one decision taken once rather than a check repeated at every grid
+ * cell. TypeScript cannot see that the question has already been answered, so this
+ * is where the remaining branch goes.
+ *
+ * **It raises rather than skipping.** The alternative is to leave a set out of a
+ * cell, and a report that quietly dropped a Topic's Stories would have changed its
+ * own denominator halfway down — which is the failure `pnpm cluster:sweep` refuses
+ * outright when the corpus is not holding every labelled pair. A refusal arriving
+ * where one cannot is not a number to work around; it is a run that has stopped
+ * meaning what it says.
+ */
+export function clustersOf<T>(grouping: Grouping<T>): readonly (readonly T[])[] {
+  if (grouping.clusters === null) {
+    throw new Error(
+      `grouping refused a set carrying embeddings from ${grouping.refusal.models.join(', ')}, which the corpus had already cleared`,
+    );
+  }
+  return grouping.clusters;
 }
 
 /** How large the biggest Cluster got at one pair of thresholds, over the whole corpus. */

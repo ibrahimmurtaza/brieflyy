@@ -477,7 +477,7 @@ describe('ClusterFormationService', () => {
     expect(clusters).toHaveLength(1);
   });
 
-  it('groups a corpus holding no embeddings exactly as it grouped before', async () => {
+  it('groups a corpus holding no embeddings exactly as it grouped before, and refuses nothing', async () => {
     // The safety property the whole floor is landable on: ADR-0037 backfills
     // nothing, so every Story in an existing database carries none, and that corpus
     // has to read exactly as it did. These two clear the Entity and signature floors,
@@ -498,8 +498,49 @@ describe('ClusterFormationService', () => {
     });
 
     const clusters = await h.service.formClustersForTopic('topic-1');
+    // Nothing refused, and the assertion is on the report rather than on the
+    // grouping: a set holding *no* models is not a set holding one, and a check
+    // that demanded a single model would take every corpus predating the embedding
+    // from grouping to not grouping in the same change that made the floor landable.
+    const report = await h.service.formForAllTopics();
 
     expect(clusters).toHaveLength(1);
+    expect(report.refused).toEqual([]);
+  });
+
+  it('reports a Topic whose Stories two models embedded rather than forming Clusters for it', async () => {
+    // The state ADR-0037 stores the model beside the vector to make findable, seen
+    // by the application rather than by a command: the configured model changed and
+    // only some Stories were recomputed, so this Topic's window holds vectors from
+    // both. Nothing about it looks broken from inside grouping — the pairs sharing a
+    // model still score and the pairs that do not fall back to the two older floors
+    // — so a User would simply find their Clusters quietly worse. The Topic keeps the
+    // Clusters it had and the report names the models, which is the only place inside
+    // the application this can be seen.
+    const h = await buildHarness();
+    await givenStory(h, {
+      storyId: 'story-acme',
+      entities: ['acme', 'foo'],
+      body: BODY.acme,
+      hoursAgo: 5,
+      embedding: MEANING_LAUNCH,
+    });
+    await givenStory(h, {
+      storyId: 'story-acme-follow-up',
+      entities: ['acme', 'foo'],
+      body: BODY.acmeFollowUp,
+      hoursAgo: 4,
+      embedding: { model: 'test/other-model', values: [0, 1, 0, 0] },
+    });
+
+    const clusters = await h.service.formClustersForTopic('topic-1');
+    const report = await h.service.formForAllTopics();
+
+    expect(clusters).toEqual([]);
+    expect(await h.clusterRepo.listByTopicId('topic-1')).toHaveLength(0);
+    expect(report.refused).toEqual([
+      { topicId: 'topic-1', models: ['test/model', 'test/other-model'] },
+    ]);
   });
 
   it('leaves a Story carrying no readable text in a Cluster of its own', async () => {

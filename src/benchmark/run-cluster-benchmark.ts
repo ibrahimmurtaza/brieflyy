@@ -19,12 +19,18 @@
  * reads as a better rule than it is. A pair no live Topic holds both Stories for
  * is a fact about the corpus rather than a defect, so it is printed and counted
  * in neither the pass nor the fail.
+ *
+ * **It also exits non-zero, printing nothing but a refusal, over a corpus holding
+ * embeddings from more than one model.** A measurement taken there is not a worse
+ * measurement, it is a number about cosines that mean nothing — and it reads as a
+ * rule that regressed, which is the one reading of it that is wrong (ADR-0040).
  */
 import Database from 'better-sqlite3';
 import { and, eq, inArray, max } from 'drizzle-orm';
 
 import {
   evaluateClusterGrouping,
+  clustersOf,
   formatClusterReport,
   resolveClusterPairs,
   type GroupedTopic,
@@ -37,9 +43,12 @@ import {
   SHIPPED_MERGE_THRESHOLD,
   SHIPPED_MERGE_THRESHOLDS,
   SIGNATURE_SIMILARITY_FLOOR,
+  formatGroupingRefusal,
   groupIntoClusters,
+  refusedSets,
   type GroundedEntity,
   type GroundedStory,
+  type Grouping,
   type MergeThresholds,
 } from '../domain/cluster-grouping.js';
 import type { StoryEmbedding } from '../domain/embedding.js';
@@ -82,6 +91,9 @@ async function main(): Promise<number> {
       const grounding = await groundingByStoryInScope(topic, inWindow, articleRepo);
       reads.push({
         topicId: topic.id,
+        // Named, because a corpus holding two models is refused per Topic and the
+        // refusal has to say which one an operator is being asked to go and look at.
+        label: topic.title,
         storyIds,
         grounding,
         // The signature each Story carries, which is the one it was formed from —
@@ -107,16 +119,32 @@ async function main(): Promise<number> {
       });
     }
 
-    const grouped: GroupedTopic[] = reads.map((read) => ({
-      topicId: read.topicId,
+    const corpus = `${reads.length} topics, window ending ${now.toISOString()}`;
+    // Asked once over the corpus rather than inside the sweep, so a mixed set stops
+    // the run before twenty-seven groupings of it rather than after the first.
+    const refusals = refusedSets(
+      reads.map((read) => ({ label: read.label, embeddings: read.embeddings })),
+    );
+    if (refusals.length > 0) {
+      process.stdout.write(formatGroupingRefusal(refusals, { corpus }));
+      return 1;
+    }
+
+    const grouped: GroupedTopic[] = reads.map((read) => {
+      const grouping = groupTopic(read, undefined);
       // The shipped thresholds carry no marker, so the report's own numbers and
       // the sweep's are read off one grouping rather than two copies.
-      clusters: groupTopic(read, undefined),
-    }));
+      return { topicId: read.topicId, clusters: clustersOf(grouping) };
+    });
     for (const thresholds of SHIPPED_MERGE_THRESHOLDS) {
       if (thresholds === SHIPPED_MERGE_THRESHOLD) continue;
       for (const read of reads) {
-        grouped.push({ topicId: read.topicId, thresholds, clusters: groupTopic(read, thresholds) });
+        const grouping = groupTopic(read, thresholds);
+        grouped.push({
+          topicId: read.topicId,
+          thresholds,
+          clusters: clustersOf(grouping),
+        });
       }
     }
 
@@ -136,7 +164,7 @@ async function main(): Promise<number> {
     process.stdout.write(
       formatClusterReport(report, {
         rule: `IDF-weighted cosine over Entities at a floor of ${ENTITY_SIMILARITY_FLOOR}, a Story signature floor of ${SIGNATURE_SIMILARITY_FLOOR} and a Story embedding floor of ${SEMANTIC_SIMILARITY_FLOOR}, merged most-similar first with an all-pairs floor over all three`,
-        corpus: `${reads.length} topics, window ending ${now.toISOString()}`,
+        corpus,
       }),
     );
 
@@ -199,11 +227,15 @@ function corpusNow(db: Db): Date {
  * Entities at an index are the ones belonging to the Story at that index. The
  * signature and the embedding come off that same Story at that index, so the three
  * halves of one Story's reading cannot disagree about which Story they describe.
+ *
+ * Returns whatever the rule returns, refusal included, because a set whose
+ * embeddings came from more than one model has no grouping to report and the
+ * caller is the one that has to say so.
  */
 function groupTopic(
   read: TopicRead,
   thresholds: MergeThresholds | undefined,
-): readonly (readonly StoryId[])[] {
+): Grouping<StoryId> {
   return groupIntoClusters(
     read.storyIds,
     (_storyId, index) => ({
@@ -218,6 +250,8 @@ function groupTopic(
 /** One Topic's Stories and how each of them reads, read once and grouped several times. */
 interface TopicRead {
   readonly topicId: TopicId;
+  /** What a refusal names this set by, which is a Topic's own name. */
+  readonly label: string;
   readonly storyIds: readonly StoryId[];
   readonly grounding: readonly (readonly GroundedEntity[])[];
   /** The signature each Story carries, by the same position as the grounding. */

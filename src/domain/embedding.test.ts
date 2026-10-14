@@ -5,6 +5,7 @@ import {
   decodeEmbedding,
   embeddingSimilarity,
   encodeEmbedding,
+  mixedEmbeddingSet,
   type StoryEmbedding,
 } from './embedding.js';
 
@@ -153,5 +154,45 @@ describe('embeddingSimilarity', () => {
     const exact: StoryEmbedding = { model: 'm', values: [0.5, 0.25, -1, 0] };
 
     expect(embeddingSimilarity(exact, decodeEmbedding(stored(exact), exact.model))).toBe(1);
+  });
+});
+
+describe('mixedEmbeddingSet', () => {
+  const of = (model: string): StoryEmbedding => ({ model, values: [1, 0, 0, 0] });
+
+  it('reports nothing about a set every one of whose Stories was embedded by one model', () => {
+    // The state every corpus is in until somebody changes the configured model, and
+    // the one nothing here may disturb: a set that agrees is not a set to refuse.
+    expect(mixedEmbeddingSet([of('one'), of('one'), null])).toBeNull();
+  });
+
+  it('reports nothing about a set carrying no embedding at all', () => {
+    // Zero models rather than one, and a set holding zero is not a set holding two.
+    // This is every Story in a database predating the embedding (ADR-0037), so a
+    // check that counted the absence as a disagreement would take such a corpus from
+    // grouping to not grouping in one change.
+    expect(mixedEmbeddingSet([null, null, null])).toBeNull();
+    expect(mixedEmbeddingSet([])).toBeNull();
+  });
+
+  it('names every model it found in a set two of them embedded', () => {
+    // The mixed set: the configured model changed and only some Stories were
+    // recomputed. Both names, because an operator cannot act on "there was more
+    // than one" and the whole point of the refusal is that the corpus needs
+    // backfilling with one model — which one is the question.
+    expect(mixedEmbeddingSet([of('vendor/b-2'), of('vendor/a-1')])?.models).toEqual([
+      'vendor/a-1',
+      'vendor/b-2',
+    ]);
+  });
+
+  it('names a model once however many Stories carry it, and reads what each Story carries', () => {
+    // The name is read off the vector's own column rather than off configuration:
+    // what the provider said produced the vector is the record, and a set where the
+    // configuration names a model no Story carries is still the set these Stories
+    // describe.
+    expect(
+      mixedEmbeddingSet([of('vendor/a-1'), of('vendor/b-2'), of('vendor/a-1'), null])?.models,
+    ).toEqual(['vendor/a-1', 'vendor/b-2']);
   });
 });

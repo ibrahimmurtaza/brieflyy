@@ -41,7 +41,11 @@ import { count, countDistinct, eq, max } from 'drizzle-orm';
 
 import { createDatabase, type Db } from '../src/db/client.js';
 import { articles as articleRows, stories as storyRows } from '../src/db/schema.js';
-import { groupIntoClusters } from '../src/domain/cluster-grouping.js';
+import {
+  formatGroupingRefusal,
+  groupIntoClusters,
+  type RefusedSet,
+} from '../src/domain/cluster-grouping.js';
 import { clusterWindowStart } from '../src/domain/cluster-window.js';
 import { bulletsFrom, oneLinerFrom, restates } from '../src/domain/cluster-text.js';
 import type { Article, Story, Topic } from '../src/domain/types.js';
@@ -96,6 +100,17 @@ async function rankedArticlesOf(
 }
 
 /**
+ * One Topic measured, or the reason there was nothing to measure.
+ *
+ * A union for the same reason grouping's own is: a Topic whose Stories carry
+ * embeddings from two models forms no Clusters whose summaries could be drawn, and a
+ * corpus of such Clusters is not one this command can measure.
+ */
+type MeasuredTopic =
+  | { readonly measured: readonly Measured[]; readonly refusal: null }
+  | { readonly measured: null; readonly refusal: RefusedSet };
+
+/**
  * Every Cluster one Topic forms, with its summary drawn both ways.
  */
 async function measureTopic(
@@ -103,21 +118,24 @@ async function measureTopic(
   now: Date,
   storyRepo: DrizzleStoryRepo,
   articleRepo: DrizzleArticleRepo,
-): Promise<readonly Measured[]> {
+): Promise<MeasuredTopic> {
   const stories = await storyRepo.listBySourceIdsInWindow({
     sourceIds: topic.sourceIds,
     windowStart: clusterWindowStart(now, topic.clusterWindowDays),
   });
-  if (stories.length === 0) return [];
+  if (stories.length === 0) return { measured: [], refusal: null };
   const grounding = await groundingByStoryInScope(topic, stories, articleRepo);
-  const grouped = groupIntoClusters(stories, (_storyId, index) => ({
+  const grouping = groupIntoClusters(stories, (_storyId, index) => ({
     entities: grounding[index]!,
     signature: stories[index]!.signature,
     embedding: stories[index]!.embedding,
   }));
+  if (grouping.refusal !== null) {
+    return { measured: null, refusal: { label: topic.title, models: grouping.refusal.models } };
+  }
 
   const measured: Measured[] = [];
-  for (const group of grouped) {
+  for (const group of grouping.clusters) {
     const ranked = await rankedArticlesOf(topic, group, articleRepo);
     if (ranked.length === 0) continue;
     const { title, oneLiner, bulletPoints } = clusterSummaryOf(ranked);
@@ -128,7 +146,7 @@ async function measureTopic(
       withoutTitleExclusion: bulletsFrom(ranked, MAX_BULLET_POINTS, [oneLiner]),
     });
   }
-  return measured;
+  return { measured, refusal: null };
 }
 
 /** Summed over every Cluster. */
@@ -193,8 +211,22 @@ async function main(): Promise<number> {
 
     const topics = (await topicRepo.listAll()).filter((t) => t.sourceIds.length > 0);
     const measured: Measured[] = [];
+    const refusals: RefusedSet[] = [];
     for (const topic of topics) {
-      measured.push(...(await measureTopic(topic, now, storyRepo, articleRepo)));
+      const one = await measureTopic(topic, now, storyRepo, articleRepo);
+      // A Topic holding two models' embeddings forms Clusters whose membership was
+      // decided without the third floor judging the pairs between the two models,
+      // and a corpus of such Clusters is not what this command is measuring.
+      if (one.refusal !== null) refusals.push(one.refusal);
+      else measured.push(...one.measured);
+    }
+    if (refusals.length > 0) {
+      process.stdout.write(
+        formatGroupingRefusal(refusals, {
+          corpus: `${topics.length} live topics, window ending ${now.toISOString()}`,
+        }),
+      );
+      return 1;
     }
     if (measured.length === 0) {
       throw new Error('the corpus forms no Clusters, so there is nothing to measure');

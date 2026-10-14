@@ -38,7 +38,11 @@ import { count, countDistinct, eq, max, min } from 'drizzle-orm';
 
 import { createDatabase, type Db } from '../src/db/client.js';
 import { articles as articleRows, stories as storyRows } from '../src/db/schema.js';
-import { groupIntoClusters } from '../src/domain/cluster-grouping.js';
+import {
+  formatGroupingRefusal,
+  groupIntoClusters,
+  type RefusedSet,
+} from '../src/domain/cluster-grouping.js';
 import { clusterWindowStart } from '../src/domain/cluster-window.js';
 import type { Article, StoryId, Topic } from '../src/domain/types.js';
 import { readRequiredString } from '../src/env.js';
@@ -71,6 +75,18 @@ interface Measured {
   readonly floored: boolean;
 }
 
+/**
+ * One Topic measured, or the reason there was nothing to measure.
+ *
+ * A union for the same reason grouping's own is: a Topic whose Stories carry
+ * embeddings from two models forms no Clusters to measure, and a measurement taken
+ * over a set nobody can compare is the failure this command exists to catch rather
+ * than to print.
+ */
+type MeasuredTopic =
+  | { readonly measured: readonly Measured[]; readonly refusal: null }
+  | { readonly measured: null; readonly refusal: RefusedSet };
+
 /** The file to measure, from the first argument or from `DATABASE_URL`. */
 function databaseFile(): string {
   const argument = process.argv[2];
@@ -92,12 +108,12 @@ async function measureTopic(
   now: Date,
   storyRepo: DrizzleStoryRepo,
   articleRepo: DrizzleArticleRepo,
-): Promise<readonly Measured[]> {
+): Promise<MeasuredTopic> {
   const stories = await storyRepo.listBySourceIdsInWindow({
     sourceIds: topic.sourceIds,
     windowStart: clusterWindowStart(now, topic.clusterWindowDays),
   });
-  if (stories.length === 0) return [];
+  if (stories.length === 0) return { measured: [], refusal: null };
   const grounding = await groundingByStoryInScope(topic, stories, articleRepo);
   const byStory = new Map<StoryId, readonly Article[]>();
   await Promise.all(
@@ -110,20 +126,28 @@ async function measureTopic(
     }),
   );
 
-  return groupIntoClusters(stories, (_storyId, index) => ({
+  const grouping = groupIntoClusters(stories, (_storyId, index) => ({
     entities: grounding[index]!,
     signature: stories[index]!.signature,
     embedding: stories[index]!.embedding,
-  })).map((group): Measured => {
-    const articles = group.flatMap((story) => byStory.get(story.id) ?? []);
-    return {
-      stories: group.length,
-      articles: articles.length,
-      sources: new Set(articles.map((a) => a.sourceId)).size,
-      velocity: clusterVelocity(articles, group, now),
-      floored: measuredOverSpanFloor(group, now),
-    };
-  });
+  }));
+  if (grouping.refusal !== null) {
+    return { measured: null, refusal: { label: topic.title, models: grouping.refusal.models } };
+  }
+
+  return {
+    measured: grouping.clusters.map((group): Measured => {
+      const articles = group.flatMap((story) => byStory.get(story.id) ?? []);
+      return {
+        stories: group.length,
+        articles: articles.length,
+        sources: new Set(articles.map((a) => a.sourceId)).size,
+        velocity: clusterVelocity(articles, group, now),
+        floored: measuredOverSpanFloor(group, now),
+      };
+    }),
+    refusal: null,
+  };
 }
 
 async function main(): Promise<number> {
@@ -162,8 +186,22 @@ async function main(): Promise<number> {
 
     const topics = (await topicRepo.listAll()).filter((t) => t.sourceIds.length > 0);
     const measured: Measured[] = [];
+    const refusals: RefusedSet[] = [];
     for (const topic of topics) {
-      measured.push(...(await measureTopic(topic, now, storyRepo, articleRepo)));
+      const one = await measureTopic(topic, now, storyRepo, articleRepo);
+      // A Topic holding two models' embeddings is a set of Clusters whose membership
+      // was decided without the third floor ever judging the pairs between the two
+      // models, and a velocity measured over it is a rate of a grouping nobody ran.
+      if (one.refusal !== null) refusals.push(one.refusal);
+      else measured.push(...one.measured);
+    }
+    if (refusals.length > 0) {
+      process.stdout.write(
+        formatGroupingRefusal(refusals, {
+          corpus: `${topics.length} live topics, window ending ${now.toISOString()}`,
+        }),
+      );
+      return 1;
     }
     if (measured.length === 0) {
       throw new Error('the corpus forms no Clusters, so there is nothing to measure');

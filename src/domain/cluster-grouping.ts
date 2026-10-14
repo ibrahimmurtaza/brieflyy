@@ -37,7 +37,12 @@
  * rather than the first.
  */
 
-import { embeddingSimilarity, type StoryEmbedding } from './embedding.js';
+import {
+  embeddingSimilarity,
+  mixedEmbeddingSet,
+  type MixedEmbeddingSet,
+  type StoryEmbedding,
+} from './embedding.js';
 import { signatureSimilarity, type StorySignature } from './story-signature.js';
 import type { EntityId, EntityKind } from './types.js';
 
@@ -259,6 +264,13 @@ export const SIGNATURE_SIMILARITY_FLOOR = 0.04;
  * half of the same claim is that a floor which does apply has to actually bite — it
  * is read as a refusal, not as advice, and it is weighed against every member of a
  * resulting Cluster like the other two.
+ *
+ * **The pair is where that answer stops, and a set is a different question.** Two
+ * models in one pair is one unjudgeable pair. Two models in one set is a corpus that
+ * changed its model halfway, where every pair sharing a model still scores and the
+ * rest quietly stop being judged on this signal — nothing about which looks like a
+ * fault, so grouping refuses the whole set and names the models instead. See
+ * {@link groupIntoClusters} and {@link mixedEmbeddingSet}.
  */
 export const SEMANTIC_SIMILARITY_FLOOR = 0.45;
 
@@ -330,9 +342,111 @@ export const SHIPPED_MERGE_THRESHOLDS: readonly MergeThresholds[] = ENTITY_NEIGH
     ),
 );
 
-/** The three floors as one fixed-width string, so a report and a failure name both. */
+/**
+ * The three floors as one fixed-width string, so a report and a failure name both. */
 export function describeThresholds(thresholds: MergeThresholds): string {
   return `${thresholds.entity.toFixed(2)}/${thresholds.signature.toFixed(2)}/${thresholds.semantic.toFixed(2)}`;
+}
+
+/**
+ * What came back from {@link groupIntoClusters}: the groups, or the reason there
+ * were none.
+ *
+ * A union rather than a list plus a flag, so a caller cannot go on to read `[]` as
+ * "every Story is a Cluster of its own" — which is precisely what a refusal must
+ * not be mistaken for, because that reading is a corpus grouped on nothing at all
+ * and it looks like a grouping that worked. `refusal` carries
+ * {@link MixedEmbeddingSet}, which names every model found rather than saying only
+ * that there was more than one.
+ */
+export type Grouping<T> =
+  | {
+      readonly clusters: readonly (readonly T[])[];
+      readonly refusal: null;
+    }
+  | {
+      readonly clusters: null;
+      readonly refusal: MixedEmbeddingSet;
+    };
+
+/**
+ * One labelled set of embeddings, as a corpus command reads it.
+ *
+ * The label is whatever the caller calls the set — a Topic, a window, a page — so
+ * that the refusal can point at one part of a corpus rather than at the corpus as a
+ * whole.
+ */
+export interface EmbeddingSet {
+  readonly label: string;
+  readonly embeddings: readonly (StoryEmbedding | null)[];
+}
+
+/**
+ * The sets of a corpus whose embeddings came from more than one model, and which.
+ *
+ * **Per set rather than for the corpus**, and that is the whole of the rule: grouping
+ * only ever compares Stories within one set, so a corpus holding one model in one
+ * Topic and another in the next has two consistent sets and nothing to refuse,
+ * while a single Topic holding both is a set nobody can score. Reading the corpus as
+ * one set would refuse both, and reading it as none would refuse neither.
+ *
+ * Empty where there is nothing to refuse, which is the answer for every corpus that
+ * is fine and for every corpus that embeds nothing at all — see
+ * {@link mixedEmbeddingSet}.
+ */
+export function refusedSets(sets: readonly EmbeddingSet[]): readonly RefusedSet[] {
+  const refused: RefusedSet[] = [];
+  for (const set of sets) {
+    const mixed = mixedEmbeddingSet(set.embeddings);
+    if (mixed !== null) refused.push({ label: set.label, models: mixed.models });
+  }
+  return refused;
+}
+
+/**
+ * One set grouping refused, named by whatever its caller calls it.
+ *
+ * A Topic in a corpus read by a command, a window inside one, a run: the label is
+ * the only thing that differs between them, and a refusal naming nothing but the
+ * models would leave a reader guessing which part of the corpus to go and look at.
+ */
+export interface RefusedSet {
+  /** What the caller calls the set — a Topic's name, or a window's span. */
+  readonly label: string;
+  /** Every model found in it, sorted. */
+  readonly models: readonly string[];
+}
+
+/**
+ * How a command says it refused, in the shape every other command here prints.
+ *
+ * Beside the rule rather than in `src/benchmark/`, because four commands can hit
+ * this and none of them is the benchmark — and a refusal only the benchmark could
+ * say would be a refusal three other commands silently stepped over.
+ *
+ * One line per refused set, then two closing lines. **The sets and their models**,
+ * because a corpus has to be brought back onto one model and neither the choice nor
+ * the work is possible without knowing which ones and where they are. **Why there
+ * is no report**, because the thing it replaces is not obviously worthless: every
+ * cosine in a mixed corpus is still a number, and the report would have read as a
+ * benchmark that is merely disappointing rather than as one that means nothing. And
+ * **what does not fix it**, because `pnpm cluster:backfill` is the command that
+ * makes embeddings comparable and it deliberately never replaces a vector that is
+ * already there — it embeds only the Stories carrying none, which is the wrong half
+ * of a mixed corpus to send to it.
+ */
+export function formatGroupingRefusal(
+  refusals: readonly RefusedSet[],
+  context: { readonly corpus: string },
+): string {
+  const lines = [
+    'cluster grouping refused',
+    `  corpus    ${context.corpus}`,
+    ...refusals.map((refusal) => `  set       ${refusal.label}  ${refusal.models.join(', ')}`),
+    '  why       a set whose embeddings came from more than one model has cosines between them that mean nothing, so no report is printed',
+    '  fix       recompute the corpus\'s embeddings with one model; pnpm cluster:backfill embeds only the Stories carrying none and never replaces a vector that is there',
+  ];
+  return `${lines.join('\n')}\n`;
 }
 
 /**
@@ -462,16 +576,37 @@ export function similarityBetween(
  * well, which is part of what the wider gate costs.
  *
  * Groups come back in the order their first member appeared.
+ *
+ * **One set is refused rather than grouped, and it is named.** A set whose Stories
+ * carry embeddings from more than one model is a corpus that changed its model
+ * halfway, and this returns a {@link Grouping} carrying the models it found rather
+ * than a set of Clusters. The per-pair rule above is the right answer about a pair
+ * and the wrong one here: every pair in a mixed set that shares a model still
+ * scores, every pair that does not quietly stops being judged on this signal, and
+ * neither looks like a fault — the only symptom is that grouping got worse. So the
+ * check is made once over the whole set, before any pair is scored, and what comes
+ * back names both models rather than saying only that there was more than one.
+ *
+ * The per-pair `null` stays where it is either way. It is about a pair — one vector,
+ * or none, or two models — and the set-level refusal is about the corpus, so the two
+ * answer different questions and neither stands in for the other.
  */
 export function groupIntoClusters<T>(
   items: readonly T[],
   readOf: (item: T, index: number) => GroundedStory,
   options: { readonly thresholds?: MergeThresholds; readonly gate?: MergeGate } = {},
-): readonly (readonly T[])[] {
-  if (items.length === 0) return [];
+): Grouping<T> {
   const thresholds = options.thresholds ?? SHIPPED_MERGE_THRESHOLD;
   const gate = options.gate ?? SHIPPED_MERGE_GATE;
   const readings = items.map(readOf);
+
+  // Over the whole set, before any pair is scored: a refusal reached through the
+  // scoring would be a refusal only the pairs that happened to cross the two models
+  // could reach, and the corpus would be grouped by whatever the other pairs said.
+  const refusal = mixedEmbeddingSet(readings.map((reading) => reading.embedding));
+  if (refusal !== null) return { clusters: null, refusal };
+  if (items.length === 0) return { clusters: [], refusal: null };
+
   const entitySets = readings.map((reading) => reading.entities);
   const inverseDocumentFrequency = inverseDocumentFrequencies(entitySets);
 
@@ -554,7 +689,10 @@ export function groupIntoClusters<T>(
     members[right] = [];
   }
 
-  return members
-    .filter((group) => group.length > 0)
-    .map((group) => group.map((index) => items[index]!));
+  return {
+    clusters: members
+      .filter((group) => group.length > 0)
+      .map((group) => group.map((index) => items[index]!)),
+    refusal: null,
+  };
 }

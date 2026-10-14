@@ -267,16 +267,17 @@ grafted copy, and it should be re-measured over a backfilled corpus before the
 floor is moved — which is the same thing every other number here says about
 itself.
 
-**Where a two-model corpus is concerned this ADR will be superseded, deliberately.**
+**Where a two-model corpus is concerned this ADR is superseded in part, deliberately.**
 `embeddingSimilarity` answers `null` for two vectors from different models, and the
 rule above reads that as the floor *not applying* — the pair is decided by the other
 two floors and grouping continues. That is the right behaviour for a pair, and the
 wrong behaviour for a corpus: a mixed set means the model changed and only some
 Stories were recomputed, every cosine in it still looks like a number, and the only
-symptom is that grouping quietly got worse. #138 makes grouping refuse such a set
-and name the models it found. The change is to where the check happens — the corpus
-rather than the pair — and not to what `null` means, which stays "no evidence" here
-because that is still what it is about a pair carrying one vector or none.
+symptom is that grouping quietly got worse. [[0040-grouping-refuses-a-corpus-whose-embeddings-came-from-more-than-one-model]]
+now makes grouping refuse such a set and name the models it found. The change is to
+where the check happens — the set rather than the pair — and not to what `null` means,
+which stays "no evidence" here because that is still what it is about a pair carrying
+one vector or none. Everything else this ADR decides stands.
 
 `OPENROUTER_EMBEDDINGS_URL` batches its inputs, so the 136 vectors cost seven
 requests rather than 136 — which matters, because the free tier counts requests and
@@ -298,3 +299,5 @@ comparable only because the column says which is which.
   the second floor and is where the shape of this one came from.
 - [[0006-cluster-grouping-is-transitive-closure]], whose single-linkage failure is the
   reason the all-pairs constraint is what holds the largest Cluster bounded.
+- [[0040-grouping-refuses-a-corpus-whose-embeddings-came-from-more-than-one-model]],
+  which moves the two-model check from the pair to the set.

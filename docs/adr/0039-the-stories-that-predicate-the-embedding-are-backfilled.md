@@ -117,7 +117,11 @@ It names the model beside the vectors it wrote, which is the one thing an operat
 needs before pointing grouping at the result. A corpus carrying vectors from two
 models is a state no reader inside the application can see — every cosine in it
 still looks like a number — and this is where such a corpus is created, so this is
-where it is said. Grouping refusing one outright is [[0138-grouping-refuses-a-corpus-whose-embeddings-came-from-more-than-one-model]].
+where it is said. Grouping refusing one outright is
+[[0040-grouping-refuses-a-corpus-whose-embeddings-came-from-more-than-one-model]],
+which is also why that refusal tells an operator to recompute the corpus rather than
+to come back here: a mixed corpus's vectors are already all present, and embedding
+the ones that carry nothing is not what it needs.
 
 ## What it costs
 
@@ -167,5 +171,5 @@ which no command reproduced.
   and deliberately left the corpus that predates it alone.
 - [[0038-grouping-reads-the-embedding-as-a-third-floor]], whose floor is a constant
   nobody can move until a command produces a corpus that measures it.
-- [[0138-grouping-refuses-a-corpus-whose-embeddings-came-from-more-than-one-model]],
+- [[0040-grouping-refuses-a-corpus-whose-embeddings-came-from-more-than-one-model]],
   which is what reads the `model` line this command prints.
