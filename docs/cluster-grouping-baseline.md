@@ -107,13 +107,24 @@ Every labelled pair is measured, on the corpus widened by the two Topics recorde
 at the end of this file — so the numbers before and after this rule changed are
 over the same families and the same Topics, and the comparison is like for like.
 
+**This block was printed before the semantic floor existed**, and it is left exactly
+as it was recorded: `pnpm cluster:benchmark` over this corpus today prints a rule
+line carrying the embedding floor and three ceilings where this one names two
+ceilings, and it would print `n/a (nothing weighed)` for the semantic distribution
+because nothing in this corpus has been through `pnpm cluster:backfill`. The corpus
+is also no longer available to re-run against, so this block is a record of the
+two-signal rule's baseline rather than something a reader can refresh.
+
 ### What the semantic floor is, and what it was read from
 
 **These two sections are over a different corpus from the one above.** The baseline
 above is the 1,804-Article, 14-Topic corpus this file opens with; these numbers come
 from the wider corpus recorded at the end of this file, which is the one holding every
 labelled pair. Read the two apart rather than as one series — the largest Cluster is
-5 here and 6 there for that reason and not because the rule moved.
+5 here and 6 there for that reason and not because the rule moved. **The section
+after the grid is that same second corpus read again**, once `pnpm cluster:backfill`
+has given every Story in it a vector, so the three sections belong to two corpora
+and not to one.
 
 ADR-0038 added a third floor: a cosine between the two Stories' **Story
 embeddings**, at 0.45. On that corpus, with the Entity and signature floors held at
@@ -190,7 +201,181 @@ A Story carrying no embedding is grouped exactly as it was, which is what makes 
 floor landable ahead of a backfill — and also why the corpus above has to be a
 copy with embeddings grafted on to measure anything. On a working corpus holding
 none, the floor measures as though it had done nothing, and the report says so by
-printing that zero families could be weighed.
+printing that zero families could be weighed. `pnpm cluster:backfill` is what
+makes that copy a command rather than a hand, and the next section is what the
+floor reads once it has.
+
+### The same corpus again, over a copy the shipped command backfilled
+
+The table above is a calibration run: a copy with embeddings grafted onto the 136
+Stories the labelled families reach, which no command reproduced. This is the same
+measurement over the same corpus with **every one of its 1,967 Stories carrying a
+vector** — written by `pnpm cluster:backfill`, all from
+`private/openrouter/nvidia/nemotron-3-embed-1b`, so the corpus is one model and
+grouping does not refuse it (ADR-0040). It is two runs of `pnpm cluster:benchmark`
+over one file, one before that backfill and one after, so every figure below is
+over the same Topics, the same window and the same 78 labelled families.
+
+Two counts describe that corpus and they are not the same number: **1,967** Stories
+in the database, which is what the backfill embedded, and **1,757** of them inside
+at least one Topic's window, which is the count the report prints and the set the
+sweep below measured over. Neither run of this measurement moved either.
+
+| | before | after |
+| --- | --- | --- |
+| recall | 41.4% — 12 of 29 | **48.3%** — 14 of 29 |
+| precision | 71.4% — 35 of 49 | **79.6%** — 39 of 49 |
+| clusters | 4631 | 4723 |
+| largest | 5 Stories | **4 Stories** |
+| singletons | 93.3% — 4323 of 4631 | 95.1% — 4493 of 4723 |
+| ceiling, Entities only | 81.6% — 9 of 49 | 81.6% — 9 of 49 |
+| ceiling, Entities and signature | 95.9% — 2 of 49 | 95.9% — 2 of 49 |
+| ceiling, all three | 95.9% — 2 of 49 | **100.0%** — 0 of 49 |
+
+**The third ceiling is the finding.** ADR-0038 recorded it as the same 95.9% as the
+two-signal ceiling, on the grounds that the two families identical as Entity vectors
+and in text carried no embedding, so the floor had nothing to add to them. With the
+whole corpus backfilled neither pair is identical in embedding: **no different-event
+family in this corpus is identical in all three readings**, so no negative in the
+labelled set is beyond what thresholds on the three could separate. That is a bound
+rather than a promise — a family identical in all three is a cosine of exactly 1 on
+all three, and no floor below 1 holds it apart; this corpus happens to hold none, and
+a bound a corpus does not exercise is not a bound of 100% about the next corpus.
+
+**The floor is worth 6.9 points of recall and 8.2 of precision here**, against the
+3.4 and 10.2 the grafted copy gave. It bought the precision without spending recall
+and without welding anything bigger: the largest Cluster fell from five Stories to
+four and the recall set grew, so the precision was not bought by merging less.
+
+**Why the two runs of the same corpus differ from each other is the point of doing
+it this way.** The graft put vectors on the Stories the labelled families reach and
+left the rest of the corpus ungated, so it measured a rule that was half on and
+half off: the labelled pairs were decided by three floors while every bridge
+between them was decided by two. A corpus backfilled end to end is the rule as it
+ships anywhere it has been run, and it is the only one of the two that is.
+
+**The distribution did not reproduce exactly, and the difference is named rather
+than smoothed over.** The `semantic` line reads 0.451 to 0.812 over the 29
+same-event families and 0.134 to 1.000 over the 49 different-event ones. Both
+maxima and the different-event minimum are the graft's to three decimals; the
+same-event **minimum** is not — 0.451 here against the 0.373 ADR-0038 recorded.
+The endpoint is not the explanation: re-embedding a Story's own text reproduces its
+stored vector to 1e-8 (a one-off check, reproduced by no command). So the graft read
+one or two Stories from different text, and which one is recorded nowhere, because
+the graft was made by hand. That is the cost it was carrying, and it is why a number
+only a calibration run can produce is one nobody can check. Read this section's
+distribution against the one above as two measurements rather than as one series.
+
+**The semantic axis, re-measured by a command rather than by hand.**
+`pnpm cluster:sweep` over the backfilled copy moves this floor with the other two
+held at the shipped point, and prints it as its own table. The grafted column is
+ADR-0038's, for the same floor on the same corpus before the backfill:
+
+| semantic floor | recall | precision | largest | singletons | graft: recall / precision |
+| --- | --- | --- | --- | --- | --- |
+| 0.40 | 48.3% | **81.6%** | 5 | 94.6% | 44.8% / 79.6% |
+| **0.45 (shipped)** | **48.3%** | **79.6%** | **4** | **95.1%** | **44.8% / 81.6%** |
+| 0.50 | 41.4% | 83.7% | 4 | 95.5% | 37.9% / 83.7% |
+| 0.60 | 41.4% | 89.8% | 3 | 97.0% | 37.9% / 89.8% |
+| 0.70 | 20.7% | 93.9% | 3 | 99.3% | 20.7% / 93.9% |
+| 0.80 | 6.9% | 95.9% | 3 | 99.9% | 6.9% / 95.9% |
+| 0.90 | 0.0% | 95.9% | 3 | 100.0% | not swept — ADR-0038's axis stops at 0.85 |
+
+**The shipped value is no longer demonstrably the top of its plateau, and that is a
+finding rather than a rounding.** The axis runs 0.40 and 0.45 with nothing between
+them, so what it can say is narrow — but it says it plainly: **at 0.40 the rule
+reaches the same 48.3% of the recall set at 81.6% precision rather than 79.6%**, two
+points better, and the price is one more Story in the largest Cluster (5 against 4,
+still inside the grid's bound of 5). The plateau ADR-0038 chose 0.45 from ran 0.42
+to 0.45, on cells this command does not sweep, so that plateau is not re-measured
+here and on the one comparison the sweep does make, 0.45 sits on the wrong side of
+the step. **Nothing in this file moves the constant** — a floor is a decision and
+this is a measurement about one — but anyone deciding whether to move it should
+know the floor now prices one step lower than the one that shipped, and that the
+case for keeping it rests on a hand-made run no command reproduces.
+
+**Which floor turns each family away, now that the third one can.** The sweep
+prints that partition too, and its columns are not zero here — the empty version
+below, under *What the conjunction costs, and what it buys*, is what this same
+corpus read as before the backfill:
+
+| label | both clear | signature alone | Entity alone | embedding alone | two alone | neither admits | weighed |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| same-event | 14 | 0 | 0 | **1** | 14 | 0 | 29 |
+| different-event | 12 | 3 | 8 | **3** | 19 | 4 | 49 |
+
+**One same-event family is reached by the embedding floor and by nothing else.** Its
+Entities clear neither 0.45 nor its text 0.04, while the two Articles mean the same
+thing closely enough to clear the semantic floor on their own. It is the first
+family this floor reaches that no other reading does, and it is what that column
+is for.
+
+**Three different-event families would be welded by a rule admitting on that floor
+alone**, which is the same column read the other way: on this set a model that
+thinks two reports mean one thing is wrong about three of them. The conjunction is
+what holds all three apart. One family against three is the trade this floor makes
+on its own account, and it is not a trade the gate makes — it refuses both.
+
+**The precision arrived as arithmetic.** Seven different-event families no longer
+clear the gate — 19 down to 12 — and four of them stop being welded, which is four
+of forty-nine and therefore the 8.2 points above. On the recall side the same
+fourteen same-event families clear every floor in both runs, and two more of them
+end up welded after the backfill: the candidate set is narrower, and a narrower
+candidate set changes which pairs are merged first (ADR-0038).
+
+**And the wider gate reads worse everywhere now.** The sweep's frontier over the
+same 48 cells, with the semantic floor participating in both gates rather than
+applying to neither:
+
+| gate at 0.45/0.04/0.45 | recall | precision | clusters | largest | singletons |
+| --- | --- | --- | --- | --- | --- |
+| **both** (shipped) | 48.3% | **79.6%** | 4723 | **4** | **95.1%** |
+| either | 89.7% | 28.6% | 2867 | 20 | 53.7% |
+
+Widening the gate now buys 41.4 points of recall and pays **51 points of precision**
+for them, against the 36.7 it paid before the backfill, and the best precision any
+cell of the 48-cell grid reaches under `either` is **34.7%** — where the paragraph
+below records 49.0% for the same grid before the backfill. **There is no band left
+where the widened gate reads better.** The conjunction is strictly better at every
+recall level it reaches, and above the 69.0% where it stops the widened gate goes
+no higher than 34.7% at all. The refusal below it is still refused; the price of it
+has simply risen.
+
+**What the backfill cost**, since that is what buying the measurement cost: two
+runs at a batch size of 64 — 462 requests embedding 1,538 Stories, then 7 more
+for the 429 whose calls had come back with nothing, 469 requests and 141,616
+tokens in all and 0 credits on a free model. It took two runs because the provider
+began refusing part-way through the first, which the command reported rather than
+swallowed ("over 436 of 462 calls that returned nothing at all"), and the second
+run picked up at the first Story still carrying none rather than asking about the
+1,538 again.
+
+**What the three readings still do not reach is unchanged by any of this.** The
+floor is a gate and never was a separator: the same-event range, 0.451 to 0.812,
+sits inside the different-event one, 0.134 to 1.000, rather than beside it, so the
+two classes overlap completely and no threshold separates them. Two negatives still
+carry *identical* embeddings at 1.000, which no floor below 1 holds apart — the
+signature floor is what holds those two apart, and eight of the nine families that
+are identical as Entity vectors are held apart by that same floor alone. The ninth
+is in one of the other buckets, and the partition prints counts rather than names,
+so this file does not say which. The measured 79.6% sits sixteen points under the
+95.9% an Entities-and-signature rule could reach, which is the price of the
+thresholds rather than a threshold left untuned; a ceiling is a maximum over
+thresholds rather than a floor under them, so landing under one says the shipped
+floors are not that rule and nothing more. And the semantic floor still does not
+apply at all to a pair where either Story carries none, so a corpus nobody has
+backfilled measures it as having done nothing — which is the line above printing
+`n/a (nothing weighed)` rather than a range.
+
+**The grid, re-measured on the same copy.** `pnpm cluster:benchmark` prints all 27
+shipped cells over it, and the largest Cluster is **4 at every cell whose semantic
+floor is 0.45 or 0.50 and 5 at every cell whose semantic floor is 0.40** — never
+more than the 5 the grafted copy held everywhere, so the bound the grid carries
+still holds and the shipped point sits a Story inside it. The shipped point forms
+**4,723** Clusters where this file records 4,631 for the grafted copy at the same
+point, and where the grid table above records 4,638 over its own two floors: the
+three counts are three different measurements and are not differences of each
+other.
 
 ### What Entity canonicalisation did to it
 
@@ -422,6 +607,13 @@ ADR-0030 took recall *away* to get precision — "Precision above 71.4% is reach
 … This ADR takes the recall" — and moving to 49% to buy back 17 points of recall in
 one band is that decision reversed rather than a better answer to it.
 
+**The band is gone once the floor is live.** This whole subsection is what the rule
+looked like on a corpus the semantic floor could not read: every figure in it is
+from before `pnpm cluster:backfill`, and the run after it is in *The same corpus
+again* above — where the widened gate's best precision anywhere on the 48-cell grid
+falls to 34.7% and it reads worse than the conjunction at every recall level. The
+refusal below did not change; the cost of refusing rose.
+
 **The conjunction refuses 28 same-event families and 23 different-event ones.**
 The sweep counts each labelled family by which floor turned it away, at the shipped
 floors — six buckets now rather than four, because a partition over three
@@ -440,7 +632,12 @@ family, so no single-signal rule does, and the conjunction refuses it anyway.
 **The embedding columns are zero here and that is not a finding about the floor.**
 Nothing on this corpus carries an embedding, so the floor applies to no pair and is
 counted neither as an admission nor as a refusal. A corpus holding some would move
-them.
+them — and one now does. The same sweep over the same corpus after
+`pnpm cluster:backfill` drops the signature-alone column from 14 to 3 and fills
+two-alone from 0 to 19, because the semantic floor reaches eleven of those families
+as a second signal; the full partition is in *The same corpus again, over a copy the
+shipped command backfilled* above. Read the two tables as a before and an after
+rather than as a disagreement between them.
 
 Read across: **fourteen of the twenty-nine same-event families clear the signature
 floor and not the Entity floor**, and none the other way round. Those are the
