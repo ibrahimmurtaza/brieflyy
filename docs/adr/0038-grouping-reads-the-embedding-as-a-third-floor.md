@@ -8,6 +8,16 @@
 > The section *How this was measured* has been amended to say so — read it as
 > written before ADR-0039 and as amended after, since the two are true of their
 > own moments.
+>
+> **The floor has since been re-measured over a corpus the shipped command
+> backfilled, and it moved.** The table under *What this floor buys, measured* is
+> still the grafted one and is left as it was written, because it is what the
+> floor was chosen on; the figures read over a corpus every one of whose Stories
+> carries a vector are in `docs/cluster-grouping-baseline.md`, under *The same
+> corpus again, over a copy the shipped command backfilled*. They are **+6.9
+> points of recall and +8.2 of precision at the shipped point**, the largest
+> Cluster is one Story smaller, and the third ceiling moves from 95.9% to 100.0%.
+> Read the two together rather than as one series.
 
 Grouping asked two questions of a pair of Stories: do they name the same rare
 things, and does their text agree. This ADR adds the third — do they mean the same
@@ -174,8 +184,14 @@ covering part of the rule.
 The grid is a grid rather than a diagonal walk because a diagonal attributes every
 movement to none of the floors. Holding two still and moving the third is what says
 which floor is doing the work, and a reader who moves only one of them afterwards
-can find where that lands. The semantic axis runs 0.40 / 0.45 / 0.50, which brackets
-the plateau with a cell that behaves differently on each side.
+can find where that lands. The semantic axis runs 0.40 / 0.45 / 0.50 — and 0.60,
+0.70, 0.80, 0.90 beyond them — where the two it was written for bracket the plateau
+with a cell that behaves differently on each side. **On a backfilled corpus the
+axis no longer brackets a plateau**: 0.45 and 0.40 score the same recall and 0.45
+scores two points less precision, which is set out in *How this was measured*
+below. The axis was widened because a reader asking where this floor should sit is
+asking a different question from the one the grid answers, and a wider one needs
+more room than the two cells the floor was chosen between.
 
 `pnpm cluster:benchmark` prints the largest Cluster at every one of the 27 cells, and
 `pnpm cluster:sweep` prints the semantic axis as its own table with the other two
@@ -195,6 +211,13 @@ labelled with the representations it bounds:
 | Entities and signature | 95.9% | 2 of 49 identical in both |
 | **Entities, signature and embedding** | **95.9%** | 2 of 49 — neither carries one |
 
+> Everything from this table down to the paragraph opening *The measured precision
+> of 81.6%* was read on the grafted copy ADR-0039 gave a command to replace, and is
+> left as it was written. Re-measured over a corpus every one of whose Stories
+> carries a vector, the third ceiling moves and the measured precision is no longer
+> on the Entity-only ceiling; both are in the paragraph that follows the last one
+> here.
+
 The third ceiling is **the same number as the second**, and that is a real finding
 rather than a copy of it. Those two families are identical in their Entity vectors
 *and* in their text, which is the state no threshold on either can separate — and
@@ -213,6 +236,97 @@ The measured precision of 81.6% at the shipped floor is exactly the Entity-only
 ceiling, which is the strongest statement the benchmark can make here: no negative
 that Entities alone cannot separate gets welded at all. The gap to 95.9% is the
 price of the thresholds, not a threshold left untuned.
+
+**Both of those sentences are true of the grafted copy and of nothing after it — and
+the first of them was never the proof it looked like.** Over a corpus every one of
+whose Stories carries a vector the same three ceilings read **81.6% / 95.9% /
+100.0%** — the third moves because the two families identical in Entity and text
+turn out not to be identical in embedding — and the measured precision at the
+shipped floor is **79.6%**, two points *below* the Entity-only ceiling rather than
+exactly on it.
+
+A ceiling is a maximum over thresholds, not a floor under them, so landing on it
+said the shipped floors separate as many negatives as the best Entity-only rule can
+and nothing more; it did not show that every Entity-identical negative was held
+apart, because a different set of forty could be held apart just as well. Landing
+two points under it says the shipped floors are not that rule. The number that does
+answer the question is the refusal partition rather than either figure, and
+`pnpm cluster:sweep` prints it: **eight of the nine different-event families that
+are identical in their Entity vectors are refused by the signature floor alone**,
+which is the second floor doing all of the work on the negatives Entities cannot
+separate. The ninth is in one of the other buckets, and the partition prints counts
+rather than names, so this ADR does not claim which. What holds of all nine without
+exception is the shape of the gate: under a conjunction the semantic floor refuses
+and never admits, so nothing here is welded on the embedding's say-so. The full run
+is in *How this was measured* below and in `docs/cluster-grouping-baseline.md`.
+
+## What the three-signal rule still does not reach
+
+The ceiling above says what the third reading adds; this says what it does not, at
+the same weight, because a floor recorded only for what it bought is a claim with
+half its shape missing.
+
+**It is a gate and never a separator.** Over the labelled families two reports of
+one event score as low as 0.373 and two reports of different events as high as
+1.000 — the same-event minimum below the different-event median, and two negatives
+carrying *identical* embeddings, which no floor below 1 can hold apart. What the
+floor buys is negatives the first two readings welded and it does not; what it
+cannot buy is a boundary between the classes, and re-measuring it over a fully
+backfilled corpus moved the numbers without changing that: the same-event minimum
+reads 0.451 there and the different-event maximum is still exactly 1.000.
+
+**It does not apply at all to a pair where either Story carries none.** Not "it
+lets that pair through" and not "it scores it zero": the floor has nothing to say,
+and the other two decide it exactly as they did before this ADR existed. That is
+deliberate ([What a missing embedding means](#what-a-missing-embedding-means)) and
+it has a consequence worth stating plainly — **on a corpus nobody has backfilled
+this floor measures as though it had done nothing**, and the benchmark says so by
+printing `n/a (nothing weighed)` in place of a distribution. A floor that cannot
+be measured is a floor nobody can move, and the only cure is
+`pnpm cluster:backfill` over a copy.
+
+**It does not reach the families no reading reaches.** Recall over the labelled
+set is bounded by what Entities extract: six of the 29 same-event families share no
+Entity at all, so no similarity function over Entities joins them whatever the
+embedding says about what they meant. That ceiling belongs to Entity extraction
+rather than to this rule — and it does not put recall in the application's hands
+either. **More than half of the real event families still come back split** at the
+shipped point, on a corpus every one of whose Stories carries a vector.
+
+**It does not separate a family identical in all three readings**, and that is
+arithmetic rather than a measurement: a family whose Entity vectors are equal, whose
+text is the same and whose vectors from one model are equal is a cosine of exactly
+1 on all three, and no floor below 1 holds it apart. The corpus this ADR was read
+from holds none — and over a fully backfilled copy of it the third ceiling is
+**100.0%**, which is a statement that this labelled set does not exercise the case
+rather than a promise that nothing ever will.
+
+**It did not close the gap to the two-signal ceiling, and it is not what holds the
+negatives apart.** At the shipped point over a backfilled corpus the rule reads
+79.6% where a rule reading Entities and signature alone could reach 95.9%, and
+sixteen points of that gap are the thresholds rather than the floor. The nine
+different-event families that are identical in their Entity vectors — the ones
+nothing thresholded over Entities can separate — are held apart by **eight of them
+by the signature floor alone**. What is true of all nine without exception is the
+shape of the gate rather than any floor's reach: under a conjunction the semantic
+floor refuses and never admits, so not one negative in this rule is welded on the
+embedding's say-so.
+
+**The linkage is still what bounds the Cluster, and its measurement is older than
+the floor.** Single linkage over the same similarity reaches nineteen Stories on
+the corpus ADR-0030 measured, where the constrained rule holds six — that is where
+"the all-pairs floor is what holds the largest Cluster bounded" comes from, and
+**it was measured with two floors, on a different corpus from every figure in this
+section**. Nothing since has measured single linkage under three signals, because no
+command in this repository runs it, and this ADR does not claim otherwise. What has
+been measured under all three is the constrained rule itself: over the backfilled
+corpus `pnpm cluster:benchmark` prints the largest Cluster at every one of the 27
+shipped cells, and it is **4 at every cell whose semantic floor is 0.45 or 0.50 and
+5 at every cell whose semantic floor is 0.40**. Those are not the six above and are
+not comparable with them; what they show is that the bound still holds under three
+signals rather than two. The constraint is why it holds, and a floor added to a rule
+that merged single-linkage would have made the single-linkage measurement the
+urgent one instead.
 
 ## What it costs
 
@@ -266,6 +380,49 @@ floor's own distribution rather than `n/a`. The table below was still read on th
 grafted copy, and it should be re-measured over a backfilled corpus before the
 floor is moved — which is the same thing every other number here says about
 itself.
+
+**It has been re-measured, and the floor still ships where it shipped.** Over a copy
+of that same corpus with every one of its 1,967 Stories carrying a vector — 469
+requests and 141,616 tokens through `pnpm cluster:backfill`, all from one model, so
+the corpus is not a **Mixed embeddings** set — the shipped point reads **48.3%
+recall / 79.6% precision against 41.4% / 71.4%**, with the largest Cluster at 4
+rather than 5. That is **+6.9 points of recall and +8.2 of precision**, against the
++3.4 and +10.2 the grafted copy gave, and the difference between the two is not
+arithmetic: the graft gated the labelled pairs and left every other pair in the
+corpus ungated, so it measured a rule half on and half off. The full run, both
+runs of it side by side, and the distribution it read are in
+`docs/cluster-grouping-baseline.md`.
+
+**The third ceiling moved and it is the finding.** It reads **100.0%** over the
+backfilled corpus — no different-event family in the labelled set is identical in
+all three readings — where this ADR recorded it as the same 95.9% as the
+two-signal ceiling on the grounds that the two families identical in Entity and
+text carried no embedding for it to read. See
+[What the three-signal rule still does not reach](#what-the-three-signal-rule-still-does-not-reach)
+for why that is a bound rather than a promise.
+
+**The floor now reaches one family nothing else does — and would weld three that
+nothing else welds.** The refusal partition `pnpm cluster:sweep` prints is no
+longer empty in the embedding column: of the 29 same-event families, **one clears
+the semantic floor and neither of the other two**, and of the 49 different-event
+families **three do the same**. So on this corpus the floor alone buys one positive
+and would admit three negatives, which is
+[Why a floor and not a third vote](#why-a-floor-and-not-a-third-vote) making its
+trade on a bigger stage — and the reason the conjunction is the shape rather than a
+vote or a disjunction.
+
+**And the shipped value is no longer demonstrably the top of its plateau, which
+this ADR does not act on.** The sweep moves this floor on its own with the other
+two held at the shipped point, and the two cells it runs either side of the shipped
+value now disagree: **0.40 reaches the same 48.3% of the recall set at 81.6%
+precision where 0.45 reaches it at 79.6%**, and the largest Cluster is 5 against 4
+— still inside the bound the grid carries. The plateau 0.45 was chosen from (0.42 to
+0.45) ran over cells no command sweeps, so it is not re-measured; on the one
+comparison a command does make, the shipped value is on the wrong side of the step.
+**0.45 still ships**, because a floor is a decision and a measurement in one
+ticket's handoff is not where a decision gets made. What the next reader is owed is
+that this floor is now priced one step lower than the one that shipped, and that
+the evidence for keeping it was a calibration run nobody could re-run.
 
 **Where a two-model corpus is concerned this ADR is superseded in part, deliberately.**
 `embeddingSimilarity` answers `null` for two vectors from different models, and the
