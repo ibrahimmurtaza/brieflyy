@@ -13,8 +13,13 @@ import { STYLESHEET } from './styles.js';
  * different `max-width` values across sixteen page functions, so the visual
  * difference between two screens was a fact about which file they were in
  * rather than a decision anyone had made.
+ *
+ * `feed` is the one width wide enough to hold a rail beside the reading column,
+ * which is why it is named rather than left as a larger `default`: the rail is
+ * only a rail when there is room for it, and at any of the other widths the same
+ * markup stacks into one column and says the same things in the same order.
  */
-export type PageWidth = 'narrow' | 'form' | 'default' | 'reading';
+export type PageWidth = 'narrow' | 'form' | 'default' | 'reading' | 'feed';
 
 export interface NavLink {
   readonly href: string;
@@ -142,6 +147,31 @@ export const PRIMARY_NAV: readonly NavLink[] = [
 const FOOTER = 'Aggregated, clustered, summarised. One brief per topic, every day.';
 
 /**
+ * The one webfont, and the two connections that fetch it.
+ *
+ * Source Serif 4 is the face the product's prose is set in. It is loaded from a
+ * CDN rather than served from here because the application has no bundler and no
+ * build step for assets — self-hosting would mean a static route, a directory of
+ * woff2 files in the repository and a cache policy to get right, for one face.
+ * The stylesheet already lists Source Serif 4 first in `--font-serif`, so a
+ * deployment that cannot reach the CDN — or a reader who has already got it —
+ * gets the system serif in the same slot instead, with nothing reflowed by the
+ * failure and no text hidden behind it.
+ *
+ * `display=swap` rather than `block`, so the prose is readable in the system
+ * serif immediately and swaps when the real one lands, rather than being
+ * invisible for as long as the request takes. Two weights only: the prose is read
+ * at 400 and a Cluster headline at 600, and nothing between them is set anywhere.
+ *
+ * Two `preconnect`s because the stylesheet and the font files come off two
+ * origins and the second is only discovered once the first has been parsed.
+ */
+const WEB_FONT_LINKS = `  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@400;600&display=swap">
+`;
+
+/**
  * Where one Cluster sits on the LivingBrief, so something else can link to it.
  *
  * The trends page annotates a spike with the Clusters that arrived on that day, and
@@ -170,7 +200,6 @@ export function layout(input: LayoutInput): string {
     account,
     nav: account === null ? null : PRIMARY_NAV,
     activeHref: input.activeHref ?? null,
-    width,
     requestToken: input.requestToken ?? null,
   });
   const footer = renderFooter();
@@ -181,7 +210,7 @@ export function layout(input: LayoutInput): string {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${escapeHtml(input.title)} &middot; Brieflyy</title>
-  <style>${STYLESHEET}</style>
+${WEB_FONT_LINKS}  <style>${STYLESHEET}</style>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -325,7 +354,6 @@ function renderHeader(input: {
   readonly account: ShellAccount | null;
   readonly nav: readonly NavLink[] | null;
   readonly activeHref: string | null;
-  readonly width: PageWidth;
   readonly requestToken: string | null;
 }): string {
   // The wordmark goes to `/`, which redirects to `/signup` for an anonymous
@@ -334,7 +362,7 @@ function renderHeader(input: {
   const { account, nav } = input;
   if (account === null || nav === null) {
     return `<header class="site-header">
-  <div class="site-header__inner site-header__inner--${input.width}">${wordmark}</div>
+  <div class="site-header__inner">${wordmark}</div>
 </header>`;
   }
   const links = nav
@@ -344,7 +372,7 @@ function renderHeader(input: {
     })
     .join('\n      ');
   return `<header class="site-header">
-  <div class="site-header__inner site-header__inner--${input.width}">
+  <div class="site-header__inner">
     ${wordmark}
     <nav class="site-nav" aria-label="Primary">
       ${links}

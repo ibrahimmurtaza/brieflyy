@@ -58,8 +58,10 @@ export function trendsPage(input: TrendsPageInput): string {
     <p class="plan">${historyNote(input.historyDays, days)}</p>
     <p class="actions"><a class="button secondary" href="${escapeHtml(liveBriefHref)}">Back to the living brief</a></p>
     <section>
-      <h2>Mention volume per day</h2>
-      ${empty ? emptyChartNote() : chartBlock(input)}
+      <div class="panel">
+        <h2>Mention volume per day</h2>
+        ${empty ? emptyChartNote() : chartBlock(input)}
+      </div>
     </section>
     <section>
       <h2>What is emerging</h2>
@@ -307,7 +309,9 @@ export function rollupBlock(input: RollupBlockInput): string {
         });
   return `      <${heading}>Across your topics</${heading}>
       <p class="hint">${totals.articles} article${totals.articles === 1 ? '' : 's'} and ${totals.stories} stor${totals.stories === 1 ? 'y' : 'ies'} across ${spanLabel(rollup.volumeOverTime.length)}.</p>
+      <div class="panel">
       ${chart}
+      </div>
       <ul class="entities">
 ${items}
       </ul>`;

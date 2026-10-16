@@ -241,11 +241,17 @@ describe('the token pairs a component rule draws', () => {
     // the semantic layer names a raw colour, and `.source:hover` does. Checked
     // here rather than left alone, because a rule that breaks the layering should
     // at least break the build on the value it draws.
-    { rule: '.source:hover', foreground: 'color-text', background: 'blue-100', minimum: 4.5 },
+    { rule: '.source:hover', foreground: 'color-text', background: 'teal-100', minimum: 4.5 },
     { rule: '.account__tier', foreground: 'color-chip-fg', background: 'color-chip-bg', minimum: 4.5 },
     { rule: '.card--held .title', foreground: 'color-text-subtle', background: 'color-surface', minimum: 4.5 },
     { rule: '.entity__lift', foreground: 'color-success', background: 'color-canvas', minimum: 4.5 },
     { rule: 'input:disabled', foreground: 'color-text-muted', background: 'color-surface', minimum: 4.5 },
+    // The feed's rail and the two navigation states that fill rather than sit on
+    // the canvas. Each of them is a coloured surface a User reads words on, so
+    // each of them is a pair rather than a decoration.
+    { rule: '.rail', foreground: 'color-text', background: 'color-panel', minimum: 4.5 },
+    { rule: '.site-nav a:hover', foreground: 'color-link', background: 'color-surface', minimum: 4.5 },
+    { rule: '.site-nav a[aria-current="page"]', foreground: 'color-primary', background: 'color-notice-surface', minimum: 4.5 },
   ];
 
   it('pairs tokens the stylesheet declares', () => {
