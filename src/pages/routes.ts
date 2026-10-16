@@ -1700,11 +1700,16 @@ function homePage(input: {
       // A free-form Topic is stored with the `unspecified` category, which is
       // what the Directory does not know about it. Rendering the sentinel told
       // the User their own idea was broken data, so it is left out.
-      const category = t.category === 'unspecified'
-        ? ''
-        : `<span class="muted"> &middot; ${escapeHtml(t.category)}</span>`;
+      //
+      // What is left is the one fact about a Topic that is not its name, and it
+      // is set beside the name rather than after it so a list of them reads as a
+      // column of names and a column of facts.
+      const meta =
+        t.category === 'unspecified'
+          ? ''
+          : `<span class="topic-row__meta">${escapeHtml(t.category)}</span>`;
       return `      <li>
-        <a href="/topics/${escapeHtml(t.slug)}">${escapeHtml(t.title)}</a>${category}
+        <span class="topic-row"><a href="/topics/${escapeHtml(t.slug)}">${escapeHtml(t.title)}</a>${meta}</span>
       </li>`;
     })
     .join('\n');
@@ -1740,6 +1745,54 @@ ${rows}
     </ul>
 ${trends}`,
   });
+}
+
+/**
+ * The small node graph a Cluster card carries.
+ *
+ * It is drawn from the Cluster's own Source count rather than chosen for the
+ * page: one hub with one leaf per outlet that reported it, because a Cluster *is*
+ * a group of Stories several outlets told, and a fixed drawing would claim the
+ * same shape for a one-outlet story and a nine-outlet one. Three leaves is the
+ * floor and six the ceiling, so a Cluster with fifteen Sources is not drawn as a
+ * starburst, and one with none is still drawn rather than left with a hole where
+ * the mark is.
+ *
+ * Inline SVG rather than a glyph from a font or a background image, so it takes
+ * the page's own colour and scales with the reader's text size. Hidden from
+ * assistive technology because the count it is drawn from is written out beside it
+ * in the Cluster's own meta line — a picture of "four outlets" in front of a
+ * reader who cannot see it, and a second spoken version of the same fact for one
+ * who can, are both worse than the sentence.
+ */
+function clusterGlyph(sourceCount: number): string {
+  const leaves = Math.min(6, Math.max(3, sourceCount));
+  const marks: string[] = [];
+  for (let i = 0; i < leaves; i += 1) {
+    const angle = (Math.PI * 2 * i) / leaves - Math.PI / 2;
+    const x = Math.round((20 + Math.cos(angle) * 13) * 100) / 100;
+    const y = Math.round((20 + Math.sin(angle) * 13) * 100) / 100;
+    marks.push(`<line x1="20" y1="20" x2="${x}" y2="${y}"/>`);
+    marks.push(
+      `<circle class="glyph__leaf${i === 0 ? ' glyph__leaf--accent' : ''}" cx="${x}" cy="${y}" r="3.4"/>`,
+    );
+  }
+  return `<svg class="cluster__glyph" viewBox="0 0 40 40" width="44" height="44" aria-hidden="true" focusable="false">${marks.join('')}<circle class="glyph__hub" cx="20" cy="20" r="6"/></svg>`;
+}
+
+/**
+ * The one line above a Cluster's headline: how many outlets reported it, and
+ * which Topic it belongs to.
+ *
+ * Escaped, because the Topic's title is the User's own text and is the only part
+ * of this line that is not a number this module counted.
+ */
+function clusterMetaLine(
+  input: { readonly topic: Topic },
+  cluster: Cluster,
+): string {
+  const count = cluster.sourceIds.length;
+  return `${count} source${count === 1 ? '' : 's'} &middot; ${escapeHtml(input.topic.title)}`;
 }
 
 function topicPage(input: {
@@ -1882,7 +1935,15 @@ ${signalButtons}
       // Cluster that did not get a written one, and a written summary is never
       // carried back onto this page, so what a User reads here is what the last
       // email said.
-      return `      <article class="cluster" id="${escapeHtml(clusterAnchor(c.id))}">
+      //
+      // The meta line above the headline is the two facts the card cannot show by
+      // being a card: how many outlets reported this, and which Topic it belongs
+      // to. Both are counts, so both are set in the monospaced face rather than as
+      // a sentence.
+      return `      <article class="cluster cluster--card" id="${escapeHtml(clusterAnchor(c.id))}">
+        ${clusterGlyph(c.sourceIds.length)}
+        <div class="cluster__body">
+        <p class="meta">${clusterMetaLine(input, c)}</p>
         <h2>${escapeHtml(c.summary || c.title)}</h2>
         <div class="hide-row">${feedbackButtons}${hideLink}</div>
         ${bullets}
@@ -1891,6 +1952,7 @@ ${signalButtons}
         ${articleLinks ? `<ul class="articles">
         ${articleLinks}
         </ul>` : ''}
+        </div>
       </article>`;
     })
     .join('\n');
@@ -1937,21 +1999,35 @@ ${signalButtons}
   )}/settings">Settings for this topic</a></p>`;
   return layout({
     title: input.topic.title,
-    width: 'reading',
+    width: 'feed',
     account: input.account,
     activeHref: '/topics',
     requestToken: input.requestToken ?? null,
+    // One column of reading and one rail of everything that is not the reading.
+    // The brief is what this page is for and it is what gets the whole width of
+    // the main column; narrowing a brief to Sources, sending it, opening its
+    // settings and changing its window are four things a User does *about* the
+    // brief rather than *in* it, and stacking them above the Clusters used to
+    // push the reading surface below the fold on a laptop. Below the feed
+    // breakpoint the two columns stack in this same order, so the rail is read
+    // after the brief on a phone and nothing is lost in the change.
     body: `    <h1>${safeTitle}</h1>
     <p class="lede">${category}${count}</p>
-${briefActions}
-${trendsLink}
-${settingsLink}
-${sourceFilterBar}
+    <div class="feed">
+      <div class="feed__main">
 ${emptyState}
 ${planNote}
 ${rows}
 ${unplannedNote}
-${windowForm}`,
+      </div>
+      <aside class="rail feed__rail">
+${sourceFilterBar}
+${briefActions}
+${trendsLink}
+${settingsLink}
+${windowForm}
+      </aside>
+    </div>`,
   });
 }
 
