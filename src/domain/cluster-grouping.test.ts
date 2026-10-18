@@ -82,6 +82,26 @@ function meaning(along: 'x' | 'y'): StoryEmbedding {
   return { model: 'test/model', values: along === 'x' ? [1, 0, 0, 0] : [0, 1, 0, 0] };
 }
 
+/** An embedding whose model and width read fine, but whose vector cannot be scored. */
+function unscorable(): StoryEmbedding {
+  return new Proxy(
+    { model: 'test/model', values: [1, 0, 0, 0] as const },
+    {
+      get(target, prop) {
+        if (prop === 'values') {
+          return new Proxy(target.values, {
+            get: (inner, key) => {
+              if (key === 'length') return inner.length;
+              throw new Error('embedding vector was read');
+            },
+          });
+        }
+        return Reflect.get(target, prop);
+      },
+    },
+  ) as unknown as StoryEmbedding;
+}
+
 /**
  * Group these readings, reported as the indexes each Cluster holds.
  *
@@ -477,6 +497,93 @@ describe('groupIntoClusters', () => {
     ]);
     expect(
       groupsOf(readings, { ...SHIPPED_MERGE_THRESHOLD, entity: 0 }),
+    ).not.toContainEqual([0, 1]);
+  });
+
+  it('refuses a pair the Entity floor fails without reading its embedding', () => {
+    // Under the gate the rule ships the conjunction refuses on the first cheap
+    // floor that misses, so the dot product over dense vectors is never taken.
+    const aside = entity();
+    const other = entity();
+
+    const groups = groupsOf([
+      reading([aside], SAME_TEXT, unscorable()),
+      reading([other], SAME_TEXT, unscorable()),
+    ]);
+
+    expect(groups).toEqual([[0], [1]]);
+  });
+
+  it('refuses a pair the signature floor fails without reading its embedding', () => {
+    const shared = entity();
+
+    const groups = groupsOf([
+      reading([shared], text('acme', 'foo', 'launch'), unscorable()),
+      reading([shared], text('ruling', 'overturns', 'appeal'), unscorable()),
+    ]);
+
+    expect(groups).toEqual([[0], [1]]);
+  });
+
+  it('admits a pair the Entity floor clears without reading its embedding, under the widened gate', () => {
+    const shared = entity();
+
+    expect(
+      groupsOf(
+        [
+          reading([shared], SAME_TEXT, unscorable()),
+          reading([shared], text('ruling', 'overturns', 'appeal'), unscorable()),
+        ],
+        undefined,
+        'either',
+      ),
+    ).toContainEqual([0, 1]);
+  });
+
+  it('admits a pair the signature floor clears without reading its embedding, under the widened gate', () => {
+    const shared = entity();
+    const aside = entity();
+
+    expect(
+      groupsOf(
+        [
+          reading([aside], SAME_TEXT, unscorable()),
+          reading([shared], SAME_TEXT, unscorable()),
+        ],
+        undefined,
+        'either',
+      ),
+    ).toContainEqual([0, 1]);
+  });
+
+  it('reads the embedding where both cheap floors miss under the widened gate', () => {
+    // The one place the embedding can decide on its own: both cheap floors miss,
+    // so the score is taken and admits the pair.
+    const shared = entity();
+    const aside = entity();
+
+    expect(
+      groupsOf(
+        [
+          reading([aside], text('acme', 'foo', 'launch'), meaning('x')),
+          reading([shared], text('ruling', 'overturns', 'appeal'), meaning('x')),
+        ],
+        undefined,
+        'either',
+      ),
+    ).toContainEqual([0, 1]);
+  });
+
+  it('reads the embedding where both cheap floors clear under the gate the rule ships', () => {
+    // The one place the embedding can decide on its own: both cheap floors clear,
+    // so the score is taken and refuses the pair.
+    const shared = entity();
+
+    expect(
+      groupsOf([
+        reading([shared], SAME_TEXT, meaning('x')),
+        reading([shared], SAME_TEXT, meaning('y')),
+      ]),
     ).not.toContainEqual([0, 1]);
   });
 });

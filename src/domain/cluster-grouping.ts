@@ -693,14 +693,42 @@ export function groupIntoClusters<T>(
   const semanticScoreOf = perPair((i, j) =>
     embeddingSimilarity(readings[i]!.embedding, readings[j]!.embedding),
   );
-  const clearsTheGate = (i: number, j: number): boolean =>
-    clearsMergeGate({
-      entity: entityScoreOf(i, j),
-      signature: signatureScoreOf(i, j),
-      semantic: semanticScoreOf(i, j),
-      thresholds,
-      gate,
-    });
+
+  // The embedding score is the expensive of the three: a dot product over dense
+  // vectors. It is priced only where the cheaper two floors and the gate leave the
+  // pair undecided, never before:
+  //
+  // - under `both` the pair is refused as soon as either cheap floor fails, so the
+  //   embedding is read only where both cheap floors clear;
+  // - under `either` the pair is admitted as soon as either cheap floor clears, so
+  //   the embedding is read only where both cheap floors fail.
+  //
+  // That is the one place the embedding can decide on its own. Everywhere else the
+  // pair is answered without it, which is an efficiency change rather than a rule
+  // change: the three scores are still combined by clearsMergeGate, so the answer
+  // is identical whether the embedding was priced early or priced lazily.
+  //
+  // The per-pair cache keeps serving consistent scores to every re-ask the linkage
+  // makes, whatever it priced early and what it priced lazily. The refusal
+  // partition is a separate reader: gateRefusals still takes every floor of every
+  // pair — full buckets, not partial ones — because a measurement that reads the
+  // buckets needs each floor's full say.
+  const clearsTheGate = (i: number, j: number): boolean => {
+    const entity = entityScoreOf(i, j);
+    const signature = signatureScoreOf(i, j);
+    const clearsEntity = entity >= thresholds.entity;
+    const clearsSignature = signature >= thresholds.signature;
+
+    let semantic: number | null;
+    if (gate === 'both') {
+      if (!clearsEntity || !clearsSignature) return false;
+      semantic = semanticScoreOf(i, j);
+    } else {
+      if (clearsEntity || clearsSignature) return true;
+      semantic = semanticScoreOf(i, j);
+    }
+    return clearsMergeGate({ entity, signature, semantic, thresholds, gate });
+  };
 
   // Most similar pair first. Ties break on position so the order is the same on
   // every run rather than the one the sort happened to produce.
