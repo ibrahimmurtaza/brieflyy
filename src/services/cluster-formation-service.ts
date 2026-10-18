@@ -1,18 +1,17 @@
 import type { Clock } from '../domain/clock.js';
 import { assignClusterIds } from '../domain/cluster-identity.js';
 import {
+  groundingFor,
   groupIntoClusters,
   sharedEntityCount,
-  type GroundedEntity,
   type Grouping,
 } from '../domain/cluster-grouping.js';
-import { bulletsFrom, oneLinerFrom } from '../domain/cluster-text.js';
 import { clusterWindowStart } from '../domain/cluster-window.js';
+import { clusterSummaryOf, MAX_BULLET_POINTS } from '../domain/cluster-summary.js';
 import type {
   Article,
   Cluster,
   ClusterId,
-  EntityId,
   Story,
   StoryId,
   Topic,
@@ -56,15 +55,6 @@ export const CLUSTER_ACTIVE_VELOCITY_THRESHOLD = 1.5;
  */
 const MIN_VELOCITY_SPAN_DAYS = 1;
 
-/**
- * How many statements a Cluster's bullets carry.
- *
- * Exported for the same reason `clusterVelocity` is: the summary measurement asks
- * what a Cluster is given rather than what it spends, and a report that read the
- * number off a copy of it would be measuring the copy.
- */
-export const MAX_BULLET_POINTS = 3;
-
 export interface ClusterFormationReport {
   /**
    * How many Topics were formed, which is every Topic that was **not** refused.
@@ -103,32 +93,6 @@ export interface ClusterFormationServiceDeps {
   readonly clusterRepo: ClusterRepo;
   readonly topicRepo: TopicRepo;
   readonly clock: Clock;
-}
-
-/**
- * The Entities grouping sees for each of a Topic's Stories.
- *
- * Each Entity arrives with its kind as well as its id, because grouping weighs
- * an Entity by what kind of thing it is and not only by how rare it is — see
- * `ENTITY_KIND_WEIGHTS`.
- *
- * Exported rather than kept as a method because the benchmark reads it too, and
- * a second copy of "which Articles of this Story are in scope for this Topic"
- * would drift from the one that runs — which is exactly what the benchmark
- * exists to catch.
- */
-export async function groundingByStoryInScope(
-  topic: Topic,
-  stories: readonly Story[],
-  articleRepo: ArticleRepo,
-): Promise<readonly (readonly GroundedEntity[])[]> {
-  const perStory = await Promise.all(
-    stories.map(async (story) => {
-      const articles = await articleRepo.listByStory(story.id);
-      return articles.filter((a) => topic.sourceIds.includes(a.sourceId));
-    }),
-  );
-  return groundingOf(perStory);
 }
 
 export class ClusterFormationService {
@@ -272,17 +236,9 @@ export class ClusterFormationService {
     stories: readonly Story[],
   ): Promise<Grouping<Story>> {
     if (stories.length === 0) return { clusters: [], refusal: null };
-    const groundingByStory = await groundingByStoryInScope(
-      topic,
-      stories,
-      this.deps.articleRepo,
-    );
+    const grounded = await groundingFor(topic, stories, this.deps.articleRepo);
 
-    const grouping = groupIntoClusters(stories, (story, index) => ({
-      entities: groundingByStory[index]!,
-      signature: story.signature,
-      embedding: story.embedding,
-    }));
+    const grouping = groupIntoClusters(stories, (_story, index) => grounded[index]!);
     if (grouping.clusters === null) return grouping;
     return {
       clusters: grouping.clusters.map((group) =>
@@ -344,28 +300,6 @@ export class ClusterFormationService {
         velocity >= CLUSTER_ACTIVE_VELOCITY_THRESHOLD ? 'active' : 'archive',
     };
   }
-}
-
-/**
- * Which Entities each Story carries, as the union over its Articles.
- *
- * A Story's Entities are the ones its Articles name, and an Article with none
- * contributes nothing rather than an empty set that would overlap everything.
- * The kind is carried through with the id because grouping weighs the two
- * together.
- */
-function groundingOf(
-  perStory: readonly (readonly Article[])[],
-): readonly (readonly GroundedEntity[])[] {
-  return perStory.map((articles) => {
-    const grounding = new Map<EntityId, GroundedEntity>();
-    for (const article of articles) {
-      for (const entity of article.entities) {
-        grounding.set(entity.id, { id: entity.id, kind: entity.kind });
-      }
-    }
-    return [...grounding.values()];
-  });
 }
 
 /**
@@ -452,37 +386,6 @@ export function rankArticles(articles: readonly Article[]): readonly Article[] {
         a.index - b.index,
     )
     .map((entry) => entry.article);
-}
-
-export interface ClusterSummaryText {
-  /** The Cluster's headline: its representative Article's own title. */
-  readonly title: string;
-  /** The line the bullets sit under: the representative Article's first statement. */
-  readonly oneLiner: string;
-  /** The statements below it, none of which repeats either of the two. */
-  readonly bulletPoints: readonly string[];
-}
-
-/**
- * What a Cluster is shown with, read off its Articles in ranked order.
- *
- * One place, because the three lines are not independent: the title is the
- * representative Article's headline and the one-liner is a sentence off the same
- * Article, so a rule that excluded the one-liner from the bullets and not the title
- * would put the title straight back in through the headline fallback. Built here
- * rather than inline in `finalizeCluster` so the summary measurement runs this
- * rather than a second copy of it — a report reading its own copy would carry on
- * printing a clean number the day the rule changed and nobody changed it.
- */
-export function clusterSummaryOf(ranked: readonly Article[]): ClusterSummaryText {
-  const representative = ranked[0];
-  const oneLiner = representative ? oneLinerFrom(representative) : '';
-  const title = representative?.title.trim() ?? '';
-  return {
-    title,
-    oneLiner,
-    bulletPoints: bulletsFrom(ranked, MAX_BULLET_POINTS, [oneLiner, title]),
-  };
 }
 
 function mostRecent(stories: readonly Story[]): Story {

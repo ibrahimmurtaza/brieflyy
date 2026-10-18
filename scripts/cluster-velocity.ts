@@ -52,9 +52,9 @@ import { DrizzleTopicRepo } from '../src/repos/topic-repo.js';
 import {
   CLUSTER_ACTIVE_VELOCITY_THRESHOLD,
   clusterVelocity,
-  groundingByStoryInScope,
   measuredOverSpanFloor,
 } from '../src/services/cluster-formation-service.js';
+import { groundingFor } from '../src/domain/cluster-grouping.js';
 
 /**
  * The candidate thresholds the report prices.
@@ -114,7 +114,7 @@ async function measureTopic(
     windowStart: clusterWindowStart(now, topic.clusterWindowDays),
   });
   if (stories.length === 0) return { measured: [], refusal: null };
-  const grounding = await groundingByStoryInScope(topic, stories, articleRepo);
+  const grounded = await groundingFor(topic, stories, articleRepo);
   const byStory = new Map<StoryId, readonly Article[]>();
   await Promise.all(
     stories.map(async (story) => {
@@ -126,11 +126,7 @@ async function measureTopic(
     }),
   );
 
-  const grouping = groupIntoClusters(stories, (_storyId, index) => ({
-    entities: grounding[index]!,
-    signature: stories[index]!.signature,
-    embedding: stories[index]!.embedding,
-  }));
+  const grouping = groupIntoClusters(stories, (_storyId, index) => grounded[index]!);
   if (grouping.refusal !== null) {
     return { measured: null, refusal: { label: topic.title, models: grouping.refusal.models } };
   }

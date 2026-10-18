@@ -10,7 +10,7 @@ import {
   isPartialName,
   namesNothing,
   theOnlyFullerName,
-} from '../domain/entity-extraction.js';
+} from '../domain/entity-identity.js';
 import { articleText } from '../domain/feed-text.js';
 import {
   encodeSignature,

@@ -21,17 +21,12 @@ import type { EntityKind } from './types.js';
 import { stripFeedMetadata } from './feed-text.js';
 import {
   CONNECTORS,
-  DEMONYMS,
   DETERMINERS,
-  FEED_FURNITURE,
-  GENERIC_HEAD_NOUNS,
   GIVEN_NAMES,
-  INNER_WORDS,
-  LEADING_QUALIFIERS,
   LEGAL_SUFFIXES,
+  LOCATIVES,
   LAUNCH_PHRASES,
   LAUNCH_VERBS,
-  LOCATIVES,
   NOISE_ACRONYMS,
   NOISE_WORDS,
   ORG_CUES,
@@ -40,8 +35,18 @@ import {
   PLACES_AFTER_INSTITUTION,
   PLACE_MARKERS,
   PRODUCT_NOUNS,
-  PUBLISHER_NAMES,
 } from './entity-lexicons.js';
+import {
+  canonicalEntityKey,
+  namesNothing,
+} from './entity-identity.js';
+export {
+  canonicalEntityKey,
+  namesNothing,
+  isPartialName,
+  isFullerNameFor,
+  theOnlyFullerName,
+} from './entity-identity.js';
 
 /**
  * An Entity as one Article's text presents it.
@@ -343,188 +348,6 @@ function classifyEntity(name: string, context: EntityContext): EntityKind {
   return 'concept';
 }
 
-/**
- * The identity of a name: what two spellings of it have to share to be one
- * Entity.
- *
- * Case, punctuation, a leading article, a connective inside the name and a legal
- * form are all things two outlets write differently about one name, so none of
- * them is part of what the name identifies. What is left is the name itself,
- * which is why "Acme Corp", "ACME CORP." and "Acme Corporation" are one Entity,
- * and why "Institute of Cancer Research" and "Institute for Cancer Research" are
- * one as well, while "Acme Foods" is another.
- *
- * Three more folds, each of them a way an outlet writes the same thing and none
- * of them anything the name identifies. A **qualifier** in front — the verb a
- * headline leads with, the column it is filed under, the adjective that says
- * which of several, the transliteration of one of those — says which name, not
- * what it is: "Fired OpenAI", "Analysis Riverton Labs" and "Pivnichyi Northern
- * Bridge" are OpenAI, Riverton Labs and the Northern Bridge. A **demonym** is the
- * country rather than its adjective: "Israeli" and "Israel" are one thing, and
- * the two were two Entities that never overlapped.
- *
- * The prefix is only dropped from the front and only while something is left to
- * name. "Former" is a word, not a name, and folding it to nothing would be the
- * rule deciding it is not there.
- */
-export function canonicalEntityKey(name: string): string {
-  let words = name
-    .toLowerCase()
-    .replace(/['’]s\b/g, ' ')
-    // A dotted abbreviation is one word written with stops in it: "S.A." is "sa",
-    // not "s a", or the same company is two Entities by the length of its suffix.
-    .replace(/\.(?=[a-z])/g, '')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim()
-    .split(/\s+/)
-    .filter((w) => w.length > 0 && !INNER_WORDS.has(w));
-  while (words.length > 1 && LEGAL_SUFFIXES.has(words[words.length - 1] ?? '')) {
-    words.pop();
-  }
-  while (words.length > 1 && LEADING_QUALIFIERS.has(words[0] ?? '')) {
-    words.shift();
-  }
-  // After the prefix, because "Former Israeli" is a former something in Israel
-  // and the adjective is not in front of the country until the "former" has gone.
-  //
-  // Only when there is a noun for it to modify. "Israeli company" is Israel, and
-  // folding it produces `israel company` — a rare Entity, adding no weight to the
-  // country's own. "Israeli" alone is a different problem: folding it into
-  // `israel` merges a rare Entity into a common one, which raises Israel's
-  // document frequency and so lowers its IDF weight in every Story that carries
-  // it. Measured over this corpus, that standalone fold is the only fold in this
-  // module that costs anything — one different-event family — because every pair
-  // whose whole overlap is that country falls with its weight. So the adjective
-  // folds and the bare demonym does not, and "Israeli" and "Israel" are two
-  // Entities where one was wanted.
-  if (words.length > 1) {
-    words = words.map((word) => DEMONYMS.get(word) ?? word);
-  }
-  return words.join(' ');
-}
-
-/**
- * Whether a name is in the text but is not a thing in the story.
- *
- * Three kinds, and the same failure in each. An **outlet** is named in every
- * Article it published, so an Entity for one is in every Story that outlet
- * covered and overlaps all of them — a link between unrelated Stories that costs
- * exactly what a link about the same subject costs. A **feed's own furniture** is
- * stamped on every item it serves rather than written about any of them. A
- * **generic head noun** standing alone names a sort of thing rather than one of
- * them, so every Article about a university has one and none of them are about
- * the same university.
- *
- * The check is on the folded key rather than on the words as written, because the
- * fold is what makes "The Guardian" and "Guardian" one spelling: it is no use
- * listing an outlet under a form two of them do not use. What is left of a name
- * after the prefix comes off can still be a head noun on its own — "Daily
- * Briefing" is a newsletter's title rather than a briefing — so the head noun is
- * read off the key as well as off the name.
- */
-export function namesNothing(name: string): boolean {
-  return namesNothingUnder(canonicalEntityKey(name));
-}
-
-/** Whether a key already folded names nothing. The rule {@link namesNothing} reads. */
-function namesNothingUnder(key: string): boolean {
-  if (key.length === 0) return true;
-  if (PUBLISHER_NAMES.has(key) || FEED_FURNITURE.has(key)) return true;
-  const words = key.split(' ');
-  // Every word an outlet or a label: "BBC", "HN", "Guardian".
-  if (words.every(isFurnitureWord)) return true;
-  // And the head noun, which is only a head noun while it is the whole name.
-  if (words.length > 1) return false;
-  return GENERIC_HEAD_NOUNS.has(words[0] ?? '');
-}
-
-/** Whether a word names the report rather than what it reports. */
-function isFurnitureWord(word: string): boolean {
-  return PUBLISHER_NAMES.has(word) || FEED_FURNITURE.has(word);
-}
-
-/**
- * How short a word has to be before it is not a name written short.
- *
- * Below this it is an abbreviation or a fragment — `fl`, `th`, `pi` — and the
- * corpus is full of them, every one of which would otherwise be matched onto
- * whatever longer name happens to end in it.
- */
-const MIN_PARTIAL_NAME_CHARS = 3;
-
-/**
- * Whether a key is a whole name that a longer one could be a fuller writing of:
- * one word, and one specific enough that naming it names a thing.
- *
- * This is what makes a partial name resolvable rather than merely short. "Pike"
- * is the same person as "Christa Pike", and resolving it needs to know that
- * "Pike" could be the end of a name at all. "Bridge", "University" and "County"
- * could be the end of thousands, so matching one of them onto whichever fuller
- * name happens to exist is not a resolution but a coincidence — which is why the
- * same test as {@link namesNothing} answers it: what a word cannot name on its own
- * it cannot be half of either.
- */
-export function isPartialName(key: string): boolean {
-  if (key.length < MIN_PARTIAL_NAME_CHARS || key.includes(' ')) return false;
-  return !namesNothingUnder(key) && !NOISE_WORDS.has(key);
-}
-
-/**
- * Whether `longer` is the whole name of the thing `shorter` is a short form of.
- *
- * Two conditions, and both of them are load-bearing. The shorter name has to be
- * the **end** of the longer one rather than its beginning, or "Pike" would reach
- * "Pike Hinson" and every place name ending in a common word would be one Entity;
- * and the longer name has to be **a given name and a surname**, because that is
- * the shape an outlet shortens without saying what it shortened. "OpenAI" is a
- * name in its own right and appears at the end of "ChatGPT OpenAI" and "Pac Man
- * OpenAI", which are two names an Article happened to put side by side — resolving
- * "OpenAI" onto either would lose the most-mentioned Entity in the corpus, and
- * nothing in the spelling says it should be lost.
- *
- * Two words exactly: "Tennessee Christa Pike" carries "Christa Pike" and is not
- * the whole of anybody's name.
- */
-export function isFullerNameFor(longer: string, shorter: string): boolean {
-  if (longer.length <= shorter.length || !longer.endsWith(` ${shorter}`)) return false;
-  const words = longer.split(' ');
-  return words.length === 2 && GIVEN_NAMES.has(words[0] ?? '');
-}
-
-/**
- * The one of several stored names a partial name can be read as, or nothing.
- *
- * The **tightest** one, because a longer name is a headline's adjective in front
- * of it rather than a fuller writing of the short one. And only when there is
- * exactly one: "Martin" is `Jay Martin` or `Michel Martin`, both a given name and
- * a surname and both two words, and choosing between them is a guess dressed up as
- * a lookup. A partial with no fuller name keeps its own row rather than being
- * dissolved, and the next mention of the full name takes it over instead.
- *
- * Both callers — ingest and the boot-time reconciliation — decide it here rather
- * than each writing the choice out, because a boot that disagreed with ingest
- * would leave the stored shape depending on when the database was last started.
- */
-export function theOnlyFullerName(
-  candidates: readonly string[],
-  partial: string,
-): string | undefined {
-  const carries = candidates.filter((key) => isFullerNameFor(key, partial));
-  if (carries.length === 0) return undefined;
-  const shortest = Math.min(...carries.map((key) => key.split(' ').length));
-  const tightest = carries.filter((key) => key.split(' ').length === shortest);
-  return tightest.length === 1 ? tightest[0] : undefined;
-}
-
-/**
- * Whether a name is a name on its own account, whatever sentence it opens.
- *
- * A capitalised word at the head of a sentence is capitalised because that is
- * where a capital goes, and "Rainfall", "Then" and "New" are among the commonest
- * words in news prose. A name that carries capitals of its own — "IBM", "eBay",
- * "Elsa" — or that says what it is in its own form, as "Acme Corp" and "Bank of
- * England" do, has a reason to be capitalised that the sentence did not give it.
- */
 function namesItself(run: readonly Word[]): boolean {
   return run.some(
     (word) =>

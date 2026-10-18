@@ -38,6 +38,7 @@ import {
 import { createDatabase, type Db } from '../db/client.js';
 import { articles, sources, stories } from '../db/schema.js';
 import {
+  groundingFor,
   ENTITY_SIMILARITY_FLOOR,
   SEMANTIC_SIMILARITY_FLOOR,
   SHIPPED_MERGE_THRESHOLD,
@@ -46,20 +47,17 @@ import {
   formatGroupingRefusal,
   groupIntoClusters,
   refusedSets,
-  type GroundedEntity,
   type GroundedStory,
   type Grouping,
   type MergeThresholds,
 } from '../domain/cluster-grouping.js';
-import type { StoryEmbedding } from '../domain/embedding.js';
 import { clusterWindowStart } from '../domain/cluster-window.js';
-import { EMPTY_SIGNATURE, type StorySignature } from '../domain/story-signature.js';
+import { EMPTY_SIGNATURE } from '../domain/story-signature.js';
 import type { StoryId, Topic, TopicId } from '../domain/types.js';
 import { readRequiredString } from '../env.js';
 import { DrizzleArticleRepo } from '../repos/article-repo.js';
 import { DrizzleStoryRepo } from '../repos/story-repo.js';
 import { DrizzleTopicRepo } from '../repos/topic-repo.js';
-import { groundingByStoryInScope } from '../services/cluster-formation-service.js';
 import {
   corpusRefKey,
   DIFFERENT_EVENT_PAIRS,
@@ -88,7 +86,7 @@ async function main(): Promise<number> {
         windowStart: clusterWindowStart(now, topic.clusterWindowDays),
       });
       const storyIds = inWindow.map((story) => story.id);
-      const grounding = await groundingByStoryInScope(topic, inWindow, articleRepo);
+      const grounding = await groundingFor(topic, inWindow, articleRepo);
       reads.push({
         topicId: topic.id,
         // Named, because a corpus holding two models is refused per Topic and the
@@ -96,25 +94,10 @@ async function main(): Promise<number> {
         label: topic.title,
         storyIds,
         grounding,
-        // The signature each Story carries, which is the one it was formed from —
-        // the same reading `ClusterFormationService` groups on, read here so the
-        // gate measured is the gate that runs.
-        signatures: inWindow.map((story) => story.signature),
-        // The embedding each Story carries, or none. Read off the same Story rather
-        // than recomputed, so what is measured is what is stored; a Story holding
-        // none is read as holding none rather than as a vector of zeroes.
-        embeddings: inWindow.map((story) => story.embedding),
-        // Both readings keyed by Story, in one map, so the ceilings and the
-        // margins cannot be handed one Story's Entities and another's signature.
+        // Both readings keyed by Story, for the ceilings and the margins — each
+        // entry is the GroundedStory groundingFor already built for that Story.
         readingByStoryId: new Map(
-          storyIds.map((id, index) => [
-            id,
-            {
-              entities: grounding[index]!,
-              signature: inWindow[index]!.signature,
-              embedding: inWindow[index]!.embedding,
-            },
-          ]),
+          storyIds.map((id, index) => [id, grounding[index]!]),
         ),
       });
     }
@@ -123,7 +106,7 @@ async function main(): Promise<number> {
     // Asked once over the corpus rather than inside the sweep, so a mixed set stops
     // the run before twenty-seven groupings of it rather than after the first.
     const refusals = refusedSets(
-      reads.map((read) => ({ label: read.label, embeddings: read.embeddings })),
+      reads.map((read) => ({ label: read.label, embeddings: read.grounding.map((g) => g.embedding) })),
     );
     if (refusals.length > 0) {
       process.stdout.write(formatGroupingRefusal(refusals, { corpus }));
@@ -238,11 +221,7 @@ function groupTopic(
 ): Grouping<StoryId> {
   return groupIntoClusters(
     read.storyIds,
-    (_storyId, index) => ({
-      entities: read.grounding[index]!,
-      signature: read.signatures[index]!,
-      embedding: read.embeddings[index]!,
-    }),
+    (_storyId, index) => read.grounding[index]!,
     thresholds === undefined ? {} : { thresholds },
   );
 }
@@ -253,11 +232,8 @@ interface TopicRead {
   /** What a refusal names this set by, which is a Topic's own name. */
   readonly label: string;
   readonly storyIds: readonly StoryId[];
-  readonly grounding: readonly (readonly GroundedEntity[])[];
-  /** The signature each Story carries, by the same position as the grounding. */
-  readonly signatures: readonly StorySignature[];
-  /** The embedding each Story carries, or none, by the same position again. */
-  readonly embeddings: readonly (StoryEmbedding | null)[];
+  /** One GroundedStory per Story, in the same order as storyIds. */
+  readonly grounding: readonly GroundedStory[];
   /**
    * All three readings keyed by Story, for the ceilings and the margins.
    *
