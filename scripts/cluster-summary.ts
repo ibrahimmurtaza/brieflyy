@@ -55,8 +55,12 @@ import { DrizzleStoryRepo } from '../src/repos/story-repo.js';
 import { DrizzleTopicRepo } from '../src/repos/topic-repo.js';
 import {
   clusterSummaryOf,
-  groundingByStoryInScope,
   MAX_BULLET_POINTS,
+} from '../src/domain/cluster-summary.js';
+import {
+  groundingFor,
+} from '../src/domain/cluster-grouping.js';
+import {
   rankArticles,
 } from '../src/services/cluster-formation-service.js';
 
@@ -124,12 +128,8 @@ async function measureTopic(
     windowStart: clusterWindowStart(now, topic.clusterWindowDays),
   });
   if (stories.length === 0) return { measured: [], refusal: null };
-  const grounding = await groundingByStoryInScope(topic, stories, articleRepo);
-  const grouping = groupIntoClusters(stories, (_storyId, index) => ({
-    entities: grounding[index]!,
-    signature: stories[index]!.signature,
-    embedding: stories[index]!.embedding,
-  }));
+  const grounded = await groundingFor(topic, stories, articleRepo);
+  const grouping = groupIntoClusters(stories, (_storyId, index) => grounded[index]!);
   if (grouping.refusal !== null) {
     return { measured: null, refusal: { label: topic.title, models: grouping.refusal.models } };
   }

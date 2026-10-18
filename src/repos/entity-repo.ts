@@ -1,13 +1,9 @@
-import { eq, like } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 
 import type { Db } from '../db/client.js';
 import { entities, type EntityRow } from '../db/schema.js';
-import {
-  isFullerNameFor,
-  isPartialName,
-  theOnlyFullerName,
-  type ExtractedEntity,
-} from '../domain/entity-extraction.js';
+import { type ExtractedEntity } from '../domain/entity-extraction.js';
+import { resolveIdentity } from '../domain/entity-identity.js';
 import type { Entity, EntityId } from '../domain/types.js';
 
 function rowToEntity(row: EntityRow): Entity {
@@ -58,66 +54,57 @@ export class DrizzleEntityRepo implements EntityRepo {
     readonly entity: ExtractedEntity;
     readonly id: EntityId;
   }): Promise<Entity> {
-    const exact = await this.findByKey(entity.key);
-    if (exact) return exact;
+    const keys = await this.allKeys();
+    const resolution = resolveIdentity(entity.key, keys);
 
-    // A fuller name takes over the row a partial one already made, and a partial
-    // name resolves to the fuller one already stored. Both directions are here
-    // because the corpus could hold either order: a resolution that only worked
-    // one way round would leave the database holding two shapes for one person,
-    // and which of them a User was shown would depend on which outlet was polled
-    // first.
-    const partial = await this.findPartialNameOf(entity.key);
-    if (partial) return this.takeOver(partial, entity.key);
-    const fuller = await this.findFullerNameFor(entity.key);
-    if (fuller) return fuller;
-
-    await this.db
-      .insert(entities)
-      .values({
-        id,
-        canonicalName: entity.name,
-        canonicalKey: entity.key,
-        kind: entity.kind,
-      })
-      .onConflictDoNothing();
-    const resolved = await this.findByKey(entity.key);
-    if (!resolved) {
-      throw new Error(`EntityRepo: failed to upsert entity "${entity.name}"`);
+    switch (resolution.kind) {
+      case 'exact': {
+        const resolved = await this.findByKey(resolution.key);
+        if (!resolved) {
+          throw new Error(`EntityRepo: exact entity "${resolution.key}" not found`);
+        }
+        return resolved;
+      }
+      case 'takeover': {
+        const row = await this.findByKey(resolution.partialKey);
+        if (!row) {
+          throw new Error(
+            `EntityRepo: partial entity "${resolution.partialKey}" not found`,
+          );
+        }
+        return this.takeOver(row, resolution.key);
+      }
+      case 'fuller': {
+        const resolved = await this.findByKey(resolution.key);
+        if (!resolved) {
+          throw new Error(`EntityRepo: fuller entity "${resolution.key}" not found`);
+        }
+        return resolved;
+      }
+      case 'new': {
+        await this.db
+          .insert(entities)
+          .values({
+            id,
+            canonicalName: entity.name,
+            canonicalKey: resolution.key,
+            kind: entity.kind,
+          })
+          .onConflictDoNothing();
+        const resolved = await this.findByKey(resolution.key);
+        if (!resolved) {
+          throw new Error(`EntityRepo: failed to upsert entity "${entity.name}"`);
+        }
+        return resolved;
+      }
     }
-    return resolved;
   }
 
-  /**
-   * The row a name is the end of: the partial name already stored under the last
-   * word of this one.
-   *
-   * Only ever a person's full name, and only for the partial to take over rather
-   * than sit beside it: an Article that says "Christa Pike" is the same person as
-   * one that says "Pike", and the two have to be one row or they are two Entities
-   * that never overlap. The partial's own row is keyed after the takeover rather
-   * than given a row of its own, so there is nothing to reconcile on the next
-   * boot.
-   */
-  private async findPartialNameOf(key: string): Promise<EntityRow | null> {
-    const last = key.split(' ').pop() ?? '';
-    if (last === key || !isPartialName(last)) return null;
-    if (!isFullerNameFor(key, last)) return null;
-    return (await this.rowsKeyedOn(last))[0] ?? null;
-  }
-
-  /**
-   * The row a name is the beginning of: the fuller name already stored under some
-   * key this one ends with.
-   */
-  private async findFullerNameFor(key: string): Promise<Entity | null> {
-    if (!isPartialName(key)) return null;
-    const rows = await this.rowsEndingOn(key);
-    const fuller = theOnlyFullerName(
-      rows.map((row) => row.canonicalKey),
-      key,
-    );
-    return fuller === undefined ? null : rowToEntity(rows.find((row) => row.canonicalKey === fuller)!);
+  private async allKeys(): Promise<readonly string[]> {
+    const rows = await this.db
+      .select({ canonicalKey: entities.canonicalKey })
+      .from(entities);
+    return rows.map((row) => row.canonicalKey);
   }
 
   private async rowsKeyedOn(key: string): Promise<readonly EntityRow[]> {
@@ -125,21 +112,6 @@ export class DrizzleEntityRepo implements EntityRepo {
       .select()
       .from(entities)
       .where(eq(entities.canonicalKey, key))) as readonly EntityRow[];
-  }
-
-  /**
-   * The rows keyed by a name that ends with this one on a word boundary.
-   *
-   * `LIKE` cannot anchor on a word boundary, so what it brings back is confirmed
-   * in {@link isFullerNameFor} rather than trusted: "Pike" must not reach "Pike
-   * Hinson" by matching the tail of it.
-   */
-  private async rowsEndingOn(key: string): Promise<readonly EntityRow[]> {
-    const rows = (await this.db
-      .select()
-      .from(entities)
-      .where(like(entities.canonicalKey, `% ${key}`))) as readonly EntityRow[];
-    return rows.filter((row) => row.canonicalKey.endsWith(` ${key}`));
   }
 
   private async findByKey(key: string): Promise<Entity | null> {
@@ -155,12 +127,12 @@ export class DrizzleEntityRepo implements EntityRepo {
    * reads, and replacing it with the longer spelling would rewrite what that
    * Article said for the sake of a comparison.
    */
-  private async takeOver(row: EntityRow, key: string): Promise<Entity> {
+  private async takeOver(entity: Entity, key: string): Promise<Entity> {
     await this.db
       .update(entities)
       .set({ canonicalKey: key })
-      .where(eq(entities.id, row.id));
-    return rowToEntity(row);
+      .where(eq(entities.id, entity.id));
+    return entity;
   }
 
   async getById(id: EntityId): Promise<Entity | null> {

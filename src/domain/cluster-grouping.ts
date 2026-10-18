@@ -44,7 +44,8 @@ import {
   type StoryEmbedding,
 } from './embedding.js';
 import { signatureSimilarity, type StorySignature } from './story-signature.js';
-import type { EntityId, EntityKind } from './types.js';
+import type { Article, EntityId, EntityKind, Story, Topic } from './types.js';
+import type { ArticleRepo } from '../repos/article-repo.js';
 
 /** An Entity as grouping sees it: which thing it is, and what kind of thing. */
 export interface GroundedEntity {
@@ -77,6 +78,59 @@ export interface GroundedStory {
   readonly entities: readonly GroundedEntity[];
   readonly signature: StorySignature;
   readonly embedding: StoryEmbedding | null;
+}
+
+/**
+ * Which Entities each Story carries, as the union over its Articles.
+ *
+ * A Story's Entities are the ones its Articles name, and an Article with none
+ * contributes nothing rather than an empty set that would overlap everything.
+ * The kind is carried through with the id because grouping weighs the two
+ * together.
+ */
+export function groundingOf(
+  perStory: readonly (readonly Article[])[],
+): readonly (readonly GroundedEntity[])[] {
+  return perStory.map((articles) => {
+    const grounding = new Map<EntityId, GroundedEntity>();
+    for (const article of articles) {
+      for (const entity of article.entities) {
+        grounding.set(entity.id, { id: entity.id, kind: entity.kind });
+      }
+    }
+    return [...grounding.values()];
+  });
+}
+
+/**
+ * Which Articles of each Story are in scope for a Topic, grounded into the
+ * Entities grouping reads.
+ *
+ * Reads each Story's Articles through the repo, keeps only the ones from a
+ * Source this Topic follows, unions their Entities per Story, and pairs each
+ * Story's signature and embedding with its Entities so `groupIntoClusters`
+ * receives one GroundedStory per Story in the same order it was given them.
+ *
+ * One assembly, beside the rule, so the service and the benchmark cross the
+ * same seam instead of each building "what's in scope" their own way.
+ */
+export async function groundingFor(
+  topic: Topic,
+  stories: readonly Story[],
+  articleRepo: ArticleRepo,
+): Promise<readonly GroundedStory[]> {
+  const perStory = await Promise.all(
+    stories.map(async (story) => {
+      const articles = await articleRepo.listByStory(story.id);
+      return articles.filter((a) => topic.sourceIds.includes(a.sourceId));
+    }),
+  );
+  const grounding = groundingOf(perStory);
+  return stories.map((story, index) => ({
+    entities: grounding[index]!,
+    signature: story.signature,
+    embedding: story.embedding,
+  }));
 }
 
 /**

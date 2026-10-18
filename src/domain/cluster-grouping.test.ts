@@ -12,6 +12,7 @@ import {
   describeThresholds,
   formatGroupingRefusal,
   groupIntoClusters,
+  groundingFor,
   inverseDocumentFrequencies,
   refusedSets,
   sharedEntityCount,
@@ -22,9 +23,10 @@ import {
   type MergeGate,
   type MergeThresholds,
 } from './cluster-grouping.js';
+import type { ArticleRepo } from '../repos/article-repo.js';
 import type { StoryEmbedding } from './embedding.js';
 import { EMPTY_SIGNATURE, type StorySignature } from './story-signature.js';
-import type { EntityId, EntityKind } from './types.js';
+import type { Article, EntityId, EntityKind, Story, Topic } from './types.js';
 
 let entityCount = 0;
 
@@ -972,5 +974,125 @@ describe('formatGroupingRefusal', () => {
     });
 
     expect(text.endsWith('\n')).toBe(true);
+  });
+});
+
+describe('groundingFor', () => {
+  const topic = {
+    id: 'topic-1',
+    sourceIds: ['src-a', 'src-b'],
+  } as unknown as Topic;
+
+  const storyA = {
+    id: 'story-a',
+    signature: { words: ['acme'], phrases: [] },
+    embedding: { model: 'test/model', values: [1, 0, 0, 0] },
+  } as unknown as Story;
+
+  const storyB = {
+    id: 'story-b',
+    signature: { words: ['foo'], phrases: [] },
+    embedding: null,
+  } as unknown as Story;
+
+  /** A repo that returns the articles a test names for each Story. */
+  function repo(articlesByStory: Map<string, readonly Article[]>): ArticleRepo {
+    return {
+      listByStory: async (storyId: string) => articlesByStory.get(storyId) ?? [],
+    } as unknown as ArticleRepo;
+  }
+
+  function article(input: {
+    readonly id: string;
+    readonly sourceId: string;
+    readonly entities: readonly { readonly id: string; readonly kind: string }[];
+  }): Article {
+    return {
+      id: input.id,
+      sourceId: input.sourceId,
+      externalId: input.id,
+      url: `https://example.com/${input.id}`,
+      title: 'A headline',
+      body: 'A body.',
+      publishedAt: new Date('2026-09-02T10:00:00Z'),
+      ingestedAt: new Date('2026-09-02T10:00:00Z'),
+      entities: input.entities as never,
+      signature: { words: [], phrases: [] },
+      storyId: 'story-a',
+    } as unknown as Article;
+  }
+
+  it('reads Articles per Story through the repo', async () => {
+    const articles = repo(new Map([
+      ['story-a', [article({ id: 'a-1', sourceId: 'src-a', entities: [{ id: 'e-1', kind: 'org' }] })]],
+      ['story-b', [article({ id: 'b-1', sourceId: 'src-a', entities: [{ id: 'e-2', kind: 'org' }] })]],
+    ]));
+
+    const grounded = await groundingFor(topic, [storyA, storyB], articles);
+
+    expect(grounded).toHaveLength(2);
+    expect(grounded[0]!.entities).toEqual([{ id: 'e-1', kind: 'org' }]);
+    expect(grounded[1]!.entities).toEqual([{ id: 'e-2', kind: 'org' }]);
+  });
+
+  it('keeps only Articles from Sources the Topic follows', async () => {
+    const articles = repo(new Map([
+      ['story-a', [
+        article({ id: 'a-1', sourceId: 'src-a', entities: [{ id: 'e-1', kind: 'org' }] }),
+        article({ id: 'a-2', sourceId: 'src-c', entities: [{ id: 'e-2', kind: 'org' }] }),
+      ]],
+    ]));
+
+    const grounded = await groundingFor(topic, [storyA], articles);
+
+    expect(grounded[0]!.entities).toEqual([{ id: 'e-1', kind: 'org' }]);
+  });
+
+  it('unions Entities per Story, deduped by id', async () => {
+    const articles = repo(new Map([
+      ['story-a', [
+        article({ id: 'a-1', sourceId: 'src-a', entities: [{ id: 'e-1', kind: 'org' }, { id: 'e-2', kind: 'org' }] }),
+        article({ id: 'a-2', sourceId: 'src-a', entities: [{ id: 'e-1', kind: 'org' }] }),
+      ]]
+    ]));
+
+    const grounded = await groundingFor(topic, [storyA], articles);
+
+    expect(grounded[0]!.entities).toEqual([{ id: 'e-1', kind: 'org' }, { id: 'e-2', kind: 'org' }]);
+  });
+
+  it('pairs each Story signature and embedding with its Entities', async () => {
+    const articles = repo(new Map([
+      ['story-a', [article({ id: 'a-1', sourceId: 'src-a', entities: [{ id: 'e-1', kind: 'org' }] })]],
+    ]));
+
+    const grounded = await groundingFor(topic, [storyA], articles);
+
+    expect(grounded[0]!.signature).toBe(storyA.signature);
+    expect(grounded[0]!.embedding).toBe(storyA.embedding);
+  });
+
+  it('returns Stories in the same order they were given', async () => {
+    const articles = repo(new Map([
+      ['story-a', [article({ id: 'a-1', sourceId: 'src-a', entities: [] })]],
+      ['story-b', [article({ id: 'b-1', sourceId: 'src-a', entities: [] })]],
+    ]));
+
+    const grounded = await groundingFor(topic, [storyA, storyB], articles);
+
+    expect(grounded[0]!.signature).toBe(storyA.signature);
+    expect(grounded[1]!.signature).toBe(storyB.signature);
+  });
+
+  it('returns nothing for a Story with no Articles', async () => {
+    const articles = repo(new Map([
+      ['story-a', []],
+    ]));
+
+    const grounded = await groundingFor(topic, [storyA], articles);
+
+    expect(grounded[0]!.entities).toEqual([]);
+    expect(grounded[0]!.signature).toBe(storyA.signature);
+    expect(grounded[0]!.embedding).toBe(storyA.embedding);
   });
 });

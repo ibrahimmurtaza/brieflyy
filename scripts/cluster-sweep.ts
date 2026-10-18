@@ -66,20 +66,18 @@ import {
   formatGroupingRefusal,
   groupIntoClusters,
   refusedSets,
-  type GroundedEntity,
   type GroundedStory,
   type MergeGate,
   type MergeThresholds,
 } from '../src/domain/cluster-grouping.js';
 import { clusterWindowStart } from '../src/domain/cluster-window.js';
-import type { StoryEmbedding } from '../src/domain/embedding.js';
-import { EMPTY_SIGNATURE, type StorySignature } from '../src/domain/story-signature.js';
+import { EMPTY_SIGNATURE } from '../src/domain/story-signature.js';
 import type { StoryId, TopicId } from '../src/domain/types.js';
 import { readRequiredString } from '../src/env.js';
 import { DrizzleArticleRepo } from '../src/repos/article-repo.js';
 import { DrizzleStoryRepo } from '../src/repos/story-repo.js';
 import { DrizzleTopicRepo } from '../src/repos/topic-repo.js';
-import { groundingByStoryInScope } from '../src/services/cluster-formation-service.js';
+import { groundingFor } from '../src/domain/cluster-grouping.js';
 import {
   corpusRefKey,
   DIFFERENT_EVENT_PAIRS,
@@ -90,7 +88,7 @@ import {
  * One Topic's Stories and how each reads, read once and grouped once per grid cell.
  *
  * The same shape `run-cluster-benchmark.ts` reads: the Entities come off
- * `groundingByStoryInScope`, so this measures the rule rather than a second reading of
+ * `groundingFor`, so this measures the rule rather than a second reading of
  * the corpus, and the signature and the embedding are the ones the Story carries.
  */
 interface TopicRead {
@@ -98,9 +96,7 @@ interface TopicRead {
   /** What a refusal names this set by, which is a Topic's own title. */
   readonly label: string;
   readonly storyIds: readonly StoryId[];
-  readonly grounding: readonly (readonly GroundedEntity[])[];
-  readonly signatures: readonly StorySignature[];
-  readonly embeddings: readonly (StoryEmbedding | null)[];
+  readonly grounding: readonly GroundedStory[];
   readonly readingByStoryId: ReadonlyMap<StoryId, GroundedStory>;
 }
 
@@ -233,22 +229,16 @@ async function main(): Promise<number> {
         windowStart: clusterWindowStart(now, topic.clusterWindowDays),
       });
       const storyIds = inWindow.map((story) => story.id);
-      const grounding = await groundingByStoryInScope(topic, inWindow, articleRepo);
+      const grounded = await groundingFor(topic, inWindow, articleRepo);
       reads.push({
         topicId: topic.id,
         label: topic.title,
         storyIds,
-        grounding,
-        signatures: inWindow.map((story) => story.signature),
-        embeddings: inWindow.map((story) => story.embedding),
+        grounding: grounded,
         readingByStoryId: new Map(
           storyIds.map((id, index) => [
             id,
-            {
-              entities: grounding[index]!,
-              signature: inWindow[index]!.signature,
-              embedding: inWindow[index]!.embedding,
-            },
+            grounded[index]!,
           ]),
         ),
       });
@@ -263,7 +253,7 @@ async function main(): Promise<number> {
     // embeddings came from more than one model cannot be swept, because the floor
     // being swept has nothing to judge on the pairs between two models.
     const refusals = refusedSets(
-      reads.map((read) => ({ label: read.label, embeddings: read.embeddings })),
+      reads.map((read) => ({ label: read.label, embeddings: read.grounding.map((g) => g.embedding) })),
     );
     if (refusals.length > 0) {
       process.stdout.write(
@@ -296,11 +286,7 @@ async function main(): Promise<number> {
         clusters: clustersOf(
           groupIntoClusters(
             read.storyIds,
-            (_storyId, index) => ({
-              entities: read.grounding[index]!,
-              signature: read.signatures[index]!,
-              embedding: read.embeddings[index]!,
-            }),
+            (_storyId, index) => read.grounding[index]!,
             { thresholds, gate },
           ),
         ),
