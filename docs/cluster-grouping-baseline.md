@@ -282,17 +282,19 @@ ADR-0038's, for the same floor on the same corpus before the backfill:
 | 0.90 | 0.0% | 95.9% | 3 | 100.0% | not swept — ADR-0038's axis stops at 0.85 |
 
 **The shipped value is no longer demonstrably the top of its plateau, and that is a
-finding rather than a rounding.** The axis runs 0.40 and 0.45 with nothing between
-them, so what it can say is narrow — but it says it plainly: **at 0.40 the rule
-reaches the same 48.3% of the recall set at 81.6% precision rather than 79.6%**, two
-points better, and the price is one more Story in the largest Cluster (5 against 4,
-still inside the grid's bound of 5). The plateau ADR-0038 chose 0.45 from ran 0.42
-to 0.45, on cells this command does not sweep, so that plateau is not re-measured
-here and on the one comparison the sweep does make, 0.45 sits on the wrong side of
-the step. **Nothing in this file moves the constant** — a floor is a decision and
-this is a measurement about one — but anyone deciding whether to move it should
-know the floor now prices one step lower than the one that shipped, and that the
-case for keeping it rests on a hand-made run no command reproduces.
+finding rather than a rounding.** The axis now carries 0.40, 0.41, 0.42, 0.43, 0.44
+and 0.45, so the cells between the two are no longer hidden behind a table the axis
+cannot touch — but it says it plainly: **at 0.40 the rule reaches the same 48.3%
+of the recall set at 81.6% precision rather than 79.6%**, two points better, and the
+price is one more Story in the largest Cluster (5 against 4, still inside the grid's
+bound of 5). The plateau ADR-0038 chose 0.45 from ran 0.42 to 0.45; the command now
+sweeps 0.42 through 0.44 beside the shipped 0.45, so those cells are fillable by
+`pnpm cluster:sweep` rather than by hand — but no backfilled corpus is to hand to
+re-run them against, so this file records no new numbers for them and leaves the
+grafted column as ADR-0038's. **Nothing in this file moves the constant** — a floor
+is a decision and this is a measurement about one — but anyone deciding whether to
+move it should know the floor now prices one step lower than the one that shipped,
+and that the case for keeping it rests on a hand-made run no command reproduces.
 
 **Which floor turns each family away, now that the third one can.** The sweep
 prints that partition too, and its columns are not zero here — the empty version
