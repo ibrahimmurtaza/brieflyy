@@ -127,6 +127,10 @@ const SIGNATURE_FLOORS = [0.02, 0.03, 0.04, 0.05, 0.06, 0.08];
  */
 const SEMANTIC_FLOORS = [
   0.4,
+  0.41,
+  0.42,
+  0.43,
+  0.44,
   SEMANTIC_SIMILARITY_FLOOR,
   0.5,
   0.6,
