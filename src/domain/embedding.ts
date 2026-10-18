@@ -230,6 +230,8 @@ export function embeddingSimilarity(
 export interface MixedEmbeddingSet {
   /** Every model found in the set, sorted. Two is what makes it a refusal. */
   readonly models: readonly string[];
+  /** Every width found in the set, sorted. Two is what makes it a refusal. */
+  readonly widths: readonly number[];
 }
 
 /**
@@ -252,7 +254,16 @@ export interface MixedEmbeddingSet {
  * rather than one, so a check that asked "is there exactly one?" would refuse the
  * corpus that has never been measured and take it from grouping to not grouping in
  * one change. `null` here means "nothing to refuse", and it is the answer for both
- * the empty set and the consistent one.
+ * the empty set and the consistent one — and for one model at one width, which is
+ * the same consistency stated at the width half of the rule.
+ *
+ * **One model at more than one width is a refusal.** The name the provider is
+ * asked for is an intention, not a fact of what produced the answer: a model that
+ * changed its output size between two calls — or a name routed to a different
+ * vendor — returns vectors of a different width under the same name. Every cosine
+ * is still a number, so nothing pairwise notices, which is precisely the failure
+ * ADR-0040 exists to end; the set-level check reads the widths the pair-level one
+ * already does and refuses before any pair is scored.
  *
  * The name is read off each vector rather than off configuration, which is the
  * reason ADR-0037 stores it: `OPENROUTER_EMBEDDING_MODEL` says what the next Story
@@ -263,9 +274,16 @@ export function mixedEmbeddingSet(
   embeddings: readonly (StoryEmbedding | null)[],
 ): MixedEmbeddingSet | null {
   const models = new Set<string>();
+  const widths = new Set<number>();
   for (const embedding of embeddings) {
-    if (embedding !== null) models.add(embedding.model);
+    if (embedding !== null) {
+      models.add(embedding.model);
+      widths.add(embedding.values.length);
+    }
   }
-  if (models.size < 2) return null;
-  return { models: [...models].sort() };
+  if (models.size < 2 && widths.size < 2) return null;
+  return {
+    models: [...models].sort(),
+    widths: [...widths].sort((width, other) => width - other),
+  };
 }

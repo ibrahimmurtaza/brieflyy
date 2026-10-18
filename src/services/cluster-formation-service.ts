@@ -85,6 +85,8 @@ export interface RefusedTopic {
   readonly topicId: TopicId;
   /** Every model found in its Stories' embeddings, sorted. */
   readonly models: readonly string[];
+  /** Every width found in its Stories' embeddings, sorted. */
+  readonly widths: readonly number[];
 }
 
 export interface ClusterFormationServiceDeps {
@@ -180,7 +182,11 @@ export class ClusterFormationService {
 
     const grouping = await this.groupStories(topic, stories);
     if (grouping.refusal !== null) {
-      return { clusters: [], archived: 0, refusal: { topicId: topic.id, models: grouping.refusal.models } };
+      return {
+        clusters: [],
+        archived: 0,
+        refusal: { topicId: topic.id, models: grouping.refusal.models, widths: grouping.refusal.widths },
+      };
     }
     const groups = grouping.clusters;
 

@@ -195,4 +195,58 @@ describe('mixedEmbeddingSet', () => {
       mixedEmbeddingSet([of('vendor/a-1'), of('vendor/b-2'), of('vendor/a-1'), null])?.models,
     ).toEqual(['vendor/a-1', 'vendor/b-2']);
   });
+
+  const wide = (model: string, width: number): StoryEmbedding => ({
+    model,
+    values: Array.from({ length: width }, () => 0),
+  });
+
+  it('refuses one model held at two widths, and names both the model and the widths', () => {
+    // The door ADR-0040 closes at model level re-opens at width level: a model that
+    // changed its output size between two calls — or a name routed to a different
+    // vendor — returns vectors of a different width under the same name. Every
+    // cosine is still a number, so nothing pairwise notices; the set-level check
+    // reads the widths and refuses before any pair is scored.
+    const refusal = mixedEmbeddingSet([wide('one', 4), wide('one', 5)]);
+    expect(refusal).not.toBeNull();
+    expect(refusal!.models).toEqual(['one']);
+    expect(refusal!.widths).toEqual([4, 5]);
+  });
+
+  it('refuses two models at two widths with the same refusal, not a second one beside it', () => {
+    // The width check is the same refusal taken one door wider: two models is still
+    // one refusal carrying every model and every width the set was found to hold,
+    // and nothing about the two-model case changes apart from the widths it names.
+    const refusal = mixedEmbeddingSet([wide('vendor/a-1', 4), wide('vendor/b-2', 5)]);
+    expect(refusal).not.toBeNull();
+    expect(refusal!.models).toEqual(['vendor/a-1', 'vendor/b-2']);
+    expect(refusal!.widths).toEqual([4, 5]);
+  });
+
+  it('still refuses two models at one width exactly as before', () => {
+    // Nothing old stops refusing: two models sharing one width is still a refusal,
+    // now naming the one width it holds beside the two models.
+    const refusal = mixedEmbeddingSet([
+      wide('vendor/a-1', 4),
+      wide('vendor/b-2', 4),
+      wide('vendor/a-1', 4),
+    ]);
+    expect(refusal).not.toBeNull();
+    expect(refusal!.models).toEqual(['vendor/a-1', 'vendor/b-2']);
+    expect(refusal!.widths).toEqual([4]);
+  });
+
+  it('reads one model at one width exactly as before, however many Stories carry it', () => {
+    // Zero-width refusal surface where there is none: one model at one width is
+    // the consistent set, and nothing about it is newly refused.
+    expect(mixedEmbeddingSet([wide('one', 4), wide('one', 4), null])).toBeNull();
+    expect(mixedEmbeddingSet([wide('one', 4)])).toBeNull();
+  });
+
+  it('reads a set carrying no embedding exactly as before', () => {
+    // Zero models rather than one, and widths only exist beside vectors: a set of
+    // absences holds nothing to refuse.
+    expect(mixedEmbeddingSet([null, null, null])).toBeNull();
+    expect(mixedEmbeddingSet([])).toBeNull();
+  });
 });

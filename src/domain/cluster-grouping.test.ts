@@ -782,6 +782,23 @@ describe('the semantic floor', () => {
     expect(grouping.refusal?.models).toEqual(['vendor/a-1', 'vendor/b-2']);
   });
 
+  it('refuses one model held at two widths before any pair is scored', () => {
+    // The width door: every cosine in this set is still a number and the two pairs
+    // that share a width still score, but the set is refused outright because the
+    // model's name no longer says one width. The refusal names the model and both
+    // widths, and no pair is judged at all.
+    const wide = (width: number): StoryEmbedding => ({ model: 'one', values: Array.from({ length: width }, () => 0) });
+    const grouping = groupingOf([
+      reading([entity()], SAME_TEXT, wide(4)),
+      reading([entity()], SAME_TEXT, wide(5)),
+    ]);
+
+    expect(grouping.clusters).toBeNull();
+    expect(grouping.refusal).not.toBeNull();
+    expect(grouping.refusal!.models).toEqual(['one']);
+    expect(grouping.refusal!.widths).toEqual([4, 5]);
+  });
+
   it('reports nothing about a set carrying no embedding, and groups it as it did before', () => {
     // The other half of the same rule, and the one that decides where the check is
     // allowed to live. "No models at all" is a set holding zero models rather than
@@ -922,7 +939,18 @@ describe('refusedSets', () => {
     ]);
 
     expect(refusals).toEqual([
-      { label: 'ai-regulation', models: ['vendor/a-1', 'vendor/b-2'] },
+      { label: 'ai-regulation', models: ['vendor/a-1', 'vendor/b-2'], widths: [4] },
+    ]);
+  });
+
+  it('refuses one model held at two widths through the corpus-level read', () => {
+    const of = (model: string, width: number): StoryEmbedding => ({ model, values: Array.from({ length: width }, () => 0) });
+    const refusals = refusedSets([
+      { label: 'shipping', embeddings: [of('vendor/c-3', 4), of('vendor/c-3', 5)] },
+    ]);
+
+    expect(refusals).toEqual([
+      { label: 'shipping', models: ['vendor/c-3'], widths: [4, 5] },
     ]);
   });
 
@@ -943,16 +971,26 @@ describe('formatGroupingRefusal', () => {
     // they are — so a line each, not a count of how many there were.
     const text = formatGroupingRefusal(
       [
-        { label: 'fusion-energy', models: ['vendor/a-1', 'vendor/b-2'] },
-        { label: 'ai-regulation', models: ['vendor/a-1', 'vendor/c-3'] },
+        { label: 'fusion-energy', models: ['vendor/a-1', 'vendor/b-2'], widths: [4, 4] },
+        { label: 'ai-regulation', models: ['vendor/a-1', 'vendor/c-3'], widths: [4] },
       ],
       { corpus: '12 topics, window ending now' },
     );
 
-    expect(text).toContain('  set       fusion-energy  vendor/a-1, vendor/b-2');
-    expect(text).toContain('  set       ai-regulation  vendor/a-1, vendor/c-3');
+    expect(text).toContain('  set       fusion-energy  vendor/a-1, vendor/b-2  4, 4');
+    expect(text).toContain('  set       ai-regulation  vendor/a-1, vendor/c-3  4');
     expect(text).toContain('12 topics, window ending now');
     expect(text).toContain('pnpm cluster:backfill');
+  });
+
+  it('names one model beside every width it was found to hold', () => {
+    const text = formatGroupingRefusal(
+      [{ label: 'shipping', models: ['vendor/c-3'], widths: [4, 5] }],
+      { corpus: 'one topic' },
+    );
+
+    expect(text).toContain('  set       shipping  vendor/c-3  4, 5');
+    expect(text).toContain('one model at more than one width');
   });
 
   it('says a benchmark over this corpus would mean nothing rather than print one', () => {
@@ -960,7 +998,7 @@ describe('formatGroupingRefusal', () => {
     // would have printed is not obviously worthless: every cosine in the corpus is
     // still a number, and the only symptom is a benchmark that looks merely
     // disappointing.
-    const text = formatGroupingRefusal([{ label: 'one topic', models: ['a', 'b'] }], {
+    const text = formatGroupingRefusal([{ label: 'one topic', models: ['a', 'b'], widths: [4] }], {
       corpus: 'one topic',
     });
 
@@ -969,7 +1007,7 @@ describe('formatGroupingRefusal', () => {
   });
 
   it('ends in a newline, because every other line this repository prints does', () => {
-    const text = formatGroupingRefusal([{ label: 'one topic', models: ['a', 'b'] }], {
+    const text = formatGroupingRefusal([{ label: 'one topic', models: ['a', 'b'], widths: [4] }], {
       corpus: 'one topic',
     });
 

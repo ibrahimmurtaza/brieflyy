@@ -452,7 +452,7 @@ export function refusedSets(sets: readonly EmbeddingSet[]): readonly RefusedSet[
   const refused: RefusedSet[] = [];
   for (const set of sets) {
     const mixed = mixedEmbeddingSet(set.embeddings);
-    if (mixed !== null) refused.push({ label: set.label, models: mixed.models });
+    if (mixed !== null) refused.push({ label: set.label, models: mixed.models, widths: mixed.widths });
   }
   return refused;
 }
@@ -469,6 +469,8 @@ export interface RefusedSet {
   readonly label: string;
   /** Every model found in it, sorted. */
   readonly models: readonly string[];
+  /** Every width found in it, sorted. */
+  readonly widths: readonly number[];
 }
 
 /**
@@ -496,8 +498,8 @@ export function formatGroupingRefusal(
   const lines = [
     'cluster grouping refused',
     `  corpus    ${context.corpus}`,
-    ...refusals.map((refusal) => `  set       ${refusal.label}  ${refusal.models.join(', ')}`),
-    '  why       a set whose embeddings came from more than one model has cosines between them that mean nothing, so no report is printed',
+    ...refusals.map((refusal) => `  set       ${refusal.label}  ${refusal.models.join(', ')}  ${refusal.widths.join(', ')}`),
+    '  why       a set whose embeddings came from more than one model, or one model at more than one width, has cosines between them that mean nothing, so no report is printed',
     '  fix       recompute the corpus\'s embeddings with one model; pnpm cluster:backfill embeds only the Stories carrying none and never replaces a vector that is there',
   ];
   return `${lines.join('\n')}\n`;
