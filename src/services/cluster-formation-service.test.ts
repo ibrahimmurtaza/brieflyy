@@ -539,7 +539,7 @@ describe('ClusterFormationService', () => {
     expect(clusters).toEqual([]);
     expect(await h.clusterRepo.listByTopicId('topic-1')).toHaveLength(0);
     expect(report.refused).toEqual([
-      { topicId: 'topic-1', models: ['test/model', 'test/other-model'] },
+      { topicId: 'topic-1', models: ['test/model', 'test/other-model'], widths: [4] },
     ]);
   });
 

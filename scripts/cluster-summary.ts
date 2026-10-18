@@ -131,7 +131,14 @@ async function measureTopic(
   const grounded = await groundingFor(topic, stories, articleRepo);
   const grouping = groupIntoClusters(stories, (_storyId, index) => grounded[index]!);
   if (grouping.refusal !== null) {
-    return { measured: null, refusal: { label: topic.title, models: grouping.refusal.models } };
+    return {
+      measured: null,
+      refusal: {
+        label: topic.title,
+        models: grouping.refusal.models,
+        widths: grouping.refusal.widths,
+      },
+    };
   }
 
   const measured: Measured[] = [];
