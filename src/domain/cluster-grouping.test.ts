@@ -1240,4 +1240,84 @@ describe('groundingFor', () => {
     expect(grounded[0]!.signature).toBe(storyA.signature);
     expect(grounded[0]!.embedding).toBe(storyA.embedding);
   });
+
+  describe('the gate as the walk is priced', () => {
+    /**
+     * Group these readings while observing every pair the gate is asked of, and
+     * whether the semantic floor was priced for it.
+     */
+    function observed(
+      readings: readonly GroundedStory[],
+      gate: MergeGate = SHIPPED_MERGE_GATE,
+    ): { readonly walkthrough: number; readonly floorPairs: number } {
+      let walkthrough = 0;
+      let floorPairs = 0;
+      groupIntoClusters(
+        readings.map((_, index) => index),
+        (_, index) => readings[index]!,
+        { gate, onGate: (_pair, semanticPriced) => {
+          walkthrough += 1;
+          if (semanticPriced) floorPairs += 1;
+        } },
+      );
+      return { walkthrough, floorPairs };
+    }
+
+    it('counts every pair the gate walks, candidate enumeration and linkage re-asks alike', () => {
+      const shared = entity();
+      const readings = [
+        reading([shared], SAME_TEXT, SAME_MEANING),
+        reading([shared], SAME_TEXT, SAME_MEANING),
+      ];
+      // One candidate pair, re-asked once when the two Stories merge: two gate steps.
+      expect(observed(readings, 'both').walkthrough).toBe(2);
+    });
+
+    it('prices the semantic floor only where both cheap floors clear, under the conjunction', () => {
+      const shared = entity();
+      const priced = observed([
+        reading([shared], SAME_TEXT, SAME_MEANING),
+        reading([shared], SAME_TEXT, SAME_MEANING),
+      ], 'both');
+      expect(priced.walkthrough).toBe(2);
+      expect(priced.floorPairs).toBe(2);
+
+      const refused = observed([
+        reading([entity()], SAME_TEXT, SAME_MEANING),
+        reading([entity()], SAME_TEXT, SAME_MEANING),
+      ], 'both');
+      // Disjoint Entities: the Entity floor refuses before the semantic floor is read.
+      expect(refused.walkthrough).toBe(1);
+      expect(refused.floorPairs).toBe(0);
+    });
+
+    it('prices the semantic floor only where both cheap floors fail, under the wider gate', () => {
+      const shared = entity();
+      const admittedCheap = observed([
+        reading([shared], SAME_TEXT, SAME_MEANING),
+        reading([shared], SAME_TEXT, SAME_MEANING),
+      ], 'either');
+      expect(admittedCheap.walkthrough).toBe(2);
+      expect(admittedCheap.floorPairs).toBe(0);
+
+      const priced = observed([
+        reading([entity()], text('alpha', 'beta'), SAME_MEANING),
+        reading([entity()], text('gamma', 'delta'), SAME_MEANING),
+      ], 'either');
+      // Disjoint Entities and unlike signatures: both cheap floors fail, so the
+      // semantic floor is read and admits the pair on meaning alone.
+      expect(priced.walkthrough).toBe(2);
+      expect(priced.floorPairs).toBe(2);
+    });
+
+    it('leaves the semantic floor unpriced where either Story carries no embedding', () => {
+      const shared = entity();
+      const unembedded = observed([
+        reading([shared], SAME_TEXT, SAME_MEANING),
+        reading([shared], SAME_TEXT, null),
+      ], 'both');
+      expect(unembedded.walkthrough).toBe(2);
+      expect(unembedded.floorPairs).toBe(0);
+    });
+  });
 });

@@ -650,7 +650,18 @@ export function similarityBetween(
 export function groupIntoClusters<T>(
   items: readonly T[],
   readOf: (item: T, index: number) => GroundedStory,
-  options: { readonly thresholds?: MergeThresholds; readonly gate?: MergeGate } = {},
+  options: {
+    readonly thresholds?: MergeThresholds;
+    readonly gate?: MergeGate;
+    /**
+     * Observed once for every pair the gate is asked of — in the candidate walk
+     * and again for every member pair the linkage re-asks — with whether the
+     * semantic floor was priced for that pair. A pair answered without taking a
+     * floor score is one the embedding never read, which is the shot at
+     * pruning a reader can see.
+     */
+    readonly onGate?: (pair: { readonly i: number; readonly j: number }, semanticPriced: boolean) => void;
+  } = {},
 ): Grouping<T> {
   const thresholds = options.thresholds ?? SHIPPED_MERGE_THRESHOLD;
   const gate = options.gate ?? SHIPPED_MERGE_GATE;
@@ -720,13 +731,23 @@ export function groupIntoClusters<T>(
     const clearsSignature = signature >= thresholds.signature;
 
     let semantic: number | null;
+    let semanticPriced = false;
     if (gate === 'both') {
-      if (!clearsEntity || !clearsSignature) return false;
+      if (!clearsEntity || !clearsSignature) {
+        options.onGate?.({ i, j }, false);
+        return false;
+      }
       semantic = semanticScoreOf(i, j);
+      semanticPriced = semantic !== null;
     } else {
-      if (clearsEntity || clearsSignature) return true;
+      if (clearsEntity || clearsSignature) {
+        options.onGate?.({ i, j }, false);
+        return true;
+      }
       semantic = semanticScoreOf(i, j);
+      semanticPriced = semantic !== null;
     }
+    options.onGate?.({ i, j }, semanticPriced);
     return clearsMergeGate({ entity, signature, semantic, thresholds, gate });
   };
 
