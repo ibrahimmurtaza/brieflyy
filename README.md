@@ -75,6 +75,7 @@ pnpm cluster:benchmark   # score Cluster grouping against the labelled pairs, ov
 pnpm cluster:sweep       # the same corpus at every pair of floors on a grid and under both gates
 pnpm cluster:velocity    # the Articles-a-day distribution the Active threshold is read from
 pnpm cluster:summary     # how much of a Cluster's bullets restate the Cluster above them
+pnpm cluster:price       # what one cycle of grouping costs, per Topic, over a corpus
 pnpm cluster:backfill    # embed the Stories a corpus held before anything carried one
 ```
 
@@ -182,6 +183,15 @@ prices the change at 470 of 726 Clusters carrying no bullets at all. A report re
 its own copy of the rule would carry on printing a clean number the day the rule
 changed and nobody changed the report. It is not in `pnpm verify` for the same reason
 `pnpm cluster:benchmark` is not: the numbers are a claim about a real corpus.
+
+`pnpm cluster:price` measures what one cycle of grouping costs, per Topic, over a real
+corpus. It forms every live Topic's Clusters with `groupIntoClusters` — the same
+function `ClusterFormationService` calls — and prices the pass: per Topic, Stories in
+the window, pairs the gate walked, floor-pairs the pass actually took, and wall-clock;
+and the same totals for the corpus. The instant it groups over is the corpus's own
+last sighting rather than the wall clock, so two runs diff against each other when the
+corpus has not been polled since the run before. It takes the database as an argument
+the way `pnpm cluster:summary` does.
 
 `pnpm cluster:backfill` is the one command here that writes. Every Story already in
 a database was formed before anything carried an embedding (ADR-0037), so it carries
