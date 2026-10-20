@@ -336,6 +336,7 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     articleRepo,
     clusterRepo,
     topicRepo,
+    db: opts.db,
     clock,
   });
 

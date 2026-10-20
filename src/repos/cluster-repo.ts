@@ -93,7 +93,7 @@ export interface ClusterRepo {
    * sit in more Clusters than its Topic had and the same reporting to be listed
    * under several of them.
    */
-  insert(cluster: Cluster, storyIds?: readonly StoryId[]): Promise<void>;
+  insert(cluster: Cluster, storyIds?: readonly StoryId[], tx?: Db): void;
   /**
    * Archive every Cluster of a Topic that is not in `keepIds`, and report how
    * many changed. A Cluster whose Stories have all aged out of the window stops
@@ -104,7 +104,8 @@ export interface ClusterRepo {
     topicId: string,
     keepIds: readonly ClusterId[],
     at: Date,
-  ): Promise<number>;
+    tx?: Db,
+  ): number;
 }
 
 function rowToCluster(row: ClusterRow): Cluster {
@@ -284,7 +285,7 @@ export class DrizzleClusterRepo implements ClusterRepo {
     return out;
   }
 
-  async insert(cluster: Cluster, storyIds: readonly StoryId[] = []): Promise<void> {
+  insert(cluster: Cluster, storyIds: readonly StoryId[] = [], tx: Db = this.db): void {
     const values = {
       id: cluster.id,
       topicId: cluster.topicId,
@@ -298,8 +299,7 @@ export class DrizzleClusterRepo implements ClusterRepo {
       sourceIds: cluster.sourceIds.join(','),
       state: cluster.state ?? 'active',
     };
-    await this.db
-      .insert(clusters)
+    tx.insert(clusters)
       .values(values)
       .onConflictDoUpdate({
         target: clusters.id,
@@ -313,10 +313,14 @@ export class DrizzleClusterRepo implements ClusterRepo {
           sourceIds: values.sourceIds,
           state: values.state,
         },
-      });
-    const held = await this.listStoryIdsByClusterId(cluster.id);
-    await this.db
-      .delete(clusterStories)
+      })
+      .run();
+    const held = tx
+      .select({ storyId: clusterStories.storyId })
+      .from(clusterStories)
+      .where(eq(clusterStories.clusterId, cluster.id))
+      .all() as { storyId: string }[];
+    tx.delete(clusterStories)
       .where(
         and(
           eq(clusterStories.clusterId, cluster.id),
@@ -326,14 +330,18 @@ export class DrizzleClusterRepo implements ClusterRepo {
             ? [notInArray(clusterStories.storyId, [...storyIds])]
             : []),
         ),
-      );
+      )
+      .run();
     for (const sid of storyIds) {
-      await this.db.insert(clusterStories).values({ clusterId: cluster.id, storyId: sid }).onConflictDoNothing();
+      tx.insert(clusterStories)
+        .values({ clusterId: cluster.id, storyId: sid })
+        .onConflictDoNothing()
+        .run();
     }
     // Both sides of the membership, because a Story that has just left this
     // Cluster is the one whose Retired state has to be written and no longer has a
     // row here to be written from.
-    await this.writeStateOfStories([...new Set([...held, ...storyIds])]);
+    this.writeStateOfStories([...new Set([...held.map((row) => row.storyId as StoryId), ...storyIds])], tx);
   }
 
   /**
@@ -347,13 +355,14 @@ export class DrizzleClusterRepo implements ClusterRepo {
    * is put away, which is what makes a Story leave Retired on its own when a
    * Cluster it is in is covered again.
    */
-  private async writeStateOfStoriesHeldBy(clusterIds: readonly ClusterId[]): Promise<void> {
+  private writeStateOfStoriesHeldBy(clusterIds: readonly ClusterId[], tx: Db = this.db): void {
     if (clusterIds.length === 0) return;
-    const rows = (await this.db
+    const rows = tx
       .selectDistinct({ storyId: clusterStories.storyId })
       .from(clusterStories)
-      .where(inArray(clusterStories.clusterId, [...clusterIds]))) as { storyId: string }[];
-    await this.writeStateOfStories(rows.map((row) => row.storyId as StoryId));
+      .where(inArray(clusterStories.clusterId, [...clusterIds]))
+      .all() as { storyId: string }[];
+    this.writeStateOfStories(rows.map((row) => row.storyId as StoryId), tx);
   }
 
   /**
@@ -371,26 +380,27 @@ export class DrizzleClusterRepo implements ClusterRepo {
    * Cluster it was in is named here directly, since the row that would have said so
    * is the one that was removed.
    */
-  private async writeStateOfStories(storyIds: readonly StoryId[]): Promise<void> {
+  private writeStateOfStories(storyIds: readonly StoryId[], tx: Db = this.db): void {
     if (storyIds.length === 0) return;
     const named = inArray(stories.id, [...storyIds]);
     const isActive = sql.raw(STORY_IS_ACTIVE);
-    await this.db
-      .update(stories)
+    tx.update(stories)
       .set({ state: 'archive' })
-      .where(and(named, sql`NOT ${isActive}`, ne(stories.state, 'archive')));
-    await this.db
-      .update(stories)
+      .where(and(named, sql`NOT ${isActive}`, ne(stories.state, 'archive')))
+      .run();
+    tx.update(stories)
       .set({ state: 'active' })
-      .where(and(named, isActive, ne(stories.state, 'active')));
+      .where(and(named, isActive, ne(stories.state, 'active')))
+      .run();
   }
 
-  async archiveExcluding(
+  archiveExcluding(
     topicId: string,
     keepIds: readonly ClusterId[],
     at: Date,
-  ): Promise<number> {
-    const stale = (await this.db
+    tx: Db = this.db,
+  ): number {
+    const stale = tx
       .select({ id: clusters.id })
       .from(clusters)
       .where(
@@ -401,21 +411,22 @@ export class DrizzleClusterRepo implements ClusterRepo {
           // `notInArray` with no values is a query with no parameters.
           ...(keepIds.length > 0 ? [notInArray(clusters.id, [...keepIds])] : []),
         ),
-      )) as { id: string }[];
+      )
+      .all() as { id: string }[];
     if (stale.length === 0) return 0;
-    await this.db
-      .update(clusters)
+    tx.update(clusters)
       .set({ state: 'archive', lastSeenAt: at })
       .where(
         and(
           eq(clusters.topicId, topicId),
           inArray(clusters.id, stale.map((r) => r.id)),
         ),
-      );
+      )
+      .run();
     // The Clusters are the fact the Stories' state is derived from, so it is
     // written here rather than by the caller: this is the one pass, and a second
     // path that archived a Cluster would be a second place to have remembered.
-    await this.writeStateOfStoriesHeldBy(stale.map((r) => r.id));
+    this.writeStateOfStoriesHeldBy(stale.map((r) => r.id), tx);
     return stale.length;
   }
 }
