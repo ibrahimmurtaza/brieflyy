@@ -190,6 +190,7 @@ export async function registerHarnessRoutes(
     articleRepo: new DrizzleArticleRepo(db),
     clusterRepo: new DrizzleClusterRepo(db),
     topicRepo,
+    db,
     clock: systemClock,
   });
   app.post<{ Body: { slug?: string } }>(

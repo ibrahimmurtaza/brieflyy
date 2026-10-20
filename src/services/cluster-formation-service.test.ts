@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createTestDb } from '../testing/test-db.js';
 import type { SqliteDriver } from '../db/client.js';
@@ -122,6 +122,7 @@ async function buildHarness(
       articleRepo,
       clusterRepo,
       topicRepo,
+      db,
       clock,
     }),
     clusterRepo,
@@ -1041,6 +1042,68 @@ describe('ClusterFormationService', () => {
     const clusters = await h.service.formClustersForTopic('topic-1');
 
     expect(clusters).toHaveLength(2);
+  });
+
+  it('rolls back the whole Topic when a write fails mid-pass', async () => {
+    const h = await buildHarness();
+    await givenStory(h, {
+      storyId: 'story-acme',
+      entities: ['acme', 'foo'],
+      body: BODY.acme,
+      hoursAgo: 2,
+    });
+    await givenStory(h, {
+      storyId: 'story-brandx',
+      entities: ['brandx', 'tinyco'],
+      body: BODY.brandx,
+      hoursAgo: 1,
+    });
+
+    // Two Clusters will form. Fail the second Cluster's upsert so the pass throws
+    // mid-way, after the first Cluster's writes have landed.
+    let insertCalls = 0;
+    vi.spyOn(h.clusterRepo, 'insert').mockImplementation(function () {
+      insertCalls += 1;
+      if (insertCalls === 2) throw new Error('boom');
+    });
+
+    await expect(h.service.formClustersForTopic('topic-1')).rejects.toThrow('boom');
+
+    // Everything the pass wrote is rolled back: no Clusters, no membership, and
+    // the Stories keep the state they had before the pass.
+    expect(await h.clusterRepo.listByTopicId('topic-1')).toEqual([]);
+    expect((await h.storyRepo.getById('story-acme' as StoryId))?.state).toBe('active');
+    expect((await h.storyRepo.getById('story-brandx' as StoryId))?.state).toBe('active');
+  });
+
+  it('heals at full speed on the next cycle after a failed pass', async () => {
+    const h = await buildHarness();
+    await givenStory(h, {
+      storyId: 'story-acme',
+      entities: ['acme', 'foo'],
+      body: BODY.acme,
+      hoursAgo: 2,
+    });
+    await givenStory(h, {
+      storyId: 'story-brandx',
+      entities: ['brandx', 'tinyco'],
+      body: BODY.brandx,
+      hoursAgo: 1,
+    });
+
+    // The first cycle throws mid-pass and rolls back.
+    vi.spyOn(h.clusterRepo, 'insert').mockImplementation(function () {
+      throw new Error('boom');
+    });
+    await expect(h.service.formClustersForTopic('topic-1')).rejects.toThrow('boom');
+    expect(await h.clusterRepo.listByTopicId('topic-1')).toEqual([]);
+
+    // The next cycle is the same transactional pass, so the healed state is also
+    // all-or-nothing and forms cleanly now the failure is gone.
+    vi.spyOn(h.clusterRepo, 'insert').mockRestore();
+    const clusters = await h.service.formClustersForTopic('topic-1');
+    expect(clusters).toHaveLength(2);
+    expect(await h.clusterRepo.listByTopicId('topic-1')).toHaveLength(2);
   });
 });
 

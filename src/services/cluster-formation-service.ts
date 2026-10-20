@@ -17,6 +17,7 @@ import type {
   Topic,
   TopicId,
 } from '../domain/types.js';
+import type { Db } from '../db/client.js';
 import type { ArticleRepo } from '../repos/article-repo.js';
 import type { ClusterRepo } from '../repos/cluster-repo.js';
 import type { StoryRepo } from '../repos/story-repo.js';
@@ -94,6 +95,7 @@ export interface ClusterFormationServiceDeps {
   readonly articleRepo: ArticleRepo;
   readonly clusterRepo: ClusterRepo;
   readonly topicRepo: TopicRepo;
+  readonly db: Db;
   readonly clock: Clock;
 }
 
@@ -196,22 +198,33 @@ export class ClusterFormationService {
       await this.deps.clusterRepo.listHeldByTopicId(topic.id),
     );
 
-    const clusters: Cluster[] = [];
+    // Finalize every Cluster (this reads its Articles, so it happens before the
+    // transaction: the read side stays outside, deliberately).
+    const prepared: { readonly cluster: Cluster; readonly storyIds: readonly StoryId[] }[] = [];
     for (const [index, group] of groups.entries()) {
-      const cluster = await this.finalizeCluster(topic, group, ids[index]!, now);
-      await this.deps.clusterRepo.insert(
-        cluster,
-        group.map((story) => story.id),
-      );
-      clusters.push(cluster);
+      prepared.push({
+        cluster: await this.finalizeCluster(topic, group, ids[index]!, now),
+        storyIds: group.map((story) => story.id),
+      });
     }
 
-    const archived = await this.deps.clusterRepo.archiveExcluding(
-      topic.id,
-      clusters.map((c) => c.id),
-      now,
-    );
-    return { clusters, archived, refusal: null };
+    // Everything one Topic's formation writes lands in one transaction: the
+    // upsert of each Cluster, its membership rows, both sides of the Story
+    // states, and the archive pass. A failure anywhere rolls the whole Topic
+    // back to the way it was before the pass.
+    let archived = 0;
+    this.deps.db.transaction((tx) => {
+      for (const { cluster, storyIds } of prepared) {
+        this.deps.clusterRepo.insert(cluster, storyIds, tx);
+      }
+      archived = this.deps.clusterRepo.archiveExcluding(
+        topic.id,
+        prepared.map(({ cluster }) => cluster.id),
+        now,
+        tx,
+      );
+    });
+    return { clusters: prepared.map(({ cluster }) => cluster), archived, refusal: null };
   }
 
   /**
