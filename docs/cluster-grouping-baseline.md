@@ -9,6 +9,14 @@ numbers below are what the current rule scores on it; they move when either the
 rule or the corpus moves, and the corpus is not in this repository, so what this
 records is a baseline and its definition rather than a constant.
 
+**The corpus that baseline was measured on is gone, and it has been rebuilt from
+the feeds it was a poll of.** The section *A corpus rebuilt from the feeds* at the
+end of this file records the rebuild and what the rule reads on it: **13.8%
+recall and 85.4% precision** at the shipped floors, against the baseline's
+**48.3% and 79.6%**. The precision carries over and the recall does not, and the
+section says which floor the difference is in and what the corpus that carries
+the baseline's Entity rows was. Read the two apart rather than as one series.
+
 ## What it measures, and what each number means
 
 A pair gets **one verdict**, taken from every Topic that holds both of its
@@ -746,3 +754,179 @@ holding 1,618.
 The corpus is a development database rather than a fixture, so its shape is not
 reproducible from this repository. What it holds is written here so that a later
 run knows what it is being compared against.
+
+## A corpus rebuilt from the feeds
+
+The corpus the sections above were measured on is gone, and with it the ability
+to re-run any of them. This section is the rebuild: a corpus assembled from the
+same feeds, through the same ingest path, over the same period, and what the
+current rule reads on it.
+
+### What was rebuilt, and how
+
+The original corpus was a poll of the registry's feeds over 2026-10-02 to
+2026-10-12, and the feeds themselves are archived. The rebuild takes the
+Wayback Machine's copies of those feeds over the same weeks, unions them per
+Source, and places the Articles through `IngestService` — the application's own
+path, so the Entities, the signatures and the Stories are the pipeline's work and
+not a copy of it. Where a feed's archive does not hold a labelled Article, the
+Article's own page supplies the text.
+
+The result: **2,149 Articles across 22 Sources forming 2,010 Stories and 3,788
+Entities**, held by one wide Topic over a thirty-day window, window ending
+2026-10-21T13:18:53.272Z.
+
+**Seventy-seven of the seventy-eight labelled families are measurable.** The
+one that is not is `marketwatch: WP-MKTW-0005278365` — "Why one Wall Street firm
+sees parallels to the late 1970s and recommends shorting U.S. stocks" — which no
+archived feed holds and whose page is behind a bot wall; MarketWatch's own
+search answers with a page that has no results in it. `pnpm cluster:benchmark`
+prints the reference by name and carries on, and `pnpm cluster:sweep` refuses
+the corpus outright, because a cell scored against a different set of families
+is not comparable with a cell scored against the same one.
+
+**The text is what the feeds carry, and checking that turned out to matter.**
+Each outlet's feed description is a summary of one paragraph, except the
+Guardian's, which carries the photo caption and the first three paragraphs of
+the article, and whose `og:description` is a one-line deck. Twenty-three of the
+twenty-four labelled Guardian references are held by no archived feed, so they
+were taken from their pages: with the deck, and with the feed's own text, and
+the two read very differently.
+
+| the Guardian's labelled references carry | recall | precision | same-event families in one Story |
+| --- | --- | --- | --- |
+| the page's `og:description` (the deck) | 37.0% | 85.4% | 7 of 29 |
+| the feed's description (the caption and three paragraphs) | **13.8%** | **85.4%** | 1 of 29 |
+
+**Seven of the first column's recall hits are not clustering results at all.**
+A deck is short enough that the Guardian's story and the other outlet's story
+match closely enough to be *one Story* before grouping is asked anything —
+their signatures score 0.163 to 0.331 against a story-match threshold of 0.15 —
+and a family already in one Story is in one Cluster whatever the rule does. The
+baseline's own figures show the same corpus not doing that: the twenty-nine
+same-event families scored 0.024 to 0.149 on the signature there, all of them
+below the threshold, so none of them had merged. The second row is the corpus
+the feeds would have produced, and it is the one the numbers below are from.
+
+### What the rule reads on it
+
+At the shipped floors — Entity 0.45, signature 0.04, semantic 0.45 — over
+**77 of the 78 labelled families**:
+
+```
+  recall      13.8%  4 of 29 same-event pairs end up in one Cluster (29 topic observations)
+  precision   85.4%  41 of 48 different-event pairs stay apart (48 topic observations)
+  ceiling     85.4%  for a rule reading Entities only: 7 of 48 are identical as Entity vectors
+  ceiling     93.8%  for a rule reading Entities and signature: 3 of 48 are identical as Entity vectors and in text
+  ceiling     97.9%  for a rule reading Entities, signature and embedding: 1 of 48 is identical in all three
+
+  clusters    1784 over 1 topic holding 1929 stories
+  largest     5 stories in one Cluster
+  singletons  92.9%  1658 of 1784 clusters hold one Story
+```
+
+The semantic floor is worth **4.2 points of precision at no cost to recall** on
+this corpus: without it the same rule reads 13.8% and 81.3%, over 1,717
+Clusters, with the largest still 5.
+
+**The Entity floor is what refuses the recall, and the figures say so.** Over
+the same families, the three floors clear these:
+
+| floor | same-event families it clears | different-event families it clears |
+| --- | --- | --- |
+| Entity, 0.45 | **6 of 29** | 17 of 48 |
+| signature, 0.04 | 26 of 29 | 28 of 48 |
+| semantic, 0.45 | 25 of 29 | 23 of 48 |
+| all three | 6 of 29 | 7 of 48 |
+
+Six same-event families clear the Entity floor and the other three floors are
+nearly free. The partition the sweep prints says the same thing from the other
+side:
+
+| label | both clear | signature alone | Entity alone | embedding alone | two alone | neither | weighed |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| same-event | 6 | 1 | 0 | 0 | 19 | 3 | 29 |
+| different-event | 7 | 5 | 5 | 3 | 17 | 11 | 48 |
+
+**The distributions are the baseline's.** The same-event families score
+0.016 to 0.149 on the signature here, against 0.024 to 0.149 there, and 0.460
+to 0.812 on the embedding, against 0.451 to 0.812. Six of the twenty-nine
+same-event families share no Entity at all, which is the baseline's own figure
+for the same corpus. The different-event families run 0.000 to 1.000 on the
+signature and 0.070 to 1.000 on the embedding.
+
+**The Entity cosines are not the baseline's, and that is where the recall
+differs.** The baseline's rule cleared the Entity floor for about fifteen of
+the twenty-nine same-event families; this corpus's clears it for six, and the
+cosines for the rest sit at 0.04 to 0.44 rather than above 0.45. The Entity
+rows are a property of the development database the baseline was measured on,
+and this file already says that database's shape is not reproducible from the
+repository: it was a poll of feeds that have since changed, held over a period
+whose Articles are not the same Articles. So the two figures are two
+measurements over two corpora, not one measurement over two, and the honest
+reading of the pair is that **the rule keeps two unrelated reports apart far
+more reliably than it joins two reports of one event together, and that the
+floor doing the joining is the Entity floor.**
+
+Two things were checked and are not the explanation. The Topic's width is not:
+a Topic per Source clears 1 of 29 and a Topic per pair of Sources clears 7,
+against the wide Topic's 6, so the inverse document frequencies are not where
+the difference lives. The Topic set is not either: the baseline's corpus held
+fourteen narrow Topics beside its wide one, and each family was measured in
+every Topic holding both of its Stories, so a narrower Topic is more chances
+rather than fewer.
+
+### The floors, swept
+
+The Entity and signature floors, with the semantic one held at 0.45:
+
+| Entity / signature | recall | precision | clusters | largest | singletons |
+| --- | --- | --- | --- | --- | --- |
+| 0.40/0.03 | 31.0% | 81.3% | 1749 | 5 | 91.5% |
+| 0.45/0.03 | 17.2% | 85.4% | 1777 | 5 | 92.6% |
+| 0.50/0.03 | 13.8% | 85.4% | 1799 | 5 | 93.8% |
+| 0.40/0.04 | 27.6% | 81.3% | 1761 | 5 | 91.9% |
+| **0.45/0.04 (shipped)** | **13.8%** | **85.4%** | **1784** | **5** | **92.9%** |
+| 0.50/0.04 | 10.3% | 85.4% | 1806 | 5 | 94.1% |
+| 0.40/0.05 | 24.1% | 81.3% | 1774 | 5 | 92.7% |
+| 0.45/0.05 | 13.8% | 85.4% | 1794 | 5 | 93.5% |
+| 0.50/0.05 | 10.3% | 85.4% | 1813 | 5 | 94.5% |
+
+The semantic floor as its own axis, with the other two held at the shipped
+point:
+
+| semantic floor | recall | precision | clusters | largest | singletons |
+| --- | --- | --- | --- | --- | --- |
+| 0.40 | 13.8% | 83.3% | 1767 | 5 | 92.0% |
+| 0.42 – 0.45 | 13.8% | 85.4% | 1769 – 1784 | 5 | 92.1 – 92.9% |
+| 0.50 | 13.8% | 89.6% | 1813 | 5 | 94.3% |
+| 0.60 | 13.8% | 91.7% | 1860 | 4 | 96.6% |
+| 0.70 | 6.9% | 93.8% | 1906 | 3 | 98.8% |
+| 0.80 – 0.90 | 3.4% | 93.8% | 1927 | 3 | 99.9% |
+
+**The shipped floors are not the best cells of this grid, and the reason is
+visible in the first table.** Lowering the Entity floor to 0.40 buys 13.8
+points of recall for 4.1 points of precision, which is the opposite of the
+trade the Entity floor was fitted for, and the Entity floor at 0.45 was
+chosen on a corpus whose Entity vectors are not this one's. Raising the
+semantic floor to 0.50 buys 4.2 points of precision for no recall at all, and
+0.60 buys 6.3 for none. **Nothing in this file moves a constant** — a floor is
+a decision and this is a measurement about one — but the floor that is doing
+the refusing here is the Entity floor, and it is the floor this corpus says
+least about.
+
+### What the measurement cost
+
+Eight requests, 100,520 tokens and 0 credits: seven requests embedding 1,684
+Stories and one embedding the 31 whose text had moved. The provider is
+`nvidia/nemotron-3-embed-1b:free`, and the free tier allows **20 requests a
+minute and 50 a day**. The daily count is of the requests that succeed, so a
+refused call costs the day nothing; the per-minute limit is counted over
+attempts, and the app's backfill answers a refused batch by asking about every
+text in it on its own, which at its default batch size of 16 is seventeen calls
+in a row. The first run of this backfill made 1,812 requests and embedded 322
+Stories: 22 calls succeeded and the rest came back with nothing.
+
+**The batch size is the whole of what decides the cost.** 256 to a call embeds
+a whole corpus in seven requests, where the app's default of 16 would have
+wanted one hundred and twenty-six.
