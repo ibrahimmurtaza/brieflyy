@@ -333,7 +333,7 @@ fourteen same-event families clear every floor in both runs, and two more of the
 end up welded after the backfill: the candidate set is narrower, and a narrower
 candidate set changes which pairs are merged first (ADR-0038).
 
-**And the wider gate reads worse everywhere now.** The sweep's frontier over the
+**And the wider gate reads worse everywhere now.** The sweep's grid over the
 same 48 cells, with the semantic floor participating in both gates rather than
 applying to neither:
 
@@ -781,9 +781,10 @@ one that is not is `marketwatch: WP-MKTW-0005278365` — "Why one Wall Street fi
 sees parallels to the late 1970s and recommends shorting U.S. stocks" — which no
 archived feed holds and whose page is behind a bot wall; MarketWatch's own
 search answers with a page that has no results in it. `pnpm cluster:benchmark`
-prints the reference by name and carries on, and `pnpm cluster:sweep` refuses
-the corpus outright, because a cell scored against a different set of families
-is not comparable with a cell scored against the same one.
+prints the reference by name and carries on, and `pnpm cluster:sweep` prints it
+by name too, scores the cells over the seventy-seven families the corpus holds,
+and exits non-zero because of the seventy-eighth — the same set of families the
+benchmark scores over, so the two reports are read against each other.
 
 **The text is what the feeds carry, and checking that turned out to matter.**
 Each outlet's feed description is a summary of one paragraph, except the

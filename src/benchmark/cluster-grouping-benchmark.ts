@@ -175,8 +175,9 @@ export interface GroupedTopic {
  *
  * **It raises rather than skipping.** The alternative is to leave a set out of a
  * cell, and a report that quietly dropped a Topic's Stories would have changed its
- * own denominator halfway down — which is the failure `pnpm cluster:sweep` refuses
- * outright when the corpus is not holding every labelled pair. A refusal arriving
+ * own denominator halfway down — which is the failure both corpus commands refuse:
+ * a corpus holding a set that cannot be scored is refused outright, and a labelled
+ * family the corpus does not hold is named rather than dropped. A refusal arriving
  * where one cannot is not a number to work around; it is a run that has stopped
  * meaning what it says.
  */
@@ -212,6 +213,15 @@ export interface PairScore {
   readonly ratio: number | null;
   /** Families no Topic holds both Stories for, so nothing could be measured. */
   readonly unshared: readonly string[];
+  /**
+   * The families the ratio is over, named.
+   *
+   * The count beside the ratio says how much evidence the verdict rests on and
+   * this says what that evidence is: a report that prints "29 families" and a
+   * reader who wants to know which 29 are two different things, and a sweep that
+   * has to name the set it measured over cannot get at it from a count.
+   */
+  readonly measured: readonly ResolvedStoryPair[];
 }
 
 /** What a precision ceiling found, and which families each half was. */
@@ -920,6 +930,7 @@ export function evaluateClusterGrouping(input: {
         correct,
         ratio: families === 0 ? null : correct / families,
         unshared,
+        measured,
       },
       measured,
     };

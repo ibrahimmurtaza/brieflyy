@@ -121,18 +121,32 @@ than only at the shipped ones, which is how `docs/cluster-grouping-baseline.md`'
 tables can be regenerated and how a floor found to be wrong for the corpus can be
 seen to be wrong. It takes the same argument `pnpm cluster:benchmark` takes from
 `DATABASE_URL`, so a copy of a database can be swept before and after a migration and
-the two frontiers compared. The grid is wider than the shipped floors on purpose: a
+the two sweeps compared. The grid is wider than the shipped floors on purpose: a
 sweep that stopped at the shipped answer could not disagree with it. Every cell is
 swept twice — once under the conjunction the rule ships and once under the wider gate
 where either signal admits a pair on its own — because what the conjunction costs is a
-question about two signals rather than about two floors, and the frontier alone says
-only what happened and not which half of the gate did it. Beneath the frontier the
+question about two signals rather than about two floors, and the grid alone says
+only what happened and not which half of the gate did it. Beneath the cells the
 sweep counts the labelled families by which half turned each one away.
 `SHIPPED_MERGE_GATE` is `'both'`, so nothing about the application changes: the
 wider gate is reachable only by naming it, and what it costs is recorded in
-`docs/cluster-grouping-baseline.md`. It reads no `DATABASE_URL` fallback for the same
-reason the benchmark is not in `pnpm verify` — the frontier is a claim about a real
+`docs/cluster-grouping-baseline.md`. It has no corpus to fall back on —
+`DATABASE_URL` or the file named on the command line is the corpus — for the same
+reason the benchmark is not in `pnpm verify`: the grid is a claim about a real
 corpus.
+
+The sweep also prints what each cell **scores**, over the same labelled families
+`pnpm cluster:benchmark` scores over, so the two are read against each other rather
+than reconciled by hand: the same-event families a Topic holds both Stories for, and
+the different-event families of the same kind. It prints the **frontier** — the
+cells no other cell beats on both recall and precision — so a floor is read off one
+list instead of two tables compared by hand, and it names the families every cell
+was weighed over and the ones it could not weigh. A corpus holding no labelled
+family at all is reported as unscoreable rather than scored over an empty set. A
+corpus holding only some of them is scored over the families it holds — the same
+families the benchmark scores over on the same corpus — and the ones it could not
+weigh are named. The sweep's numbers for the shipped cell are the benchmark's
+numbers over the same corpus, cell for cell (ADR-0042).
 
 `pnpm cluster:velocity` measures the other number a Cluster carries rather than the rule
 that produces it: the Articles-a-day velocity that decides whether a Cluster is Active at
@@ -701,8 +715,9 @@ src/
 │                          # in pages/routes.ts, with the rest of the shell's; its
 │                          # full-text index is in db/archive-index.ts
 ├── benchmark/             # the Cluster grouping benchmark: the labelled-pair scoring
-│                          # and the report (cluster-grouping-benchmark.ts), and the
-│                          # runner behind pnpm cluster:benchmark
+│                          # and the report (cluster-grouping-benchmark.ts), the
+│                          # runner behind pnpm cluster:benchmark, and the sweep's
+│                          # own report (cluster-sweep-report.ts)
 ├── billing/               # the PaymentProvider seam (Stripe), the BillingService, the
 │                          # Subscription settings surface and its five routes:
 │                          # GET /settings/billing, POST /billing/checkout,
@@ -797,7 +812,7 @@ purpose, and each is reached by something other than a request:
 | --- | --- |
 | `src/verify/` | `pnpm secrets:check`, and `pnpm verify` |
 | `src/ingest/check-feeds.ts` | `pnpm ingest:check-feeds` |
-| `src/benchmark/` | `pnpm cluster:benchmark`, and its scoring suite |
+| `src/benchmark/` | `pnpm cluster:benchmark`, `pnpm cluster:sweep`, and their scoring suites |
 | `scripts/cluster-sweep.ts` | `pnpm cluster:sweep` |
 | `scripts/cluster-velocity.ts` | `pnpm cluster:velocity` |
 | `scripts/cluster-summary.ts` | `pnpm cluster:summary` |
@@ -908,12 +923,12 @@ counted.
 pnpm test
 ```
 
-The suite is 110 test files across `src/` holding 1,967 cases — Vitest prints the
+The suite is 111 test files across `src/` holding 2,034 cases — Vitest prints the
 live figure at the end of every run. `docs-agreement.test.ts` checks the file
 count and cannot check the case count without running the suite it lives in, so
 that one number is worth reading off a run rather than trusting.
 
-The layout is **89 of the 152 modules** under `src/` having a sibling test file of
+The layout is **90 of the 153 modules** under `src/` having a sibling test file of
 the same name. The other 63 are reached by a suite named for what it covers rather
 than for one module — `repos/oauth-repos.test.ts` over four repositories,
 `pages/topic-page.test.ts` over the routes that render a Topic — and some are
