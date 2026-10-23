@@ -28,7 +28,8 @@
     "cluster:velocity": "tsx scripts/cluster-velocity.ts",
     "cluster:summary": "tsx scripts/cluster-summary.ts",
     "cluster:price": "tsx scripts/cluster-price.ts",
-    "cluster:backfill": "tsx scripts/cluster-backfill.ts"
+    "cluster:backfill": "tsx scripts/cluster-backfill.ts",
+    "archive:corpus": "tsx scripts/archive-corpus.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.0",

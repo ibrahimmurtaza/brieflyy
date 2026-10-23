@@ -130,6 +130,20 @@ function extractPublishedAt(entry: string): Date {
 }
 
 /**
+ * The Article keeps the longest text its feed offers, not the first one a chain
+ * of alternatives happens to land on. Many feeds offer both — a short
+ * description and the Article's own body — and the Article keeps the long one:
+ * that is what its names and its embedding are read from.
+ */
+function longestText(...texts: string[]): string {
+  let best = '';
+  for (const text of texts) {
+    if (text.length > best.length) best = text;
+  }
+  return best;
+}
+
+/**
  * Parse a feed into entries.
  *
  * Both dialects are handled because the registry contains both: several outlets
@@ -142,11 +156,12 @@ export function parseRss(xml: string): RawFeed {
   const entries: RawFeedEntry[] = items.map((rawItem): RawFeedEntry => {
     const link = extractAtomLink(rawItem);
     const guid = extractTag(rawItem, 'guid') || extractTag(rawItem, 'id');
-    const body =
-      extractTag(rawItem, 'description') ||
-      extractTag(rawItem, 'summary') ||
-      extractTag(rawItem, 'content:encoded') ||
-      extractTag(rawItem, 'content');
+    const body = longestText(
+      extractTag(rawItem, 'description'),
+      extractTag(rawItem, 'summary'),
+      extractTag(rawItem, 'content:encoded'),
+      extractTag(rawItem, 'content'),
+    );
     return {
       externalId: guid || link,
       url: link,
