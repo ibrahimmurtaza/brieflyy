@@ -277,4 +277,53 @@ describe('parseRss', () => {
       'The administration unveiled 12 districts where housing will be fast-tracked. ( POLITICO Pro )',
     );
   });
+
+  it('keeps the longest text the feed offers, not the first one present', () => {
+    // A short description and a longer summary: the summary wins.
+    const xml = `<rss><channel><item>
+      <title>T</title><link>https://x/1</link><guid>g1</guid>
+      <description>Short.</description>
+      <summary>A longer summary with more words in it.</summary>
+    </item></channel></rss>`;
+
+    expect(parseRss(xml).entries[0]?.body).toBe('A longer summary with more words in it.');
+  });
+
+  it('keeps a long description over a short summary', () => {
+    // A long description and a short summary: the description wins.
+    const xml = `<rss><channel><item>
+      <title>T</title><link>https://x/1</link><guid>g1</guid>
+      <description>A long description with many words that tell the whole story of what happened.</description>
+      <summary>Short.</summary>
+    </item></channel></rss>`;
+
+    expect(parseRss(xml).entries[0]?.body).toContain('A long description with many words');
+  });
+
+  it('keeps only a summary when a feed offers nothing else', () => {
+    const xml = `<rss><channel><item>
+      <title>T</title><link>https://x/1</link><guid>g1</guid>
+      <summary>Just a summary, nothing else.</summary>
+    </item></channel></rss>`;
+
+    expect(parseRss(xml).entries[0]?.body).toBe('Just a summary, nothing else.');
+  });
+
+  it('keeps the body when the description is empty', () => {
+    const xml = `<rss><channel><item>
+      <title>T</title><link>https://x/1</link><guid>g1</guid>
+      <description></description>
+      <summary>A real body with substance.</summary>
+    </item></channel></rss>`;
+
+    expect(parseRss(xml).entries[0]?.body).toBe('A real body with substance.');
+  });
+
+  it('keeps nothing when a feed offers no text at all', () => {
+    const xml = `<rss><channel><item>
+      <title>T</title><link>https://x/1</link><guid>g1</guid>
+    </item></channel></rss>`;
+
+    expect(parseRss(xml).entries[0]?.body).toBe('');
+  });
 });
