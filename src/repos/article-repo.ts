@@ -60,6 +60,39 @@ export interface ArticleRepo {
   }): Promise<readonly Article[]>;
   assignToStory(articleId: ArticleId, storyId: StoryId): Promise<void>;
   listByStory(storyId: StoryId): Promise<readonly Article[]>;
+  /**
+   * A page of the corpus's Articles, oldest ingested first, each carrying the
+   * Entities it does now; `hasMore` says another page stands beyond this one.
+   *
+   * Read by the command that re-reads an Article's names, which has to walk the
+   * whole corpus rather than a window of it — a rule change to what a name is
+   * reaches Articles of any age — but which walks it in pages: read whole, the
+   * corpus would be held in memory with every link before its first Article had
+   * been read again. The page is read ahead of the count, so `hasMore` is
+   * answered without a second query: one more row is fetched than asked for,
+   * and our having got it is the answer.
+   */
+  listArticles(input: {
+    readonly offset: number;
+    readonly number: number;
+  }): Promise<{
+    readonly articles: readonly Article[];
+    readonly hasMore: boolean;
+  }>;
+  /**
+   * Put one Article's Entities exactly as given, dropping the links it had.
+   *
+   * The whole set is written where the old set stood, because a re-read can
+   * both add a name and take one away; writing the difference would leave the
+   * question of which half is stale to be asked again by the next reader.
+   * The Entity rows themselves are not touched — they belong to every Article
+   * that names them, so one Article stopping carrying a name is not the Entity
+   * leaving the corpus.
+   */
+  replaceArticleEntities(input: {
+    readonly articleId: ArticleId;
+    readonly entityIds: readonly EntityId[];
+  }): Promise<void>;
 }
 
 export class DrizzleArticleRepo implements ArticleRepo {
@@ -81,12 +114,7 @@ export class DrizzleArticleRepo implements ArticleRepo {
       signature: encodeSignature(input.article.signature),
       storyId: input.article.storyId,
     });
-    for (const entityId of input.entityIds) {
-      await this.db
-        .insert(articleEntities)
-        .values({ articleId: input.article.id, entityId })
-        .onConflictDoNothing();
-    }
+    this.insertEntityLinks(this.db, input.article.id, input.entityIds);
   }
 
   async findByExternalId(
@@ -145,6 +173,65 @@ export class DrizzleArticleRepo implements ArticleRepo {
     if (rows.length === 0) return [];
     const byArticle = await this.loadEntitiesByArticleId(rows.map((r) => r.id));
     return rows.map((row) => rowToArticle(row, byArticle.get(row.id) ?? []));
+  }
+
+  async listArticles(input: {
+    readonly offset: number;
+    readonly number: number;
+  }): Promise<{
+    readonly articles: readonly Article[];
+    readonly hasMore: boolean;
+  }> {
+    const rows = (await this.db
+      .select()
+      .from(articles)
+      .orderBy(asc(articles.ingestedAt))
+      .limit(input.number + 1)
+      .offset(input.offset)) as readonly ArticleRow[];
+    const page = rows.slice(0, input.number);
+    if (page.length === 0) return { articles: [], hasMore: false };
+    const byArticle = await this.loadEntitiesByArticleId(page.map((r) => r.id));
+    return {
+      articles: page.map((row) =>
+        rowToArticle(row, byArticle.get(row.id) ?? []),
+      ),
+      hasMore: rows.length > input.number,
+    };
+  }
+
+  async replaceArticleEntities(input: {
+    readonly articleId: ArticleId;
+    readonly entityIds: readonly EntityId[];
+  }): Promise<void> {
+    // The delete and the insert are one write, because a run that died between
+    // them would leave the Article carrying no names at all — and the re-read
+    // that uses this is promised to be safe to run twice, which a half-written
+    // Article is not.
+    await this.db.transaction((tx) => {
+      tx.delete(articleEntities)
+        .where(eq(articleEntities.articleId, input.articleId))
+        .run();
+      this.insertEntityLinks(tx, input.articleId, input.entityIds);
+    });
+  }
+
+  /**
+   * The Entity links one Article carries, put down one link per name and
+   * idempotently — a link that is already there is left as it is. Shared by the
+   * Article's first writing and its re-read's rewriting.
+   */
+  private insertEntityLinks(
+    executor: Db,
+    articleId: ArticleId,
+    entityIds: readonly EntityId[],
+  ): void {
+    for (const entityId of entityIds) {
+      executor
+        .insert(articleEntities)
+        .values({ articleId, entityId })
+        .onConflictDoNothing()
+        .run();
+    }
   }
 
   private async loadEntitiesByArticleId(

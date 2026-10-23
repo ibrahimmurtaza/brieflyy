@@ -84,6 +84,70 @@ const NEWSLETTER_PROMO =
   /\s*Missed this morning[^.\n?]*\?\s*We forgive you\.\s*Read it here\s*\.?/i;
 
 /**
+ * A byline the feed prints at the head of the item: "By Elsa Marquardt" or
+ * "By Elsa Marquardt, Staff Writer". It names the person who wrote the item
+ * rather than what the item is about, so it is not a name the story carries.
+ *
+ * Bound to its whole line, because a byline is a position the feed prints it
+ * on — a line of its own — and prose a headline can also open with By: "By
+ * Monday OpenAI announced…" is about OpenAI, and a cut that took the run of
+ * capitals off the front of it would be eating the sentence's subject, not the
+ * feed's furniture. The role after the comma is any run of words that *ends*
+ * in a publishing role ("National security correspondent", "Staff Writers"),
+ * with the nouns written out in both their printed cases rather than asked
+ * for inline, for the same reason the credit's cases are; a role word can
+ * also end a prose sentence, but on a line the feed printed for its writer
+ * that is the rarer of the two.
+ */
+const BYLINE_ROLES =
+  /(?:[Ww]riter|[Rr]eporter|[Cc]orrespondent|[Ee]ditor|[Cc]hief|[Pp]hotographer|[Cc]olumnist|[Cc]ontributor|[Aa]nchor|[Jj]ournalist|[Aa]nalyst)s?/;
+
+const BYLINE = new RegExp(
+  '^\\s*By[ ]+' +
+    "[A-Z][A-Za-z’'-]+(?:[ ]+(?:and[ ]+)?[A-Z][A-Za-z’'-]+)*" +
+    "(?:[ ]*,[ ]*(?:[A-Za-z’'-]+[ ]*)*(?:Staff[ ]+)?" +
+    BYLINE_ROLES.source +
+    ')?\\s*$',
+  'm',
+);
+
+/**
+ * A photo credit the feed stamps on the item through a label that names the
+ * picture: "Photo by Jane Doe", "Photos by Jane Doe", "Photo credit: Jane
+ * Doe", "Photograph: Jane Doe", "Photographer: Jane Doe", "Picture: Acme
+ * Photos" or "Image credits: Jane Doe". It names the photographer or the
+ * picture desk, not the subject of the story. The name is read across spaces
+ * only, so a credit that names its photographer cannot run on into the first
+ * sentence of the story that follows it.
+ *
+ * The label is bound to the head of a line or the seam of a sentence, and it
+ * joins its photographer only with "by" or ":" — a wall of prose can name a
+ * thing's image mid-sentence ("an image by Rembrandt hung beside it"), and
+ * taking that would be deleting the story's own words rather than the feed's.
+ * The keyword's own cases are written out rather than asked for inline,
+ * because not every Node this runs on is new enough for a case-modified group.
+ */
+const PHOTO_LABEL_CREDIT =
+  /(?:^[ ]*|(?<=[.!?][ ]))\b(?:[Pp]hotos?|[Pp]hotographs?|[Pp]hotographers?|[Ii]mages?|[Pp]ictures?|[Cc]redits?)(?:[ ]+[Cc]redits?)?(?:[ ]+by|:)[ ]*[A-Z][A-Za-z’'-]+(?:[ ]+[A-Z][A-Za-z’'-]+)*\.?[ ]*/gm;
+
+/**
+ * A wire credit the feed stamps with nothing between the word and the source:
+ * "Credit AP", "Credit EPA". The source is all caps because the prose that can
+ * open a sentence with credit — "Credit Ronaldo for the assist" — never names
+ * a person in capitals, and the whole shape again sits only on a line head or
+ * a sentence seam.
+ */
+const WIRE_CREDIT =
+  /(?:^[ ]*|(?<=[.!?][ ]))\b[Cc]redits?[ ]+[A-Z][A-Z’'-]+\.?[ ]*/gm;
+
+/**
+ * A caption the feed prefixes to the item: "Caption: ...". It describes the
+ * picture rather than telling the story. Consumed to the end of the sentence
+ * or line, so a caption that is the whole of the text is still taken whole.
+ */
+const CAPTION = /^\s*Caption\s*:\s*[^\n.!?]*[.!?]?\s*/i;
+
+/**
  * The text of an Article, with the feed's own metadata about it removed.
  *
  * The citation header goes first because it overlaps the labelled runs: `Published
@@ -101,6 +165,10 @@ export function stripFeedMetadata(text: string): string {
     .replace(CONTINUE_MARKER, '')
     .replace(REPOST_ATTRIBUTION, '')
     .replace(NEWSLETTER_PROMO, '')
+    .replace(BYLINE, '')
+    .replace(PHOTO_LABEL_CREDIT, ' ')
+    .replace(WIRE_CREDIT, ' ')
+    .replace(CAPTION, '')
     .replace(LABEL_VALUE_RUN, ' ')
     .replace(URL, ' ')
     .replace(/\s+/g, ' ')
