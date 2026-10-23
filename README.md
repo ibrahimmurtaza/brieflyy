@@ -77,6 +77,7 @@ pnpm cluster:velocity    # the Articles-a-day distribution the Active threshold 
 pnpm cluster:summary     # how much of a Cluster's bullets restate the Cluster above them
 pnpm cluster:price       # what one cycle of grouping costs, per Topic, over a corpus
 pnpm cluster:backfill    # embed the Stories a corpus held before anything carried one
+pnpm archive:corpus      # fetch archived feed copies from the Wayback Machine into the corpus cache
 ```
 
 `pnpm db:migrate` is the command that applies DDL, and it is the one the "Changing
@@ -250,6 +251,18 @@ application, a refused Topic keeps the Clusters it already had and the refusal i
 named in `ClusterFormationReport`. A Topic holding *no* embeddings is not refused:
 it holds zero models rather than one, so a corpus that has never been backfilled
 still groups exactly as it did before.
+
+`pnpm archive:corpus` fetches archived copies of each Source's feed from the
+Wayback Machine over a window of dates and writes the union of them per Source
+into `.cluster-corpus-cache/`, where the corpus builder reads them. It asks the
+CDX API for each Source's feed URL between `ARCHIVE_CORPUS_FROM` and
+`ARCHIVE_CORPUS_TO` (defaults `20261002` to `20261012`), downloads each unique
+snapshot, and spaces requests at `ARCHIVE_CORPUS_RATE` requests per second
+(default 1) so the archive is not hammered. A snapshot already on disk is not
+fetched again, so a run that stops part way continues rather than starting over.
+Per Source it reports what it found and what it found nothing for, naming every
+Source whose feed has no copy in the window. The cache directory is gitignored
+and reproducible by the command alone.
 
 `pnpm typecheck` covers `src/` and `scripts/`, which is where the unit tests and the
 operator commands live, and not `tests/e2e/`: Playwright compiles the specs without
@@ -923,12 +936,12 @@ counted.
 pnpm test
 ```
 
-The suite is 111 test files across `src/` holding 2,034 cases — Vitest prints the
+The suite is 112 test files across `src/` holding 2,034 cases — Vitest prints the
 live figure at the end of every run. `docs-agreement.test.ts` checks the file
 count and cannot check the case count without running the suite it lives in, so
 that one number is worth reading off a run rather than trusting.
 
-The layout is **90 of the 153 modules** under `src/` having a sibling test file of
+The layout is **91 of the 154 modules** under `src/` having a sibling test file of
 the same name. The other 63 are reached by a suite named for what it covers rather
 than for one module — `repos/oauth-repos.test.ts` over four repositories,
 `pages/topic-page.test.ts` over the routes that render a Topic — and some are
