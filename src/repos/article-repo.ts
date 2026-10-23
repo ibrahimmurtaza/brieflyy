@@ -60,6 +60,29 @@ export interface ArticleRepo {
   }): Promise<readonly Article[]>;
   assignToStory(articleId: ArticleId, storyId: StoryId): Promise<void>;
   listByStory(storyId: StoryId): Promise<readonly Article[]>;
+  /**
+   * Every Article in the corpus, oldest ingested first, each with the Entities
+   * it carries now.
+   *
+   * Read by the command that re-reads an Article's names, which has to walk the
+   * whole corpus rather than a window of it: a rule change to what a name is
+   * reaches Articles any age of them.
+   */
+  listAllArticles(): Promise<readonly Article[]>;
+  /**
+   * Put one Article's Entities exactly as given, dropping the links it had.
+   *
+   * The whole set is written where the old set stood, because a re-read can
+   * both add a name and take one away; writing the difference would leave the
+   * question of which half is stale to be asked again by the next reader.
+   * The Entity rows themselves are not touched — they belong to every Article
+   * that names them, so one Article stopping carrying a name is not the Entity
+   * leaving the corpus.
+   */
+  replaceArticleEntities(input: {
+    readonly articleId: ArticleId;
+    readonly entityIds: readonly EntityId[];
+  }): Promise<void>;
 }
 
 export class DrizzleArticleRepo implements ArticleRepo {
@@ -145,6 +168,31 @@ export class DrizzleArticleRepo implements ArticleRepo {
     if (rows.length === 0) return [];
     const byArticle = await this.loadEntitiesByArticleId(rows.map((r) => r.id));
     return rows.map((row) => rowToArticle(row, byArticle.get(row.id) ?? []));
+  }
+
+  async listAllArticles(): Promise<readonly Article[]> {
+    const rows = (await this.db
+      .select()
+      .from(articles)
+      .orderBy(asc(articles.ingestedAt))) as readonly ArticleRow[];
+    if (rows.length === 0) return [];
+    const byArticle = await this.loadEntitiesByArticleId(rows.map((r) => r.id));
+    return rows.map((row) => rowToArticle(row, byArticle.get(row.id) ?? []));
+  }
+
+  async replaceArticleEntities(input: {
+    readonly articleId: ArticleId;
+    readonly entityIds: readonly EntityId[];
+  }): Promise<void> {
+    await this.db
+      .delete(articleEntities)
+      .where(eq(articleEntities.articleId, input.articleId));
+    for (const entityId of input.entityIds) {
+      await this.db
+        .insert(articleEntities)
+        .values({ articleId: input.articleId, entityId })
+        .onConflictDoNothing();
+    }
   }
 
   private async loadEntitiesByArticleId(

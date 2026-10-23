@@ -84,6 +84,32 @@ const NEWSLETTER_PROMO =
   /\s*Missed this morning[^.\n?]*\?\s*We forgive you\.\s*Read it here\s*\.?/i;
 
 /**
+ * A byline the feed prints at the head of the item: "By Elsa Marquardt" or
+ * "By Elsa Marquardt, Staff Writer". It names the person who wrote the item
+ * rather than what the item is about, so it is not a name the story carries.
+ * Anchored at the start of the text, because a byline is a position not a
+ * claim — "by the time" mid-sentence is prose and is left alone.
+ */
+const BYLINE = /^\s*By[ ]+[A-Z][A-Za-z’'-]+(?:[ ]+(?:and[ ]+)?[A-Z][A-Za-z’'-]+)*(?:[ ]*,[ ]*(?:Staff[ ]+)?(?:Writer|Reporter|Correspondent|Editor|Chief))?[ ]*/;
+
+/**
+ * A photo credit the feed stamps on the item: "Photo by Jane Doe", "Credit:
+ * John Smith" or "Picture: Acme Photos". It names the photographer or the
+ * picture desk, not the subject of the story. The name is read across spaces
+ * only, so a credit that names its photographer cannot run on into the first
+ * sentence of the story that follows it.
+ */
+const PHOTO_CREDIT =
+  /\b(?i:photo|image|picture|credit)\s*(?:by|:|,)\s*[A-Z][A-Za-z’'-]+(?:[ ]+[A-Z][A-Za-z’'-]+)*\.?\s*/g;
+
+/**
+ * A caption the feed prefixes to the item: "Caption: ...". It describes the
+ * picture rather than telling the story. Consumed to the end of the sentence
+ * or line, so a caption that is the whole of the text is still taken whole.
+ */
+const CAPTION = /^\s*Caption\s*:\s*[^\n.!?]*[.!?]?\s*/i;
+
+/**
  * The text of an Article, with the feed's own metadata about it removed.
  *
  * The citation header goes first because it overlaps the labelled runs: `Published
@@ -101,6 +127,9 @@ export function stripFeedMetadata(text: string): string {
     .replace(CONTINUE_MARKER, '')
     .replace(REPOST_ATTRIBUTION, '')
     .replace(NEWSLETTER_PROMO, '')
+    .replace(BYLINE, '')
+    .replace(PHOTO_CREDIT, ' ')
+    .replace(CAPTION, '')
     .replace(LABEL_VALUE_RUN, ' ')
     .replace(URL, ' ')
     .replace(/\s+/g, ' ')

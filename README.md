@@ -71,6 +71,7 @@ pnpm db:migrate          # apply the DDL in src/db/migrate.ts to DATABASE_URL
 pnpm db:generate         # writes SQL into ./drizzle that nothing here applies
 pnpm db:push             # drizzle's own diff; drops the Archive index. See below
 pnpm ingest:check-feeds  # poll every registry feed live; non-zero if one is not ingestible
+pnpm ingest:re-read-entities "path/to/brieflyy.db"  # re-read every stored Article's names under the current read; idempotent; reports Articles read and names moved
 pnpm cluster:benchmark   # score Cluster grouping against the labelled pairs, over DATABASE_URL
 pnpm cluster:sweep       # the same corpus at every pair of floors on a grid and under both gates
 pnpm cluster:velocity    # the Articles-a-day distribution the Active threshold is read from
@@ -936,13 +937,13 @@ counted.
 pnpm test
 ```
 
-The suite is 112 test files across `src/` holding 2,034 cases — Vitest prints the
+The suite is 114 test files across `src/` holding 2,068 cases — Vitest prints the
 live figure at the end of every run. `docs-agreement.test.ts` checks the file
 count and cannot check the case count without running the suite it lives in, so
 that one number is worth reading off a run rather than trusting.
 
-The layout is **91 of the 154 modules** under `src/` having a sibling test file of
-the same name. The other 63 are reached by a suite named for what it covers rather
+The layout is **93 of the 155 modules** under `src/` having a sibling test file of
+the same name. The other 62 are reached by a suite named for what it covers rather
 than for one module — `repos/oauth-repos.test.ts` over four repositories,
 `pages/topic-page.test.ts` over the routes that render a Topic — and some are
 test-only helpers, entrypoints and the two modules whose behaviour is a shape
