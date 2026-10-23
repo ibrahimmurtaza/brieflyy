@@ -13,6 +13,23 @@ describe('stripFeedMetadata', () => {
     expect(
       stripFeedMetadata('By Jane Doe and John Smith\n\nThe deal was done.'),
     ).toBe('The deal was done.');
+    // The role after the comma is whatever ends in a publishing role, not a
+    // word the feed happened to print: an adjective-qualified role and a
+    // plural desk carry the same furniture, and a role the cut missed would
+    // leave the writer's name for the read to carry instead.
+    expect(
+      stripFeedMetadata(
+        'By Elsa Marquardt, National security correspondent\n\nOpenAI unveiled Foo.',
+      ),
+    ).toBe('OpenAI unveiled Foo.');
+    expect(
+      stripFeedMetadata('By Jane Doe, Columnist\n\nThe deal was done.'),
+    ).toBe('The deal was done.');
+    expect(
+      stripFeedMetadata(
+        'By Jane Doe and John Smith, Staff Writers\n\nThe deal was done.',
+      ),
+    ).toBe('The deal was done.');
   });
 
   it('does not strip prose that merely begins with the word by', () => {
@@ -56,6 +73,26 @@ describe('stripFeedMetadata', () => {
         'Picture: Acme Photos and the crowd cheered.',
       ),
     ).toBe('and the crowd cheered.');
+    // The credit's label is the one the feed printed, whatever plurality or
+    // second word it took, and a wire credit answers with all caps.
+    expect(
+      stripFeedMetadata('Photo credit: Jane Doe. Acme Corp said so.'),
+    ).toBe('Acme Corp said so.');
+    expect(
+      stripFeedMetadata('Photos by Jane Doe. Acme Corp said so.'),
+    ).toBe('Acme Corp said so.');
+    expect(
+      stripFeedMetadata('Photograph: Jane Doe. Acme Corp said so.'),
+    ).toBe('Acme Corp said so.');
+    expect(
+      stripFeedMetadata('Photographer: Jane Doe. Acme Corp said so.'),
+    ).toBe('Acme Corp said so.');
+    expect(
+      stripFeedMetadata('Image credits: Jane Doe. Acme Corp said so.'),
+    ).toBe('Acme Corp said so.');
+    expect(
+      stripFeedMetadata('Credit AP. Acme Corp said so.'),
+    ).toBe('Acme Corp said so.');
     // A credit the story did not put at the head of a line or the seam of a
     // sentence is the story's own words about a picture or about credit, and
     // is left standing rather than deleted.
@@ -65,6 +102,11 @@ describe('stripFeedMetadata', () => {
     expect(
       stripFeedMetadata('He had good credit, Acme Corp said.'),
     ).toBe('He had good credit, Acme Corp said.');
+    // The wire credit's source is a name in capitals, because prose can
+    // command one to credit somebody: no person is spelled in all caps there.
+    expect(
+      stripFeedMetadata('Credit Ronaldo for the assist. Acme won.'),
+    ).toBe('Credit Ronaldo for the assist. Acme won.');
   });
 
   it('removes a leading caption so the picture description is not a name', () => {
