@@ -1,7 +1,8 @@
 ﻿/**
- * What the Cluster grouping frontier looks like over a real corpus.
+ * What the Cluster grouping looks like over a real corpus, and what each cell of
+ * it scores.
  *
-* `pnpm cluster:benchmark` reports the shipped point and the largest Cluster at every
+ * `pnpm cluster:benchmark` reports the shipped point and the largest Cluster at every
  * set of floors the rule ships, but not what the labelled pairs score *at* each of
  * those floors — so the tables in `docs/cluster-grouping-baseline.md` recording where
  * 0.45, 0.04 and 0.70 came from could not be regenerated or checked from this
@@ -23,18 +24,29 @@
  * is the precision it stops holding apart. The grid alone cannot answer that — a pair
  * the gate refuses is refused by one floor or another, and the grouped numbers say
  * only what happened, not which floor did it — so the refusals are counted from the
- * labelled families directly and printed beneath the frontier at the shipped floors.
+ * labelled families directly and printed beneath the cells at the shipped floors.
  *
- * **Reading the output.** Two tables, and the second is there because the third
- * floor is a question of its own. The first is one row per gate per pair of the two
- * floors that were here first — the gate, the Entity floor, the signature floor, the
- * semantic floor pinned where the rule ships it, recall, precision, how many Clusters
- * the corpus holds at that pair, the largest of them, and the share of them holding a
- * single Story. The signature floor runs across the rows and the Entity floor down
- * them, so a frontier is a row read sideways. The second moves only the semantic
- * floor and holds the other two at the shipped point, so its rows say what that floor
- * does on its own. The sweep that compares two corpora is the one where every cell
- * moves the same way.
+ * **Reading the output.** Two tables, a frontier and the set the numbers are over.
+ * The first table is one row per gate per pair of the two floors that were here first
+ * — the gate, the Entity floor, the signature floor, the semantic floor pinned where
+ * the rule ships it, recall, precision, how many Clusters the corpus holds at that
+ * pair, the largest of them, and the share of them holding a single Story. The
+ * signature floor runs across the rows and the Entity floor down them, so the grid is
+ * a row read sideways. The second table moves only the semantic floor and holds the
+ * other two at the shipped point, so its rows say what that floor does on its own.
+ * The frontier is the list of the cells no other cell beats on both recall and
+ * precision, so a floor is read off one list rather than off two tables compared by
+ * hand. The sweep that compares two corpora is the one where every cell moves the
+ * same way.
+ *
+ * **What a cell's accuracy is over.** The same families `pnpm cluster:benchmark`
+ * scores over: the same-event families a Topic holds both Stories for, and the
+ * different-event families of the same kind. The sweep's shipped cell is therefore
+ * the benchmark's shipped point over the same corpus, and the two are read against
+ * each other rather than reconciled by hand. A family the corpus does not hold, one
+ * both labelled sets claim, one one set claims twice, and one no Topic holds both
+ * Stories for are named rather than counted, and a corpus holding no family at all
+ * is reported as unscoreable rather than scored over an empty set.
  *
  * A cell that beats another is not a better rule. The grid is large and the labelled
  * set is small, so the best cell on it is fitted to the measurement rather than found
@@ -44,16 +56,23 @@ import Database from 'better-sqlite3';
 import { and, eq, inArray, max } from 'drizzle-orm';
 
 import {
-  clustersOf,
-  evaluateClusterGrouping,
   formatGateRefusals,
   gateRefusals,
   resolveClusterPairs,
   type GateRefusals,
-  type GroupedTopic,
   type ResolvedStoryPair,
   type TopicScope,
 } from '../src/benchmark/cluster-grouping-benchmark.js';
+import {
+  accuracyFrontier,
+  formatScoredOver,
+  formatSweepFrontier,
+  formatSweepGrid,
+  formatSweepSemanticAxis,
+  sweepCell,
+  type SweepCell,
+  type SweepRead,
+} from '../src/benchmark/cluster-sweep-report.js';
 import { createDatabase, type Db } from '../src/db/client.js';
 import { articles, sources, stories } from '../src/db/schema.js';
 import {
@@ -62,9 +81,7 @@ import {
   SHIPPED_MERGE_GATE,
   SHIPPED_MERGE_THRESHOLD,
   SIGNATURE_SIMILARITY_FLOOR,
-  describeThresholds,
   formatGroupingRefusal,
-  groupIntoClusters,
   refusedSets,
   type GroundedStory,
   type MergeGate,
@@ -72,7 +89,7 @@ import {
 } from '../src/domain/cluster-grouping.js';
 import { clusterWindowStart } from '../src/domain/cluster-window.js';
 import { EMPTY_SIGNATURE } from '../src/domain/story-signature.js';
-import type { StoryId, TopicId } from '../src/domain/types.js';
+import type { StoryId } from '../src/domain/types.js';
 import { readRequiredString } from '../src/env.js';
 import { DrizzleArticleRepo } from '../src/repos/article-repo.js';
 import { DrizzleStoryRepo } from '../src/repos/story-repo.js';
@@ -91,12 +108,9 @@ import {
  * `groundingFor`, so this measures the rule rather than a second reading of
  * the corpus, and the signature and the embedding are the ones the Story carries.
  */
-interface TopicRead {
-  readonly topicId: TopicId;
+interface TopicRead extends SweepRead {
   /** What a refusal names this set by, which is a Topic's own title. */
   readonly label: string;
-  readonly storyIds: readonly StoryId[];
-  readonly grounding: readonly GroundedStory[];
   readonly readingByStoryId: ReadonlyMap<StoryId, GroundedStory>;
 }
 
@@ -116,11 +130,11 @@ const SIGNATURE_FLOORS = [0.02, 0.03, 0.04, 0.05, 0.06, 0.08];
  *
  * Two tables rather than one three-dimensional grid, and the reason is that this is
  * a different measurement rather than a third axis of the same one. The grid below
- * is a frontier over the two floors that were here first, with the semantic floor
- * pinned where the rule ships it, so two cells of it are comparable with the run
- * before this axis existed. The table after it moves one floor and holds the other
- * two — which is the only way to see what a floor does on its own, since a diagonal
- * walk across three would attribute every movement to all three at once.
+ * holds the semantic floor where the rule ships it and sweeps the two floors that
+ * were here first, so two cells of it are comparable with the run before this axis
+ * existed. The table after it moves one floor and holds the other two — which is
+ * the only way to see what a floor does on its own, since a diagonal walk across
+ * three would attribute every movement to all three at once.
  *
  * The shipped value is an interior cell and is written as the constant rather than
  * as a literal, so a row of this table can never stop showing where the rule sits.
@@ -267,51 +281,25 @@ async function main(): Promise<number> {
       );
       return 1;
     }
-    // A cell scored against a different set of families is not comparable with a cell
-    // scored against this one, so the sweep refuses rather than prints a frontier that
-    // silently changed its own denominator halfway down.
-    if (resolution.unresolved.length > 0 || resolution.contested.length > 0) {
-      process.stderr.write(
-        'the corpus does not hold every labelled pair, so the sweep would not be comparable\n',
-      );
-      return 1;
-    }
 
     /**
-     * Group every Topic at these floors and score it, as one row of the report.
+     * Group every Topic at these floors and score it, as one cell of the report.
      *
-     * Grouped with no `thresholds` marker on the GroupedTopic, because
-     * `evaluateClusterGrouping` scores only the unmarked grouping: the marker is
-     * how the benchmark keeps a swept grouping out of the shipped point's totals.
+     * The sweep reads the corpus once and groups it once per cell, so what each
+     * cell says is about the rule rather than about a second reading of it.
      */
-    const cell = (thresholds: MergeThresholds, gate: MergeGate): string => {
-      const grouped: GroupedTopic[] = reads.map((read) => ({
-        topicId: read.topicId,
-        clusters: clustersOf(
-          groupIntoClusters(
-            read.storyIds,
-            (_storyId, index) => read.grounding[index]!,
-            { thresholds, gate },
-          ),
-        ),
-      }));
-      const report = evaluateClusterGrouping({
-        grouped,
+    const cellAt = (thresholds: MergeThresholds, gate: MergeGate): SweepCell =>
+      sweepCell({
+        reads,
         resolution,
         readingOf: (storyId) => readingForStory(reads, storyId),
-        signatureFloor: thresholds.signature,
-        semanticFloor: thresholds.semantic,
+        thresholds,
+        gate,
       });
-      return (
-        `${gate}\t${describeThresholds(thresholds)}\t${percentage(report.recall.ratio)}\t` +
-        `${percentage(report.precision.ratio)}\t${report.clusters}\t${report.largestCluster}\t` +
-        `${percentage(report.singletonProportion)}`
-      );
-    };
 
-    // The frontier over the two floors that were here first, with the semantic one
+    // The grid over the two floors that were here first, with the semantic one
     // pinned where the rule ships it.
-    const frontier: string[] = [];
+    const grid: SweepCell[] = [];
     for (const signature of SIGNATURE_FLOORS) {
       for (const entity of ENTITY_FLOORS) {
         const thresholds: MergeThresholds = {
@@ -319,28 +307,38 @@ async function main(): Promise<number> {
           signature,
           semantic: SEMANTIC_SIMILARITY_FLOOR,
         };
-        for (const gate of GATES) frontier.push(cell(thresholds, gate));
+        for (const gate of GATES) grid.push(cellAt(thresholds, gate));
       }
     }
     // The semantic floor as its own axis, with the other two held at the shipped
     // point. A separate table because a reader asking what this floor does is
-    // asking a different question from the one the frontier above answers.
-    const semantic: string[] = [];
+    // asking a different question from the one the grid above answers.
+    const semantic: SweepCell[] = [];
     for (const floor of SEMANTIC_FLOORS) {
       const thresholds: MergeThresholds = { ...SHIPPED_MERGE_THRESHOLD, semantic: floor };
-      for (const gate of GATES) semantic.push(cell(thresholds, gate));
+      for (const gate of GATES) semantic.push(cellAt(thresholds, gate));
     }
+    // The cell the rule ships, which is the one the benchmark's numbers are
+    // about, and the one the report says what every cell was weighed over.
+    const shipped = cellAt(SHIPPED_MERGE_THRESHOLD, SHIPPED_MERGE_GATE);
 
+    process.stdout.write(formatSweepGrid(grid));
     process.stdout.write(
-      `gate\tfloors\trecall\tprecision\tclusters\tlargest\tsingletons\n${frontier.join('\n')}\n`,
+      formatSweepSemanticAxis(semantic, {
+        entity: ENTITY_SIMILARITY_FLOOR,
+        signature: SIGNATURE_SIMILARITY_FLOOR,
+      }),
     );
-    process.stdout.write(
-      `\nsemantic floor, with the Entity floor at ${ENTITY_SIMILARITY_FLOOR} and the signature floor at ${SIGNATURE_SIMILARITY_FLOOR}\n` +
-        `gate\tsemantic\trecall\tprecision\tclusters\tlargest\tsingletons\n${semantic.join('\n')}\n`,
-    );
+    // The frontier over both tables: the cells no other cell beats on both recall
+    // and precision, so a floor is read off one list rather than off two tables
+    // compared by hand.
+    process.stdout.write(formatSweepFrontier(accuracyFrontier([...grid, ...semantic])));
+    // What every one of those numbers is over: the labelled families the corpus
+    // holds, named, and the ones it could not weigh, named too.
+    process.stdout.write(formatScoredOver({ cell: shipped, resolution }));
     // Which floor of the shipped gate turned each labelled family away, counted at the floors
-    // the rule ships rather than across the grid: the grid is a frontier and this is
-    // an answer, and a frontier at 96 cells cannot carry a sentence per cell.
+    // the rule ships rather than across the grid: the grid is a sweep and this is
+    // an answer, and a grid at 96 cells cannot carry a sentence per cell.
     const scopes: TopicScope[] = reads.map((read) => ({
       storyIds: read.storyIds,
       // The map was built from these Story ids, so every one of them is a key in it.
@@ -355,6 +353,24 @@ async function main(): Promise<number> {
         { thresholds: SHIPPED_MERGE_THRESHOLD },
       ),
     );
+    // The report says what it could not weigh; the exit code says the corpus is
+    // not the whole labelled set, the same way the benchmark says it.
+    if (shipped.recall.families === 0 || shipped.precision.families === 0) {
+      process.stderr.write(
+        'no labelled family could be weighed on one side, so no cell could be scored\n',
+      );
+      return 1;
+    }
+    if (
+      resolution.unresolved.length > 0 ||
+      resolution.contested.length > 0 ||
+      resolution.duplicated.length > 0
+    ) {
+      process.stderr.write(
+        'the corpus does not hold every labelled family, so the numbers are over the families it holds\n',
+      );
+      return 1;
+    }
     return 0;
   } finally {
     driver.close();
@@ -367,11 +383,6 @@ function refusalsOf(
   scopes: readonly TopicScope[],
 ): GateRefusals {
   return gateRefusals({ pairs, topics: scopes, thresholds: SHIPPED_MERGE_THRESHOLD });
-}
-
-/** A share of families, as a percentage, or a dash when none could be measured. */
-function percentage(ratio: number | null): string {
-  return ratio === null ? '  -  ' : `${(ratio * 100).toFixed(1)}%`;
 }
 
 main()
