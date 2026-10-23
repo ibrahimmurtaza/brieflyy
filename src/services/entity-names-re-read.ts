@@ -74,20 +74,28 @@ export async function reReadArticleNames(
   deps: ReReadArticleNamesDeps,
 ): Promise<EntityReReadReport> {
   const batchSize = deps.batchSize ?? DEFAULT_BATCH_SIZE;
-  const articles = await deps.articleRepo.listAllArticles();
+  let offset = 0;
+  let articlesReRead = 0;
   let articlesChanged = 0;
   let namesChanged = 0;
-  for (let start = 0; start < articles.length; start += batchSize) {
-    for (const article of articles.slice(start, start + batchSize)) {
+  for (;;) {
+    const page = await deps.articleRepo.listArticles({
+      offset,
+      number: batchSize,
+    });
+    for (const article of page.articles) {
       const moved = await reReadArticle(deps, article);
       if (moved > 0) {
         articlesChanged += 1;
         namesChanged += moved;
       }
     }
+    articlesReRead += page.articles.length;
+    if (!page.hasMore) break;
+    offset += page.articles.length;
   }
   return {
-    articlesReRead: articles.length,
+    articlesReRead,
     articlesChanged,
     namesChanged,
   };
@@ -102,18 +110,18 @@ async function reReadArticle(
   article: Article,
 ): Promise<number> {
   const text = articleText(article.title, article.body);
-  // Keyed by the extracted key rather than the id, because one Article can name
-  // a thing twice under two keys — a short name that resolves onto the fuller
-  // one and the fuller one itself — and both resolutions end at one row.
-  const byKey = new Map<string, EntityId>();
+  // The ids are gathered into a Set because two keys the one Article names — a
+  // short name and the name it was read as the shortening of — can both resolve
+  // onto the same Entity row, and what the Article carries is one link per
+  // Entity, not one link per way of writing it.
+  const next = new Set<EntityId>();
   for (const name of extractEntities(text)) {
     const resolved = await deps.entityRepo.upsertByKey({
       entity: name,
       id: deps.random.uuid() as EntityId,
     });
-    byKey.set(name.key, resolved.id);
+    next.add(resolved.id);
   }
-  const next = new Set(byKey.values());
   const carried = new Set(article.entities.map((e) => e.id));
   let added = 0;
   for (const id of next) {

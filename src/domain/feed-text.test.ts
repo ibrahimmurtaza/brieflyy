@@ -22,6 +22,15 @@ describe('stripFeedMetadata', () => {
     expect(
       stripFeedMetadata('By the clock it was noon, and the doors opened.'),
     ).toBe('By the clock it was noon, and the doors opened.');
+    // A line that opens with By and carries on into the sentence is prose about
+    // when, not a line the feed printed to name its writer: the run of
+    // capitals it would take off the front is the sentence's subject.
+    expect(
+      stripFeedMetadata('By Monday OpenAI announced the enterprise price.'),
+    ).toBe('By Monday OpenAI announced the enterprise price.');
+    expect(
+      stripFeedMetadata('By Tuesday and Wednesday the deal was done.'),
+    ).toBe('By Tuesday and Wednesday the deal was done.');
   });
 
   it('removes a photo credit wherever it appears', () => {
@@ -47,6 +56,15 @@ describe('stripFeedMetadata', () => {
         'Picture: Acme Photos and the crowd cheered.',
       ),
     ).toBe('and the crowd cheered.');
+    // A credit the story did not put at the head of a line or the seam of a
+    // sentence is the story's own words about a picture or about credit, and
+    // is left standing rather than deleted.
+    expect(
+      stripFeedMetadata('An image by Rembrandt hung beside it.'),
+    ).toBe('An image by Rembrandt hung beside it.');
+    expect(
+      stripFeedMetadata('He had good credit, Acme Corp said.'),
+    ).toBe('He had good credit, Acme Corp said.');
   });
 
   it('removes a leading caption so the picture description is not a name', () => {

@@ -87,10 +87,15 @@ const NEWSLETTER_PROMO =
  * A byline the feed prints at the head of the item: "By Elsa Marquardt" or
  * "By Elsa Marquardt, Staff Writer". It names the person who wrote the item
  * rather than what the item is about, so it is not a name the story carries.
- * Anchored at the start of the text, because a byline is a position not a
- * claim — "by the time" mid-sentence is prose and is left alone.
+ *
+ * Bound to its whole line, because a byline is a position the feed prints it
+ * on — a line of its own — and prose a headline can also open with By: "By
+ * Monday OpenAI announced…" is about OpenAI, and a cut that took the run of
+ * capitals off the front of it would be eating the sentence's subject, not the
+ * feed's furniture.
  */
-const BYLINE = /^\s*By[ ]+[A-Z][A-Za-z’'-]+(?:[ ]+(?:and[ ]+)?[A-Z][A-Za-z’'-]+)*(?:[ ]*,[ ]*(?:Staff[ ]+)?(?:Writer|Reporter|Correspondent|Editor|Chief))?[ ]*/;
+const BYLINE =
+  /^\s*By[ ]+[A-Z][A-Za-z’'-]+(?:[ ]+(?:and[ ]+)?[A-Z][A-Za-z’'-]+)*(?:[ ]*,[ ]*(?:Staff[ ]+)?(?:Writer|Reporter|Correspondent|Editor|Chief))?\s*$/m;
 
 /**
  * A photo credit the feed stamps on the item: "Photo by Jane Doe", "Credit:
@@ -98,9 +103,17 @@ const BYLINE = /^\s*By[ ]+[A-Z][A-Za-z’'-]+(?:[ ]+(?:and[ ]+)?[A-Z][A-Za-z’'
  * picture desk, not the subject of the story. The name is read across spaces
  * only, so a credit that names its photographer cannot run on into the first
  * sentence of the story that follows it.
+ *
+ * The keyword is bound to the head of a line or the seam of a sentence, and it
+ * joins its photographer only with "by" or ":" — a wall of prose can name a
+ * thing's credit or an image mid-sentence ("he had good credit, Acme said",
+ * "an image by Rembrandt hung beside it"), and taking that would be deleting
+ * the story's own words rather than the feed's. The keyword's own cases are
+ * written out rather than asked for inline, because not every Node this runs
+ * on is new enough for a case-modified group.
  */
 const PHOTO_CREDIT =
-  /\b(?i:photo|image|picture|credit)\s*(?:by|:|,)\s*[A-Z][A-Za-z’'-]+(?:[ ]+[A-Z][A-Za-z’'-]+)*\.?\s*/g;
+  /(?:^[ ]*|(?<=[.!?][ ]))\b(?:[Pp]hoto|[Ii]mage|[Pp]icture|[Cc]redit)[ ]*(?:by|:)[ ]*[A-Z][A-Za-z’'-]+(?:[ ]+[A-Z][A-Za-z’'-]+)*\.?[ ]*/gm;
 
 /**
  * A caption the feed prefixes to the item: "Caption: ...". It describes the
