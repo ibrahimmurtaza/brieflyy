@@ -79,6 +79,7 @@ pnpm cluster:summary     # how much of a Cluster's bullets restate the Cluster a
 pnpm cluster:price       # what one cycle of grouping costs, per Topic, over a corpus
 pnpm cluster:backfill    # embed the Stories a corpus held before anything carried one
 pnpm archive:corpus      # fetch archived feed copies from the Wayback Machine into the corpus cache
+pnpm corpus:build "path/to/corpus.db"  # build the labelled corpus from the archived feeds through the ingest path; names the labelled families it cannot weigh and refuses a corpus holding embeddings from more than one model
 ```
 
 `pnpm db:migrate` is the command that applies DDL, and it is the one the "Changing
@@ -937,12 +938,12 @@ counted.
 pnpm test
 ```
 
-The suite is 114 test files across `src/` holding 2,068 cases — Vitest prints the
+The suite is 115 test files across `src/` holding 2,068 cases — Vitest prints the
 live figure at the end of every run. `docs-agreement.test.ts` checks the file
 count and cannot check the case count without running the suite it lives in, so
 that one number is worth reading off a run rather than trusting.
 
-The layout is **93 of the 155 modules** under `src/` having a sibling test file of
+The layout is **94 of the 156 modules** under `src/` having a sibling test file of
 the same name. The other 62 are reached by a suite named for what it covers rather
 than for one module — `repos/oauth-repos.test.ts` over four repositories,
 `pages/topic-page.test.ts` over the routes that render a Topic — and some are
