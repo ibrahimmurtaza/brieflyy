@@ -314,67 +314,90 @@ describe('similarityBetween', () => {
 });
 
 describe('groupIntoClusters', () => {
-  it('groups Stories sharing a rare Entity and splits two sharing only a common one', () => {
-    const common = entity();
+  it('merges Stories that share a signature and meaning whatever their Entities', () => {
+    // The Entity floor no longer refuses: disjoint Entities with the same
+    // signature and meaning still merge.
     const rare = entity();
-    const first = entity();
-    const second = entity();
+    const aside = entity();
 
-    const groups = groupsOfEntities([
-      [common, rare],
-      [common, rare],
-      [common, first],
-      [common, second],
+    const groups = groupsOf([
+      reading([rare], SAME_TEXT),
+      reading([aside], SAME_TEXT),
     ]);
 
-    expect(groups).toHaveLength(3);
     expect(groups).toContainEqual([0, 1]);
-    expect(groups.filter((group) => group.length === 1)).toHaveLength(2);
+    expect(groups).toHaveLength(1);
+  });
+
+  it('splits Stories that share Entities but not a signature', () => {
+    // Entities never force a merge: the same Entity with different signatures
+    // stays apart.
+    const shared = entity();
+
+    const groups = groupsOf([
+      reading([shared], text('acme', 'foo', 'launch')),
+      reading([shared], text('ruling', 'overturns', 'appeal')),
+    ]);
+
+    expect(groups).toEqual([[0], [1]]);
+  });
+
+  it('splits Stories that share Entities and a signature but not a meaning', () => {
+    const shared = entity();
+
+    const groups = groupsOf([
+      reading([shared], SAME_TEXT, meaning('x')),
+      reading([shared], SAME_TEXT, meaning('y')),
+    ]);
+
+    expect(groups).toEqual([[0], [1]]);
   });
 
   it('does not form a Cluster out of a chain of incidental links', () => {
-    // The first two are alike and the last two are alike, and the outer pair are
-    // not. Transitive closure returns one Cluster of four here.
-    const left = entity();
-    const right = entity();
-    const sharedLeft = entity();
-    const sharedRight = entity();
+    // Adjacent pairs share a signature and meaning, so they merge; the cross
+    // pairs differ in both and are refused. The Entity cosine never refuses.
+    const aSig = text('acme', 'foo');
+    const bSig = text('ruling', 'overturns');
 
-    const groups = groupsOfEntities([
-      [left, sharedLeft],
-      [left, sharedRight, right, sharedLeft],
-      [right, sharedRight],
-      [right],
+    const groups = groupsOf([
+      reading([entity()], aSig, meaning('x')),
+      reading([entity()], aSig, meaning('x')),
+      reading([entity()], bSig, meaning('y')),
+      reading([entity()], bSig, meaning('y')),
     ]);
 
-    expect(groups).toContainEqual([0, 1]);
-    expect(groups.filter((group) => group.length > 2)).toEqual([]);
+    expect(groups).toEqual([[0, 1], [2, 3]]);
   });
 
-  it('keeps a member that is similar enough rather than the most similar of the family', () => {
-    // The merge order is by descending similarity, so the third Story joins last
-    // and on the weakest of the three pairs. It still clears the floor with every
-    // other member, so it belongs in the Cluster.
-    const a = entity();
-    const b = entity();
-    const filler = entity();
-    const filler2 = entity();
+  it('keeps a member out of a Cluster it does not read like, however alike it is to one member', () => {
+    const sharedSig = text('acme', 'foo');
+    const otherSig = text('ruling', 'overturns');
 
-    const groups = groupsOfEntities([
-      [a, b],
-      [a, b, filler],
-      [a, b, filler, filler2],
-      [filler],
-      [filler2],
+    const groups = groupsOf([
+      reading([entity()], sharedSig, meaning('x')),
+      reading([entity()], sharedSig, meaning('x')),
+      reading([entity()], otherSig, meaning('y')),
+      reading([entity()], sharedSig, meaning('x')),
     ]);
 
-    expect(groups).toContainEqual([0, 1, 2]);
+    // The fourth Story clears signature and meaning with both members of the
+    // Cluster, so it joins; the third clears with neither.
+    expect(groups).toEqual([[0, 1, 3], [2]]);
   });
 
-  it('holds the largest Cluster to a bound however long a run of near neighbours is', () => {
-    // A run in which each Story is alike to the next and unlike the one after:
-    // exactly the shape single-linkage chains into one Cluster of forty.
-    expect(largestClusterOf(pairsOfLinks(40))).toBeLessThanOrEqual(2);
+  it('lets no Entity overlap force a merge at any shipped thresholds', () => {
+    // Every Story carries a unique signature, so the signature floor refuses
+    // every pair: an Entity overlap can never force a merge.
+    const run = pairsOfLinks(60).map((entities, index) =>
+      reading(entities, text(`sig-${index}`), meaning('x')),
+    );
+
+    for (const thresholds of SHIPPED_MERGE_THRESHOLDS) {
+      expect(
+        groupsOf(run, thresholds).length,
+        `thresholds ${describeThresholds(thresholds)} let an Entity overlap force a merge`,
+      ).toBe(60);
+    }
   });
 
   it('groups the same Stories the same way whatever order they were read in', () => {
@@ -391,13 +414,17 @@ describe('groupIntoClusters', () => {
     );
   });
 
-  it('leaves a Story with no Entities in a Cluster of its own', () => {
+  it('lets a Story with no Entities join when its signature and meaning agree', () => {
     const shared = entity();
 
-    const groups = groupsOfEntities([[shared], [], [shared]]);
+    const groups = groupsOf([
+      reading([shared], text('acme', 'foo')),
+      reading([], text('acme', 'foo')),
+      reading([shared], text('ruling', 'overturns')),
+    ]);
 
-    expect(groups).toContainEqual([0, 2]);
-    expect(groups).toContainEqual([1]);
+    expect(groups).toContainEqual([0, 1]);
+    expect(groups).toContainEqual([2]);
   });
 
   it('has no Clusters to return for no Stories at all', () => {
@@ -405,31 +432,26 @@ describe('groupIntoClusters', () => {
   });
 
   it('reads the thresholds it was given rather than only the ones it ships', () => {
-    const one = entity();
-    const two = entity();
+    const shared = entity();
 
-    expect(groupsOfEntities([[one], [one, two]], { entity: 0.99, signature: 0, semantic: 0 })).toHaveLength(
-      2,
-    );
-    expect(groupsOfEntities([[one], [one, two]], { entity: 0.1, signature: 0, semantic: 0 })).toHaveLength(
-      1,
-    );
-  });
-
-  it('keeps the largest Cluster bounded at every set of thresholds the rule ships', () => {
-    // The bound the grid carries, over all twenty-seven cells rather than the two
-    // floors' worth this assertion covered before the third was added. The run is
-    // one in which each Story is alike to the next and unlike the one after, which
-    // is the shape single-linkage chains: a third floor can only refuse more pairs,
-    // so the bound has to hold with the third axis in it too.
-    const run = pairsOfLinks(60);
-
-    for (const thresholds of SHIPPED_MERGE_THRESHOLDS) {
-      expect(
-        largestClusterOf(run, thresholds),
-        `thresholds ${describeThresholds(thresholds)} let a Cluster run away`,
-      ).toBeLessThanOrEqual(2);
-    }
+    expect(
+      groupsOf(
+        [
+          reading([shared], text('acme', 'foo', 'launch')),
+          reading([shared], text('ruling', 'overturns', 'appeal')),
+        ],
+        { entity: 0, signature: 0.99, semantic: 0 },
+      ),
+    ).toHaveLength(2);
+    expect(
+      groupsOf(
+        [
+          reading([shared], text('acme', 'foo', 'launch')),
+          reading([shared], text('acme', 'foo', 'launch')),
+        ],
+        { entity: 0, signature: 0, semantic: 0 },
+      ),
+    ).toHaveLength(1);
   });
 
   it('joins two Stories naming the same Entities only when their signatures agree too', () => {
@@ -452,16 +474,16 @@ describe('groupIntoClusters', () => {
   });
 
   it('holds a Story out of a Cluster whose members do not read like it', () => {
-    // The first two agree on both signals, so they merge first. The third reads
-    // like the first and shares its Entities, and not at all like the second — so
-    // the merge the rule refuses is the one putting it in with the pair.
+    // The first two agree on signature and meaning, so they merge. The third
+    // shares their Entities and clears their signature, but means something else,
+    // so the meaning floor keeps it out.
     const shared = entity();
     const other = entity();
 
     const groups = groupsOf([
-      reading([shared], text('acme', 'foo', 'launch')),
-      reading([shared], text('acme', 'foo', 'launch')),
-      reading([shared, other], text('acme', 'quarterly', 'earnings')),
+      reading([shared], text('acme', 'foo', 'launch'), meaning('x')),
+      reading([shared], text('acme', 'foo', 'launch'), meaning('x')),
+      reading([shared, other], text('acme', 'quarterly', 'earnings'), meaning('y')),
     ]);
 
     expect(groups).toContainEqual([0, 1]);
@@ -470,8 +492,7 @@ describe('groupIntoClusters', () => {
 
   it('leaves a Story carrying no signature in a Cluster of its own', () => {
     // An unreadable signature is not evidence that two Stories are one thing, so
-    // the gate refuses rather than waving it through: the same reading as a Story
-    // carrying no Entities, which also sits alone.
+    // the gate refuses rather than waving it through.
     const shared = entity();
 
     const groups = groupsOf([
@@ -490,8 +511,8 @@ describe('groupIntoClusters', () => {
       reading([shared], text('ruling', 'overturns', 'appeal')),
     ];
 
-    // Lifting the signature floor alone joins them, and the Entity floor is
-    // untouched by it: lowering that one alone does not.
+    // Lifting the signature floor alone joins them; lifting the Entity floor
+    // alone does not, because Entities no longer refuse.
     expect(groupsOf(readings, { ...SHIPPED_MERGE_THRESHOLD, signature: 0 })).toContainEqual([
       0, 1,
     ]);
@@ -500,18 +521,16 @@ describe('groupIntoClusters', () => {
     ).not.toContainEqual([0, 1]);
   });
 
-  it('refuses a pair the Entity floor fails without reading its embedding', () => {
-    // Under the gate the rule ships the conjunction refuses on the first cheap
-    // floor that misses, so the dot product over dense vectors is never taken.
+  it('does not refuse a pair on its Entities, and reads its embedding', () => {
     const aside = entity();
     const other = entity();
 
     const groups = groupsOf([
-      reading([aside], SAME_TEXT, unscorable()),
-      reading([other], SAME_TEXT, unscorable()),
+      reading([aside], SAME_TEXT, SAME_MEANING),
+      reading([other], SAME_TEXT, SAME_MEANING),
     ]);
 
-    expect(groups).toEqual([[0], [1]]);
+    expect(groups).toContainEqual([0, 1]);
   });
 
   it('refuses a pair the signature floor fails without reading its embedding', () => {
@@ -612,10 +631,24 @@ describe('the gate a merge has to clear', () => {
     // Read as the default rather than as the absence of the wider gate, because
     // "no gate named" and "the gate the rule ships" are the same rule today and a
     // future reader should not have to know that to trust the first one.
-    expect(groupsOf(unreadTogether())).not.toContainEqual([0, 1]);
     expect(groupsOf(unreadTogether(), undefined, SHIPPED_MERGE_GATE)).toEqual(
       groupsOf(unreadTogether()),
     );
+  });
+
+  it('joins a pair that shares no Entity when its signature and meaning agree', () => {
+    // The Entity floor no longer refuses: two Stories that name nothing in common
+    // but read alike and mean the same thing merge.
+    expect(groupsOf(unreadTogether())).toContainEqual([0, 1]);
+  });
+
+  it('still refuses a pair whose signature fails, whatever its Entities', () => {
+    expect(
+      groupsOf([
+        reading([entity()], text('acme', 'foo', 'launch'), SAME_MEANING),
+        reading([entity()], text('ruling', 'overturns', 'appeal'), SAME_MEANING),
+      ]),
+    ).not.toContainEqual([0, 1]);
   });
 
   it('joins a pair the Entity floor alone refuses when the signature clears it', () => {
@@ -685,14 +718,15 @@ describe('clearsMergeGate', () => {
   const clears = (entity: number, signature: number, semantic: number, gate: MergeGate): boolean =>
     clearsMergeGate({ entity, signature, semantic, thresholds: over, gate });
 
-  it('clears on all three or none of them, under the gate the rule ships', () => {
+  it('clears on signature and semantic under the gate the rule ships, ignoring Entities', () => {
     // The predicate itself rather than the grouping, because two things read it —
     // the rule deciding merges and the benchmark pricing them — and a measure that
     // disagreed with the thing it measures would be pricing a rule nobody runs.
-    expect(clears(0.6, 0.06, 0.8, 'both')).toBe(true);
+    // The Entity floor no longer refuses: a low Entity cosine is ignored.
+    expect(clears(0.4, 0.06, 0.8, 'both')).toBe(true);
     expect(clears(0.6, 0.06, 0.6, 'both')).toBe(false);
     expect(clears(0.6, 0.01, 0.8, 'both')).toBe(false);
-    expect(clears(0.4, 0.06, 0.8, 'both')).toBe(false);
+    expect(clears(0.4, 0.06, 0.8, 'both')).toBe(true);
     expect(clears(0.4, 0.01, 0.8, 'both')).toBe(false);
     expect(clears(0.4, 0.01, 0.6, 'both')).toBe(false);
   });
@@ -727,28 +761,20 @@ describe('the weights and the floors the rule ships', () => {
     expect(SEMANTIC_SIMILARITY_FLOOR).toBeLessThan(1);
   });
 
-  it('runs at the three floors it ships, and all of them at once', () => {
-    // One pair per floor, each refused by that floor alone and by neither of the
-    // other two: a pair naming disjoint Entities but saying the same thing, a pair
-    // naming the same Entities and plainly different in text, and a pair identical
-    // in both that mean opposite things. Each is held apart at the shipped point,
-    // and each joins once its own floor is lifted and nothing else is — which is
-    // what "all three at once" means, and what a blend of the three would not be
-    // able to say.
+  it('refuses a pair on signature or meaning alone, but never on Entities alone', () => {
+    // One pair per floor that refuses: a pair naming the same Entities but plainly
+    // different in text, and a pair identical in both that mean opposite things.
+    // Each is held apart at the shipped point, and each joins once its own floor
+    // is lifted and nothing else is. Entities alone never refuse.
+    const shared = entity();
     const pairs = {
-      entity: () => [
-        reading([entity()], SAME_TEXT),
-        reading([entity()], SAME_TEXT),
-      ],
       signature: () => {
-        const shared = entity();
         return [
           reading([shared], text('acme', 'foo', 'launch')),
           reading([shared], text('ruling', 'overturns', 'appeal')),
         ];
       },
       semantic: () => {
-        const shared = entity();
         return [
           reading([shared], SAME_TEXT, meaning('x')),
           reading([shared], SAME_TEXT, meaning('y')),
@@ -766,6 +792,14 @@ describe('the weights and the floors the rule ships', () => {
         `lifting the ${floor} floor alone did not join its pair`,
       ).toContainEqual([0, 1]);
     }
+
+    // Entities alone never refuse: disjoint Entities with the same signature and
+    // meaning still merge.
+    const entityReadings = [
+      reading([entity()], SAME_TEXT),
+      reading([entity()], SAME_TEXT),
+    ];
+    expect(groupsOf(entityReadings)).toContainEqual([0, 1]);
   });
 
   it('ships the thresholds among the ones it is measured across', () => {
@@ -1009,9 +1043,9 @@ describe('the semantic floor', () => {
     const apart = entity();
 
     const together = groupsOf([
-      reading([shared], SAME_TEXT, null),
-      reading([shared], SAME_TEXT, null),
-      reading([apart], SAME_TEXT, null),
+      reading([shared], text('acme', 'foo'), null),
+      reading([shared], text('acme', 'foo'), null),
+      reading([apart], text('ruling', 'overturns'), null),
     ]);
 
     expect(together).toContainEqual([0, 1]);
@@ -1273,7 +1307,7 @@ describe('groundingFor', () => {
       expect(observed(readings, 'both').walkthrough).toBe(2);
     });
 
-    it('prices the semantic floor only where both cheap floors clear, under the conjunction', () => {
+    it('prices the semantic floor only where the signature clears it, under the conjunction', () => {
       const shared = entity();
       const priced = observed([
         reading([shared], SAME_TEXT, SAME_MEANING),
@@ -1283,10 +1317,10 @@ describe('groundingFor', () => {
       expect(priced.floorPairs).toBe(2);
 
       const refused = observed([
-        reading([entity()], SAME_TEXT, SAME_MEANING),
-        reading([entity()], SAME_TEXT, SAME_MEANING),
+        reading([entity()], text('acme', 'foo', 'launch')),
+        reading([entity()], text('ruling', 'overturns', 'appeal')),
       ], 'both');
-      // Disjoint Entities: the Entity floor refuses before the semantic floor is read.
+      // The signature floor refuses before the semantic floor is read.
       expect(refused.walkthrough).toBe(1);
       expect(refused.floorPairs).toBe(0);
     });

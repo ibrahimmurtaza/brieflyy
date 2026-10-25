@@ -784,11 +784,12 @@ describe('gateRefusals', () => {
   });
 
   it('judges a family in the Topic that comes nearest to admitting it', () => {
-    // The cosine is weighed by how rare each Entity is across the Stories of the
-    // Topic doing the weighing, so the same two Stories are one event in a Topic
-    // where the thing they share is rare and two in a Topic where every Story
-    // shares it. Grouping takes any Topic's merge as the verdict, so a refusal
-    // counted the other way round would be counting something else.
+    // The Entity cosine is weighed by how rare each Entity is across the Stories of
+    // the Topic doing the weighing, so the same two Stories score differently in a
+    // crowded Topic than in a sparse one. Entity still reports in the refusal
+    // partition, but it no longer gates the merge: signature and meaning decide.
+    // A family whose signature and meaning clear is cleared whatever the Entity
+    // cosine says.
     const inACrowdedTopic = scopeOf([
       [storyA, reads([crowded, asideOne], sameWords, sameMeaning)],
       [storyB, reads([crowded, asideTwo], alsoSameWords, sameMeaning)],
@@ -800,7 +801,8 @@ describe('gateRefusals', () => {
       ...filler(16),
     ]);
 
-    expect(refusalsFor([inACrowdedTopic]).twoAloneAdmits).toHaveLength(1);
+    expect(refusalsFor([inACrowdedTopic]).cleared).toHaveLength(1);
+    expect(refusalsFor([inASparseTopic]).cleared).toHaveLength(1);
     expect(refusalsFor([inACrowdedTopic, inASparseTopic]).cleared).toHaveLength(1);
   });
 
