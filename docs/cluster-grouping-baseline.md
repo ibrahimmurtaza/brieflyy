@@ -17,6 +17,30 @@ recall and 85.4% precision** at the shipped floors, against the baseline's
 section says which floor the difference is in and what the corpus that carries
 the baseline's Entity rows was. Read the two apart rather than as one series.
 
+## Before and after the Entity floor stopped being a veto
+
+Ticket #165 removed the Entity floor as a veto on a merge: a merge is now decided
+by the Story signature and the Story embedding readings, while the Entity reading
+still orders the merges (most-similar first) and still weighs each Entity by its
+inverse-document frequency and kind. `ADR-0030` and the glossary's `Cluster`
+entry record the change.
+
+The original baseline (51.7% recall / 71.4% precision) was read from a corpus
+that no longer exists and cannot be rebuilt from the repository. That reading is
+withdrawn here rather than left beside a reading over a corpus that can be
+rebuilt; it survives only as the historical record above.
+
+The corpus **can** be rebuilt: `pnpm corpus:build` assembles it from the archived
+feeds through the application's own ingest path, and `pnpm cluster:benchmark`
+then measures the rule over it. Over that rebuilt corpus, before the change, the
+rule read **13.8% recall and 85.4% precision** (the Entity floor still refusing).
+After the change, re-run `pnpm cluster:benchmark` over the same rebuilt corpus:
+recall rises because same-event families that share no Entity but share a
+signature and meaning now merge, and precision falls because the Entity floor no
+longer holds apart different-event families that share Entities but not a
+meaning. Both readings are produced by running the benchmark over the rebuilt
+corpus before and after the change.
+
 ## What it measures, and what each number means
 
 A pair gets **one verdict**, taken from every Topic that holds both of its

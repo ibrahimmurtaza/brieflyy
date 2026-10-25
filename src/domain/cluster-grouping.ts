@@ -228,7 +228,7 @@ export function clearsMergeGate(scores: {
   const clearsSemantic = semanticApplies && scores.semantic >= scores.thresholds.semantic;
   return scores.gate === 'either'
     ? clearsEntity || clearsSignature || clearsSemantic
-    : clearsEntity && clearsSignature && (clearsSemantic || !semanticApplies);
+    : clearsSignature && (clearsSemantic || !semanticApplies);
 }
 
 /**
@@ -733,7 +733,7 @@ export function groupIntoClusters<T>(
     let semantic: number | null;
     let semanticPriced = false;
     if (gate === 'both') {
-      if (!clearsEntity || !clearsSignature) {
+      if (!clearsSignature) {
         options.onGate?.({ i, j }, false);
         return false;
       }

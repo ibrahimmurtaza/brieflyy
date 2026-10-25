@@ -1,16 +1,26 @@
 # A Cluster is grouped by weighted similarity, gated on the Story signature
 
+> **Superseded in part by [[#165-the-entity-floor-stops-being-a-veto-on-a-merge]]**, which
+> removes the Entity floor as a veto on a merge. A merge is now decided by the
+> Story signature and the Story embedding readings; the Entity reading still
+> orders the merges (most-similar first) and still weights each Entity by its
+> inverse-document frequency and kind, but it no longer refuses a pair on its own.
+> The conjunction this ADR ships is now a conjunction of the signature and the
+> semantic floors rather than of all three. Everything below about the Entity
+> similarity, the IDF weighting, the kind weight, the signature floor and the
+> constrained linkage stands; what changes is which readings a merge must clear.
+
 Supersedes [ADR-0006](0006-cluster-grouping-is-transitive-closure.md). Two Stories
 are scored by the cosine between their Entity vectors — each Entity weighted by
-how rare it is across the Topic's Stories and by what kind of thing it is — and
+how rare it is across the Topic's Stories and by what its kind is — and
 the most similar pair is merged first, subject to every member of the resulting
 Cluster clearing the floor with every other member. A merge also has to clear a
-second floor, on the Story signature, and the two are stated as one
-`MergeThresholds` rather than one at a time. How the two combine is a third
-statement, `MergeGate`, rather than something either floor can be read as:
-whether one of them being enough is enough is a different decision from how alike
-is enough on each, and the alternative to the conjunction this ADR ships is
-measured at the end rather than left to be imagined.
+second floor, on the Story signature, and a third on the Story embedding, and the
+three are stated as one `MergeThresholds` rather than one at a time. How they
+combine is a fourth statement, `MergeGate`, rather than something either floor can
+be read as: whether one of them being enough is enough is a different decision
+from how alike is enough on each, and the alternative to the conjunction this ADR
+ships is measured at the end rather than left to be imagined.
 
 This ADR decides what grouping reads: the Entities a Story names **and** the text
 it carries. The signature was the obvious next lever and is not left to the next
@@ -70,12 +80,15 @@ below 1 separates them. On the negative set, eight of 49 are shaped that way and
 they are the pairs the rule is most confident about joining.
 
 The signature is the signal that tells two reports about the same company apart
-(ADR-0007), and it is a *gate* rather than a ranking for two reasons. The merge
-order stays the Entity cosine descending, so which pairs are considered first is
-unchanged and the ordering argument above survives untouched. And a merge has to
-clear both floors against every member of the resulting Cluster, not merely the
-pair being merged — a Story that reads unlike the Cluster it would join has not
-been shown to belong to it on either signal.
+(ADR-0007), and the embedding is the signal that tells what the Articles meant
+(ADR-0037). The merge order stays the Entity cosine descending, so which pairs are
+considered first is unchanged and the ordering argument above survives untouched.
+A merge has to clear the signature floor and the semantic floor against every
+member of the resulting Cluster, not merely the pair being merged — a Story that
+reads unlike the Cluster it would join has not been shown to belong to it on
+either signal. The Entity cosine no longer refuses a pair on its own: it orders
+the merges, and its IDF-weighted kind weight decides how much each Entity counts,
+but it is not a condition a merge must satisfy.
 
 A Story carrying no signature is never merged on the strength of its Entities,
 the same way one naming no Entity is never merged. Reading nothing is not
@@ -203,28 +216,28 @@ Entity extraction's rather than the rule's.** Six of the 29 same-event families
 share no Entity at all — two reports of one event where one outlet's extractor
 found nothing the other's did — so no similarity function over Entities joins
 them. Five of those six clear a signature floor of 0.04 anyway. More than half
-of real event families still come back split, and which lever finally moves them
-is settled below — against a different corpus from the rest of this ADR, one
-carrying a wide Topic added so that every labelled family can be measured.
+of real event families still come back split, and what finally moves them is the
+signature and the meaning: the Entity cosine orders the merges and weighs each
+Entity, but it no longer refuses a pair, so it cannot be the lever that joins a
+family the other two readings hold apart.
 
 **The gate stays a conjunction, and that is now measured rather than assumed.**
-The lever that reaches those families is the obvious one: let a pair qualify on
-*either* signal rather than both. `pnpm cluster:sweep` sweeps every cell of the
-floor grid under both shapes, against the whole labelled set. The wider gate
-reaches 86.2% recall against the conjunction's 41.4%, which is past the 79.3%
-Entity-only bound above — and it reaches it at 34.7% precision against 71.4%,
-with the singleton share falling from 93.3% to 53.7% and the largest Cluster going
-from five Stories to twenty-one about one thing. Its best precision anywhere on
-the grid is 49.0%, so no widened cell is admissible for a rule that sits at 71.4%.
+The conjunction a merge must clear is the signature floor and the semantic floor;
+the Entity cosine no longer refuses a pair on its own. The wider gate (`either`)
+is measured beside it rather than shipped, so widening the gate is a decision
+somebody takes against those numbers rather than a default that arrives with a
+change to the linkage. The figures priced below were taken under the prior
+three-floor conjunction (Entity, signature and semantic); `docs/cluster-grouping-baseline.md`
+carries the figures re-measured over the rebuilt corpus for the rule as it ships
+now.
 
-Priced one family at a time at the shipped floors, the conjunction refuses **fourteen**
-same-event families that a signature floor alone would admit and **twenty-three**
-different-event families that one floor or the other alone would admit. Through the
-all-pairs constraint that becomes thirteen more same-event families welded against
-eighteen more different-event families welded. Nine of those twenty-three are the
-families two Stories identical as Entity vectors and plainly different as text —
-every Entity-identical negative on that corpus — which no Entity floor can reach
-and which the signature floor is the only thing holding apart.
+Priced one family at a time at the shipped floors, the conjunction refuses
+same-event families that a signature floor alone would admit and different-event
+families that one floor or the other alone would admit. Through the all-pairs
+constraint that becomes still more families welded. The families no Entity floor
+can reach — two Stories identical as Entity vectors and plainly different as text
+— are held apart by the signature floor, and the semantic floor holds apart what
+the first two weld.
 
 That measurement is on a different corpus from the rest of this ADR, one carrying a
 wide Topic added to make every labelled family measurable, and it reads 41.4% /
@@ -237,15 +250,15 @@ different-event family scores 0.061, above the floor, so those families are held
 apart by the Entity cosine or not at all. Precision above 71.4% is reachable —
 0.10 buys 85.7% — and costs 13.8 points of recall. This ADR takes the recall.
 
-The floors are 0.45 and 0.04, stated together as `SHIPPED_MERGE_THRESHOLD`, and
-`SHIPPED_MERGE_THRESHOLDS` is the **grid** of pairings over which the largest
-Cluster is claimed to stay bounded. A grid rather than a line through the
-neighbourhood, because a line attributes every movement to neither floor; reading
-across the Entity floors at one signature floor and down the signature floors at
-one Entity floor is what says which is doing the work. The claim is measured
-rather than asserted: the benchmark regroups every Topic at each pairing and
-prints the largest Cluster it found, which is 6 across the whole grid and never
-more.
+The floors are 0.45 (Entity), 0.04 (signature) and 0.45 (semantic), stated
+together as `SHIPPED_MERGE_THRESHOLD`, and `SHIPPED_MERGE_THRESHOLDS` is the
+**grid** of pairings over which the largest Cluster is claimed to stay bounded. A
+grid rather than a line through the neighbourhood, because a line attributes every
+movement to neither floor; reading across the Entity floors at one signature floor
+and down the signature floors at one Entity floor is what says which is doing the
+work. The claim is measured rather than asserted: the benchmark regroups every
+Topic at each pairing and prints the largest Cluster it found, which is 6 across
+the whole grid and never more.
 
 Related: [[0002-story-and-cluster-are-distinct-grains]],
 [[0005-cluster-velocity-is-measured-over-its-own-life]],
