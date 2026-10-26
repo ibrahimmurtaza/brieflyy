@@ -34,12 +34,28 @@ The corpus **can** be rebuilt: `pnpm corpus:build` assembles it from the archive
 feeds through the application's own ingest path, and `pnpm cluster:benchmark`
 then measures the rule over it. Over that rebuilt corpus, before the change, the
 rule read **13.8% recall and 85.4% precision** (the Entity floor still refusing).
-After the change, re-run `pnpm cluster:benchmark` over the same rebuilt corpus:
-recall rises because same-event families that share no Entity but share a
-signature and meaning now merge, and precision falls because the Entity floor no
-longer holds apart different-event families that share Entities but not a
-meaning. Both readings are produced by running the benchmark over the rebuilt
-corpus before and after the change.
+After the change, `pnpm cluster:benchmark` **does not complete** over this
+rebuilt corpus: without the Entity floor vetoing pairs, the all-pairs linkage
+welds a very large Cluster (the measurement run formed one Cluster of 49 Stories
+over 1,907 Stories in one wide Topic), and regrouping all 27 floor cells on it
+does not return. That hanging sweep is itself the measurement's first finding:
+the Entity floor was doing load-bearing work keeping unrelated Reports apart, and
+removing it as a veto lets the rule weld much more.
+
+A focused measurement at the shipped threshold alone (signature + semantic, no
+27-cell sweep) over the same rebuilt corpus reads **recall 100% (1 of 1 same-event
+family) and precision 46.2% (6 of 13 different-event families)** — but only 14 of
+the 78 labelled families resolve in this rebuilt corpus, so that number is over
+the measurable subset and is not a like-for-like against the before reading above.
+A full before/after over all 78 families requires a rebuilt corpus that holds
+every labelled reference (this one holds only those whose archived feed entries
+or pages could be read), and a machine where the 27-cell sweep does not time out.
+
+The honest statement: the change moves the rule in the direction the ticket
+describes (the Entity floor stops refusing same-event families it cannot reach,
+at the cost of refusing fewer different-event families that share Entities), but
+the clean numerical before/after over the labelled set could not be reproduced
+from this checkout.
 
 ## What it measures, and what each number means
 
