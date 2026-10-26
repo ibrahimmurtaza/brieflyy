@@ -849,6 +849,12 @@ same-event families scored 0.024 to 0.149 on the signature there, all of them
 below the threshold, so none of them had merged. The second row is the corpus
 the feeds would have produced, and it is the one the numbers below are from.
 
+Those figures were taken with the Entity floor still acting as a veto on a
+merge: #165 had not landed, so a merge required the Entity cosine to clear 0.45
+as well as the signature and the embedding. #165 removed that veto, and the
+section after *The floors, swept* re-reads the semantic floor over this same
+rebuilt corpus under the rule that now ships.
+
 ### What the rule reads on it
 
 At the shipped floors — Entity 0.45, signature 0.04, semantic 0.45 — over
@@ -971,3 +977,74 @@ Stories: 22 calls succeeded and the rest came back with nothing.
 **The batch size is the whole of what decides the cost.** 256 to a call embeds
 a whole corpus in seven requests, where the app's default of 16 would have
 wanted one hundred and twenty-six.
+
+### The same corpus read again, with the Entity veto out of the way
+
+Ticket #165 removed the Entity floor as a veto on a merge, so the rule that now
+ships is the Story signature and the Story embedding readings, with the Entity
+reading ordering the merges rather than refusing them. Ticket #166 re-reads the
+semantic floor over this same rebuilt corpus under that rule.
+
+The corpus is `brieflyy.corpus.db`, rebuilt from the archived feeds through the
+application's own ingest path by `pnpm corpus:build` and backfilled by
+`pnpm cluster:backfill`: 2,010 Stories across 22 Sources, 1,929 of them inside
+the one wide Topic's thirty-day window, window ending
+2026-10-21T13:18:53.272Z.
+
+The semantic floor is swept as its own axis with the Entity floor at 0.45 and
+the signature floor at 0.04 held, under the gate the rule ships:
+
+| semantic floor | recall | precision | clusters | largest | singletons |
+| --- | --- | --- | --- | --- | --- |
+| 0.44 | 62.1% | 70.8% | 1481 | 12 | 79.7% |
+| **0.45** | **62.1%** | **66.7%** | **1495** | **11** | **79.9%** |
+| **0.50 (shipped)** | **65.5%** | **77.1%** | **1585** | **7** | **84.4%** |
+| **0.55** | **62.1%** | **81.3%** | **1660** | **5** | **87.3%** |
+| 0.60 | 51.7% | 85.4% | 1739 | 5 | 91.2% |
+| 0.70 | 24.1% | 91.7% | 1867 | 3 | 96.9% |
+| 0.80 | 6.9% | 93.8% | 1924 | 3 | 99.8% |
+| 0.90 | 3.4% | 93.8% | 1927 | 3 | 99.9% |
+
+The cells either side of 0.50 — 0.45 and 0.55 — do not behave alike: 0.45 reads
+62.1% recall and 66.7% precision with the largest Cluster at 11, and 0.55 reads
+62.1% recall and 81.3% precision with the largest Cluster at 5, while 0.50
+reads 65.5% recall and 77.1% precision with the largest Cluster at 7. Recall is
+at its best at 0.50 and falls away on both sides (62.1% at 0.45 and 0.55, 51.7%
+at 0.60), so 0.50 is the point on the measured frontier where recall stops
+being improvable for the precision it buys. The value is a point taken from the
+frontier rather than the conservative end of a plateau, and the measurement is
+what moves the rule.
+
+The semantic floor moves from 0.45 to 0.50. `SHIPPED_MERGE_THRESHOLDS` carries it
+as `{ entity: 0.45, signature: 0.04, semantic: 0.50 }` with the semantic
+neighbourhood `[0.45, 0.50, 0.55]` in `src/domain/cluster-grouping.ts`. The
+distribution each label scores across is printed beside the floor by
+`pnpm cluster:benchmark` — same-event families score 0.047 to 1.000 (29 of 29
+weighed), different-event families score 0.070 to 1.000 (48 of 48 weighed) —
+and `docs/adr/0038` records the floor the original calibration run chose.
+
+At the shipped floors — Entity 0.45, signature 0.04, semantic 0.50 — over
+77 of the 78 labelled families (marketwatch: WP-MKTW-0005278365 is held by no
+archived feed and its page is behind a bot wall):
+
+```
+cluster grouping benchmark
+  rule      IDF-weighted cosine over Entities at a floor of 0.45, a Story signature floor of 0.04 and a Story embedding floor of 0.50, merged most-similar first with an all-pairs floor over all three
+  corpus    1 topics, window ending 2026-10-21T13:18:53.272Z
+
+  recall      65.5%  19 of 29 same-event pairs end up in one Cluster (29 topic observations)
+  precision   77.1%  37 of 48 different-event pairs stay apart (48 topic observations)
+  signature   0.04  the floor a merge's two signatures clear; same-event families score 0.000 to 1.000, different-event families score 0.000 to 1.000
+  semantic    0.50  the floor a merge's two embeddings clear; same-event families score 0.047 to 1.000 (29 of 29 weighed), different-event families score 0.070 to 1.000 (48 of 48 weighed)
+  ceiling     85.4%  for a rule reading Entities only: 7 of 48 are identical as Entity vectors, and their cosine is exactly 1
+  ceiling     93.8%  for a rule reading Entities and signature: 3 of 48 are identical as Entity vectors and in text
+  ceiling     97.9%  for a rule reading Entities, signature and embedding: 1 of 48 is identical in all three
+
+  clusters    1585 over 1 topics holding 1929 stories
+  largest     7 stories in one Cluster
+  singletons  84.4%  1338 of 1585 clusters hold one Story
+```
+
+The largest-Cluster bound is re-checked over the shipped grid — `{ 0.40, 0.45, 0.50 }`
+Entity by `{ 0.03, 0.04, 0.05 }` signature by `{ 0.45, 0.50, 0.55 }` semantic —
+and `pnpm cluster:benchmark` prints it cell by cell.

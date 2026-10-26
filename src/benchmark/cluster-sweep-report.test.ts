@@ -283,7 +283,7 @@ describe('formatSweepGrid', () => {
 
     expect(text).toBe(
       'gate\tfloors\trecall\tprecision\tclusters\tlargest\tsingletons\n' +
-        'both\t0.45/0.04/0.45\t50.0%\t50.0%\t6\t2\t66.7%\n',
+        'both\t0.45/0.04/0.50\t50.0%\t50.0%\t6\t2\t66.7%\n',
     );
   });
 });
@@ -295,7 +295,7 @@ describe('formatSweepSemanticAxis', () => {
     expect(text).toBe(
       '\nsemantic floor, with the Entity floor at 0.45 and the signature floor at 0.04\n' +
         'gate\tsemantic\trecall\tprecision\tclusters\tlargest\tsingletons\n' +
-        'both\t0.45/0.04/0.45\t50.0%\t50.0%\t6\t2\t66.7%\n',
+        'both\t0.45/0.04/0.50\t50.0%\t50.0%\t6\t2\t66.7%\n',
     );
   });
 });
@@ -309,7 +309,7 @@ describe('formatSweepFrontier', () => {
 
     expect(text).toContain('frontier, the cells no other cell beats on both recall and precision');
     expect(text).toContain('a cell is on this list when no other cell is at least as good on both and better on one');
-    expect(text).toContain('both\t0.45/0.04/0.45\t90.0%\t50.0%\t6\t2\t66.7%');
+    expect(text).toContain('both\t0.45/0.04/0.50\t90.0%\t50.0%\t6\t2\t66.7%');
     expect(text).not.toContain('10.0%');
   });
 

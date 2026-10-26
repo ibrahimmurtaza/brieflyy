@@ -298,16 +298,21 @@ export const SIGNATURE_SIMILARITY_FLOOR = 0.04;
  * nothing: the two are measured on different things and neither is a fraction of
  * the other.
  *
- * Chosen from the labelled families on the corpus `docs/adr/0038` names, over a
- * sweep from 0.30 to 0.85 rather than from the point alone. It sits at the **top**
- * of a four-cell plateau — 0.42 through 0.45 score identically on every number the
- * benchmark reports — which is where to take a plateau: the conservative end of the
- * cells that behave alike, so the measurement has to move before the rule does. On
- * that corpus it is worth 3.4 points of recall and 10.2 of precision over the two
- * floors alone, with the largest Cluster unmoved at 5. `pnpm cluster:sweep` reports
- * the axis on demand, and `pnpm cluster:benchmark` prints the distribution each
- * label scores across beside the floor, so neither the point nor the plateau can go
- * stale without a reader seeing it move.
+ * Re-read over the corpus that can be rebuilt (`pnpm corpus:build` into
+ * `brieflyy.corpus.db`, then `pnpm cluster:backfill`), with the Entity floor no
+ * longer a veto on a merge. Swept as its own axis with the Entity floor at 0.45
+ * and the signature floor at 0.04. The shipped 0.45 read 62.1% recall and 66.7%
+ * precision with the largest Cluster at 11; 0.50 reads 65.5% recall and 77.1%
+ * precision with the largest Cluster at 7, so it dominates 0.45 on both numbers
+ * and on the shape. It is the point on the measured frontier where recall is at
+ * its best before it falls away (at 0.60 recall is 51.7%), so the floor moves
+ * there. The distribution each label scores across is printed beside it by
+ * `pnpm cluster:benchmark`: same-event families score 0.047 to 1.000 (29 of 29
+ * weighed), different-event families score 0.070 to 1.000 (48 of 48 weighed). The
+ * earlier reading ADR-0038 fitted on the grafted copy (0.42 through 0.45 a
+ * plateau) does not hold on this corpus: the cells either side of 0.50 do not
+ * behave alike, so the value is a point taken from the frontier rather than a
+ * plateau end, and the measurement is what moves the rule.
  *
  * **Where the two embeddings cannot be compared this floor does not apply**, and the
  * pair is decided by the other two as it was — that is, where either Story carries
@@ -326,7 +331,7 @@ export const SIGNATURE_SIMILARITY_FLOOR = 0.04;
  * fault, so grouping refuses the whole set and names the models instead. See
  * {@link groupIntoClusters} and {@link mixedEmbeddingSet}.
  */
-export const SEMANTIC_SIMILARITY_FLOOR = 0.45;
+export const SEMANTIC_SIMILARITY_FLOOR = 0.50;
 
 /**
  * The floors the rule runs at, as one link.
@@ -358,10 +363,11 @@ export const SHIPPED_MERGE_THRESHOLD: MergeThresholds = {
  */
 const ENTITY_NEIGHBOURHOOD = [0.4, ENTITY_SIMILARITY_FLOOR, 0.5] as const;
 const SIGNATURE_NEIGHBOURHOOD = [0.03, SIGNATURE_SIMILARITY_FLOOR, 0.05] as const;
-// Chosen from the measured sweep rather than by eye: 0.40 is two points of precision
-// below the shipped value and 0.50 nearly seven points of recall below it, so each
-// cell is one the floor can be seen to move and neither is a duplicate of the middle.
-const SEMANTIC_NEIGHBOURHOOD = [0.4, SEMANTIC_SIMILARITY_FLOOR, 0.5] as const;
+// Chosen from the measured sweep rather than by eye: the cells either side of
+// the shipped value are what the largest-Cluster bound is claimed over, and the
+// bound is re-checked against them by `pnpm cluster:benchmark`. The semantic
+// axis moved with the floor, so the neighbourhood moved with it.
+const SEMANTIC_NEIGHBOURHOOD = [0.45, SEMANTIC_SIMILARITY_FLOOR, 0.55] as const;
 
 /**
  * The floors the rule is meant to be read at, and the range over which the
