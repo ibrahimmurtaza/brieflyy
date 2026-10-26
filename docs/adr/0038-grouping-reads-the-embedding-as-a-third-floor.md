@@ -419,10 +419,21 @@ precision where 0.45 reaches it at 79.6%**, and the largest Cluster is 5 against
 — still inside the bound the grid carries. The plateau 0.45 was chosen from (0.42 to
 0.45) ran over cells no command sweeps, so it is not re-measured; on the one
 comparison a command does make, the shipped value is on the wrong side of the step.
-**0.45 still ships**, because a floor is a decision and a measurement in one
+**0.45 still ships here**, because a floor is a decision and a measurement in one
 ticket's handoff is not where a decision gets made. What the next reader is owed is
 that this floor is now priced one step lower than the one that shipped, and that
 the evidence for keeping it was a calibration run nobody could re-run.
+
+Ticket #166 re-read the floor over the corpus that can be rebuilt
+(`brieflyy.corpus.db`, rebuilt by `pnpm corpus:build` and backfilled by
+`pnpm cluster:backfill`), with the Entity floor no longer a veto on a merge
+(#165). Swept as its own axis with the Entity floor at 0.45 and the signature
+floor at 0.04, the measured frontier puts recall at its best at 0.50 (65.5%
+recall, 77.1% precision, largest Cluster 7) where 0.45 read 62.1% recall and
+66.7% precision with the largest Cluster at 11 — so 0.50 dominates 0.45 on both
+numbers and on the shape. #166 moves the shipped semantic floor to 0.50, with the
+semantic neighbourhood `[0.45, 0.50, 0.55]`; the re-read is recorded in
+`docs/cluster-grouping-baseline.md`.
 
 **Where a two-model corpus is concerned this ADR is superseded in part, deliberately.**
 `embeddingSimilarity` answers `null` for two vectors from different models, and the
