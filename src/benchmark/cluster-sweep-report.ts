@@ -98,6 +98,8 @@ export function sweepCell(input: {
   readonly readingOf: (storyId: StoryId) => GroundedStory;
   readonly thresholds: MergeThresholds;
   readonly gate: MergeGate;
+  /** Whether the Entity reading must also clear as a veto on the merge. */
+  readonly requireEntity?: boolean;
 }): SweepCell {
   const grouped: GroupedTopic[] = input.reads.map((read) => ({
     topicId: read.topicId,
@@ -105,7 +107,11 @@ export function sweepCell(input: {
       groupIntoClusters(
         read.storyIds,
         (_storyId, index) => read.grounding[index]!,
-        { thresholds: input.thresholds, gate: input.gate },
+        {
+          thresholds: input.thresholds,
+          gate: input.gate,
+          ...(input.requireEntity !== undefined ? { requireEntity: input.requireEntity } : {}),
+        },
       ),
     ),
   }));
@@ -199,6 +205,31 @@ export function formatSweepSemanticAxis(
   return (
     `\nsemantic floor, with the Entity floor at ${context.entity} and the signature floor at ${context.signature}\n` +
     `gate\tsemantic\trecall\tprecision\tclusters\tlargest\tsingletons\n${cellRows(cells).join('\n')}\n`
+  );
+}
+
+/**
+ * The Entity floor as its own axis, with the signature and semantic floors held
+ * at the shipped point. The Entity floor here is a veto on the merge, so each
+ * cell says what the rule looks like when the Entity reading must also clear.
+ */
+export function formatSweepEntityAxis(
+  cells: readonly SweepCell[],
+  context: { readonly signature: number; readonly semantic: number },
+): string {
+  return (
+    `\nEntity floor as a veto, with the signature floor at ${context.signature} and the semantic floor at ${context.semantic}\n` +
+    `gate\tentity\trecall\tprecision\tclusters\tlargest\tsingletons\n${entityCellRows(cells).join('\n')}\n`
+  );
+}
+
+/** One row of an entity-axis table: the cell, its two numbers, and the shape it left the corpus in. */
+function entityCellRows(cells: readonly SweepCell[]): readonly string[] {
+  return cells.map(
+    (cell) =>
+      `${cell.gate}\t${cell.thresholds.entity.toFixed(2)}\t${percentage(cell.recall.ratio)}\t` +
+      `${percentage(cell.precision.ratio)}\t${cell.clusters}\t${cell.largestCluster}\t` +
+      `${percentage(cell.singletonProportion)}`,
   );
 }
 

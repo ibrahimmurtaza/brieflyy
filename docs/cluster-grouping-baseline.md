@@ -1050,3 +1050,33 @@ The Entity reading above is a containment — the shared weight of the common En
 The largest-Cluster bound is re-checked over the shipped grid — `{ 0.40, 0.45, 0.50 }`
 Entity by `{ 0.03, 0.04, 0.05 }` signature by `{ 0.45, 0.50, 0.55 }` semantic —
 and `pnpm cluster:benchmark` prints it cell by cell.
+
+### The Entity floor read again (#168)
+
+Ticket #168 re-read the Entity floor over the corpus that can be rebuilt
+(`brieflyy.corpus.db`, rebuilt by `pnpm corpus:build`), with the names as they
+are now read (#163 canonicalisation) and the measure as it is now measured
+(#167 containment), sweeping the Entity floor as its own axis with the signature
+floor at 0.04 and the semantic floor at 0.50 held, and the Entity reading
+required as a veto on the merge:
+
+| Entity floor | recall | precision | clusters | largest | singletons |
+| --- | --- | --- | --- | --- | --- |
+| 0.35 | 34.5% | 81.3% | 1746 | 5 | 91.4% |
+| 0.40 | 31.0% | 83.3% | 1753 | 5 | 91.6% |
+| **0.45 (shipped)** | **27.6%** | **83.3%** | **1762** | **5** | **92.0%** |
+| 0.50 | 27.6% | 87.5% | 1776 | 5 | 92.6% |
+| 0.55 | 27.6% | 87.5% | 1785 | 5 | 92.9% |
+
+The shipped rule without the Entity veto reads 65.5% recall and 77.1% precision
+over the same corpus. The Entity floor as a veto costs 38 points of recall
+(65.5% → 27.6%) for a 6.2-point precision gain (77.1% → 83.3%) at 0.45, and at
+0.45 it clears only 27.6% of the same-event families (8 of 29) while refusing
+72.4%. The recall cost is far above the precision bought: the Entity floor
+refuses more than seven of every ten same-event families it could otherwise
+join.
+
+The floor does not earn its place back. It stays out of the gate: the Entity
+reading orders the merges (most-similar first) and weighs each Entity by its
+inverse-document frequency and kind, but it does not refuse a pair on its own.
+The gate remains a conjunction of the signature and semantic floors only.

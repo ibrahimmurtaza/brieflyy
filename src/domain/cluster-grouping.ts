@@ -220,6 +220,8 @@ export function clearsMergeGate(scores: {
   readonly semantic: number | null;
   readonly thresholds: MergeThresholds;
   readonly gate: MergeGate;
+  /** Whether the Entity reading must also clear, as a veto on the merge. */
+  readonly requireEntity?: boolean;
 }): boolean {
   const clearsEntity = scores.entity >= scores.thresholds.entity;
   const clearsSignature = scores.signature >= scores.thresholds.signature;
@@ -227,9 +229,10 @@ export function clearsMergeGate(scores: {
   // whether it refused: only a floor that applies can do either.
   const semanticApplies = scores.semantic !== null;
   const clearsSemantic = semanticApplies && scores.semantic >= scores.thresholds.semantic;
+  const both = clearsSignature && (clearsSemantic || !semanticApplies);
   return scores.gate === 'either'
     ? clearsEntity || clearsSignature || clearsSemantic
-    : clearsSignature && (clearsSemantic || !semanticApplies);
+    : scores.requireEntity ? both && clearsEntity : both;
 }
 
 /**
@@ -664,6 +667,8 @@ export function groupIntoClusters<T>(
   options: {
     readonly thresholds?: MergeThresholds;
     readonly gate?: MergeGate;
+    /** Whether the Entity reading must also clear as a veto on the merge. */
+    readonly requireEntity?: boolean;
     /**
      * Observed once for every pair the gate is asked of — in the candidate walk
      * and again for every member pair the linkage re-asks — with whether the
@@ -676,6 +681,7 @@ export function groupIntoClusters<T>(
 ): Grouping<T> {
   const thresholds = options.thresholds ?? SHIPPED_MERGE_THRESHOLD;
   const gate = options.gate ?? SHIPPED_MERGE_GATE;
+  const requireEntity = options.requireEntity ?? false;
   const readings = items.map(readOf);
 
   // Over the whole set, before any pair is scored: a refusal reached through the
@@ -744,7 +750,7 @@ export function groupIntoClusters<T>(
     let semantic: number | null;
     let semanticPriced = false;
     if (gate === 'both') {
-      if (!clearsSignature) {
+      if (!clearsSignature || (requireEntity && !clearsEntity)) {
         options.onGate?.({ i, j }, false);
         return false;
       }
@@ -759,7 +765,7 @@ export function groupIntoClusters<T>(
       semanticPriced = semantic !== null;
     }
     options.onGate?.({ i, j }, semanticPriced);
-    return clearsMergeGate({ entity, signature, semantic, thresholds, gate });
+    return clearsMergeGate({ entity, signature, semantic, thresholds, gate, requireEntity });
   };
 
   // Most similar pair first. Ties break on position so the order is the same on
