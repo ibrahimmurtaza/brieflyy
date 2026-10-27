@@ -66,6 +66,7 @@ import {
 import {
   accuracyFrontier,
   formatScoredOver,
+  formatSweepEntityAxis,
   formatSweepFrontier,
   formatSweepGrid,
   formatSweepSemanticAxis,
@@ -152,6 +153,15 @@ const SEMANTIC_FLOORS = [
   0.8,
   0.9,
 ];
+
+/**
+ * The Entity floor as its own axis, swept with the signature and semantic floors
+ * held at the shipped point, and the Entity reading required as a veto on the
+ * merge. This is the measurement ticket #168 takes: whether the Entity floor
+ * earns its place back as a condition a merge must satisfy, over the corpus the
+ * command can rebuild, with the names and the measure as they are now.
+ */
+const ENTITY_AXIS_FLOORS = [0.35, 0.4, 0.45, 0.5, 0.55];
 
 /**
  * The gates every cell is swept under, the one the rule ships first.
@@ -288,14 +298,23 @@ async function main(): Promise<number> {
      * The sweep reads the corpus once and groups it once per cell, so what each
      * cell says is about the rule rather than about a second reading of it.
      */
-    const cellAt = (thresholds: MergeThresholds, gate: MergeGate): SweepCell =>
-      sweepCell({
+    const cellAt = (
+      thresholds: MergeThresholds,
+      gate: MergeGate,
+      requireEntity?: boolean,
+    ): SweepCell => {
+      const opts: { thresholds: MergeThresholds; gate: MergeGate; requireEntity?: boolean } = {
+        thresholds,
+        gate,
+      };
+      if (requireEntity !== undefined) opts.requireEntity = requireEntity;
+      return sweepCell({
         reads,
         resolution,
         readingOf: (storyId) => readingForStory(reads, storyId),
-        thresholds,
-        gate,
+        ...opts,
       });
+    };
 
     // The grid over the two floors that were here first, with the semantic one
     // pinned where the rule ships it.
@@ -318,9 +337,26 @@ async function main(): Promise<number> {
       const thresholds: MergeThresholds = { ...SHIPPED_MERGE_THRESHOLD, semantic: floor };
       for (const gate of GATES) semantic.push(cellAt(thresholds, gate));
     }
-    // The cell the rule ships, which is the one the benchmark's numbers are
-    // about, and the one the report says what every cell was weighed over.
-    const shipped = cellAt(SHIPPED_MERGE_THRESHOLD, SHIPPED_MERGE_GATE);
+    // The Entity floor as its own axis, with the signature and semantic floors
+    // held at the shipped point and the Entity reading required as a veto on the
+    // merge. This is the measurement ticket #168 takes: whether the Entity floor
+    // earns its place back as a condition a merge must satisfy.
+    // It runs before the grid because the grid without an Entity veto can hang on
+    // a corpus whose wide Topic welds into one Cluster.
+    const entityAxis: SweepCell[] = [];
+    for (const floor of ENTITY_AXIS_FLOORS) {
+      const thresholds: MergeThresholds = {
+        ...SHIPPED_MERGE_THRESHOLD,
+        entity: floor,
+      };
+      entityAxis.push(cellAt(thresholds, SHIPPED_MERGE_GATE, true));
+    }
+    process.stdout.write(
+      formatSweepEntityAxis(entityAxis, {
+        signature: SIGNATURE_SIMILARITY_FLOOR,
+        semantic: SEMANTIC_SIMILARITY_FLOOR,
+      }),
+    );
 
     process.stdout.write(formatSweepGrid(grid));
     process.stdout.write(
@@ -332,10 +368,12 @@ async function main(): Promise<number> {
     // The frontier over both tables: the cells no other cell beats on both recall
     // and precision, so a floor is read off one list rather than off two tables
     // compared by hand.
-    process.stdout.write(formatSweepFrontier(accuracyFrontier([...grid, ...semantic])));
+    process.stdout.write(
+      formatSweepFrontier(accuracyFrontier([...grid, ...semantic, ...entityAxis])),
+    );
     // What every one of those numbers is over: the labelled families the corpus
     // holds, named, and the ones it could not weigh, named too.
-    process.stdout.write(formatScoredOver({ cell: shipped, resolution }));
+    process.stdout.write(formatScoredOver({ cell: entityAxis[0]!, resolution }));
     // Which floor of the shipped gate turned each labelled family away, counted at the floors
     // the rule ships rather than across the grid: the grid is a sweep and this is
     // an answer, and a grid at 96 cells cannot carry a sentence per cell.
@@ -355,7 +393,7 @@ async function main(): Promise<number> {
     );
     // The report says what it could not weigh; the exit code says the corpus is
     // not the whole labelled set, the same way the benchmark says it.
-    if (shipped.recall.families === 0 || shipped.precision.families === 0) {
+    if (entityAxis[0]!.recall.families === 0 || entityAxis[0]!.precision.families === 0) {
       process.stderr.write(
         'no labelled family could be weighed on one side, so no cell could be scored\n',
       );

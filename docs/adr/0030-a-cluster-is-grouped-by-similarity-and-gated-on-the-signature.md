@@ -9,6 +9,17 @@
 > semantic floors rather than of all three. Everything below about the Entity
 > similarity, the IDF weighting, the kind weight, the signature floor and the
 > constrained linkage stands; what changes is which readings a merge must clear.
+>
+> Ticket #168 re-read the Entity floor over the corpus that can be rebuilt
+> (`brieflyy.corpus.db`, rebuilt by `pnpm corpus:build`), with the names as they
+> are now read (#163) and the measure as it is now measured (#167 containment),
+> sweeping the Entity floor as its own axis with the signature floor at 0.04 and
+> the semantic floor at 0.50 held. The floor does not earn its place back: at
+> 0.45 it clears only 27.6% of the same-event families (8 of 29) while refusing
+> 72.4%, for a precision gain of 6.2 points (77.1% → 83.3%) — a recall cost far
+> above the precision bought. It stays out of the gate; the Entity reading orders
+> the merges and weighs each Entity, but it does not veto one. The reading is
+> recorded in `docs/cluster-grouping-baseline.md`.
 
 Supersedes [ADR-0006](0006-cluster-grouping-is-transitive-closure.md). Two Stories
 are scored by the shared weight of their common Entities over the smaller of the
