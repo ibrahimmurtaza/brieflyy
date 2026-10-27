@@ -8,10 +8,11 @@
  *
  * The rule is two steps, and they are two decisions rather than one:
  *
- * - **Similarity**: two Stories are scored three times over — once by the cosine
- *   between their Entity vectors, where an Entity's weight is how rare it is across
- *   the Topic's Stories (its inverse document frequency) times what its kind is
- *   worth, so an Entity most Stories name is worth almost nothing and a rare one a
+ * - **Similarity**: two Stories are scored three times over — once by the shared
+ *   weight of their common Entities over the smaller of the two weighted Entity
+ *   vectors, where an Entity's weight is how rare it is across the Topic's Stories
+ *   (its inverse document frequency) times what its kind is worth, so an Entity
+ *   most Stories name is worth almost nothing and a rare one a
  *   lot; once by their Story signatures, which is the signal that tells two reports
  *   about the same company apart (ADR-0007); and once by their Story embeddings,
  *   which is the signal that tells two articles mean the same thing whether or not
@@ -137,7 +138,7 @@ export async function groundingFor(
  * The three floors a merge has to clear, stated separately.
  *
  * A merge happens only where a pair clears all of them, so none can be moved by
- * passing another: a caller lowering the Entity cosine to widen the rule has still
+ * passing another: a caller lowering the Entity reading to widen the rule has still
  * left the signature floor and the semantic floor where the rule ships them, and a
  * caller loosening either of those has not widened the others at all. How the
  * three combine is {@link MergeGate}, which is a fourth statement and not
@@ -255,7 +256,7 @@ export const ENTITY_KIND_WEIGHTS: Readonly<Record<EntityKind, number>> = {
  *
  * Chosen against the benchmark rather than by taste, and the whole neighbourhood
  * behaves alike: `docs/cluster-grouping-baseline.md` carries the measured
- * frontier this sits on. Half a cosine is "these two Articles are largely about
+ * frontier this sits on. Half a containment is "these two Articles are largely about
  * the same named things", which is the question a Cluster answers.
  */
 export const ENTITY_SIMILARITY_FLOOR = 0.45;
@@ -284,15 +285,15 @@ export const SIGNATURE_SIMILARITY_FLOOR = 0.04;
  * reads what the text said rather than what it names or how it reads: two reports
  * of one event by two outlets name the same things and share no wording, and two
  * reports of different events about the same company do the opposite. Neither the
- * Entity cosine nor the signature can tell those apart, and the ceilings the
+ * Entity reading nor the signature can tell those apart, and the ceilings the
  * benchmark prints say how much of the negative set is out of their reach.
  *
- * **A floor on its own rather than a term blended into the Entity cosine.** A blend
+ * **A floor on its own rather than a term blended into the Entity reading.** A blend
  * would make it impossible to say afterwards which signal carried a merge, and the
  * other two are deliberately independent so that moving one does not move another.
  * It is also a whole order of magnitude away from both of the others — a cosine
  * between dense vectors of the same text lands far higher than an IDF-weighted
- * cosine over named things or a Jaccard over words — so tuning it to either of them
+ * containment over named things or a Jaccard over words — so tuning it to either of them
  * would be borrowing a constant rather than reading a distribution. The number
  * being the same as {@link ENTITY_SIMILARITY_FLOOR} is a coincidence and means
  * nothing: the two are measured on different things and neither is a fraction of
@@ -358,7 +359,7 @@ export const SHIPPED_MERGE_THRESHOLD: MergeThresholds = {
  * The Entity and semantic axes carry the same three numbers, which is a coincidence
  * of where the two floors were measured rather than a statement that they are
  * comparable. They are not: one is a cosine between dense vectors and the other
- * between IDF-weighted named things, and tuning one to the other would be borrowing
+ * between IDF-weighted containment over named things, and tuning one to the other would be borrowing
  * a constant rather than reading a distribution.
  */
 const ENTITY_NEIGHBOURHOOD = [0.4, ENTITY_SIMILARITY_FLOOR, 0.5] as const;
@@ -555,18 +556,22 @@ export function inverseDocumentFrequencies(
 }
 
 /**
- * How similar two Stories are, as a cosine between their weighted Entity vectors.
+ * How similar two Stories are, as the shared weight of their common Entities
+ * over the smaller of the two weighted Entity vectors.
  *
  * An Entity's weight in a Story is how rare it is (`inverseDocumentFrequencies`)
  * times what its kind is worth (`ENTITY_KIND_WEIGHTS`). Two Stories score highly
  * when they name the same rare things, whatever else each of them also names,
  * which is what lets a detailed Story join a concise one about the same event:
- * the Entities only the detailed Story has dilute the cosine rather than
- * deciding it.
+ * the Entities only the detailed Story has are weighed against the smaller of
+ * the two rather than diluting a cosine over both.
  *
- * Two Stories with nothing in common, or two with no weighted Entity at all,
- * score zero rather than dividing by a zero norm — a division that came out
- * undefined would be read as evidence they were the same story.
+ * The measure is a containment, not a cosine: it asks how much of the smaller
+ * Story's named weight the larger Story also names, so a concise Story about an
+ * event is fully contained in a detailed one instead of being pushed apart by
+ * the detail. Two Stories with nothing in common, or two with no weighted Entity
+ * at all, score zero rather than dividing by a zero norm — a division that came
+ * out undefined would be read as evidence they were the same story.
  */
 export function similarityBetween(
   left: readonly GroundedEntity[],
@@ -599,7 +604,7 @@ export function similarityBetween(
     if (shared !== undefined) dot += weight * shared;
   }
   if (normA === 0 || normB === 0) return 0;
-  return dot / Math.sqrt(normA * normB);
+  return dot / Math.min(normA, normB);
 }
 
 /**
@@ -608,7 +613,7 @@ export function similarityBetween(
  * A merge happens only where a pair clears the gate {@link groupIntoClusters} is
  * given — all three {@link MergeThresholds} under {@link SHIPPED_MERGE_GATE}, or
  * any of them under the wider one — and each floor decides how alike is enough on
- * its own signal: the Entity cosine answers whether two Stories name the same rare
+ * its own signal: the Entity reading answers whether two Stories name the same rare
  * things, the signature whether they read alike, and the embedding whether they
  * mean the same thing. The linkage below then decides which Clusters those pairs
  * make. Comparison is against every other Story rather than against the one
@@ -616,7 +621,7 @@ export function similarityBetween(
  * grouping a function of when things happened to arrive — one Story landing
  * between two related ones would pull them apart. The order merges go in is by
  * descending Entity similarity and then by position, so the same set of Stories
- * always forms the same Clusters: the cosine picks which pair to consider first,
+ * always forms the same Clusters: the containment picks which pair to consider first,
  * and the other two floors only ever refuse one.
  *
  * A Story whose signature says nothing is never merged on the strength of its

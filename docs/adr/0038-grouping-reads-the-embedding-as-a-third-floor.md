@@ -75,7 +75,7 @@ Against the two floors alone this is **3.4 points of recall and 10.2 of precisio
 with the largest Cluster unmoved at 5 and the singleton share up half a point.
 
 Recall *rising* when a floor is added is not a mistake in the table. The merge order
-is by descending Entity cosine and the candidate set is what the gate admits, so
+is by descending Entity reading and the candidate set is what the gate admits, so
 changing which pairs are admissible changes which pairs are considered first. It
 moves recall both ways, and on this corpus it moves up.
 
@@ -162,7 +162,7 @@ a merge.
 
 As a floor it is independent in the sense that matters: a caller cannot move it by
 passing either of the other two. `MergeThresholds` carries all three as required
-fields, and `clearsMergeGate` takes three scores, so widening the Entity cosine has
+fields, and `clearsMergeGate` takes three scores, so widening the Entity reading has
 left the semantic floor exactly where the rule ships it and the reader can see that
 in the numbers.
 

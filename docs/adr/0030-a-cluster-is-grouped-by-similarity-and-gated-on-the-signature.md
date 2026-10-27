@@ -11,8 +11,9 @@
 > constrained linkage stands; what changes is which readings a merge must clear.
 
 Supersedes [ADR-0006](0006-cluster-grouping-is-transitive-closure.md). Two Stories
-are scored by the cosine between their Entity vectors — each Entity weighted by
-how rare it is across the Topic's Stories and by what its kind is — and
+are scored by the shared weight of their common Entities over the smaller of the
+two weighted Entity vectors — each Entity weighted by how rare it is across the
+Topic's Stories and by what its kind is — and
 the most similar pair is merged first, subject to every member of the resulting
 Cluster clearing the floor with every other member. A merge also has to clear a
 second floor, on the Story signature, and a third on the Story embedding, and the
@@ -53,8 +54,11 @@ The similarity itself was the other half of the failure. Dividing the shared
 Entities by the *larger* of the two sets means a detailed Story can never join a
 concise one about the same event, however obviously they are one story: the
 second Story names five things the first did not, and scores a third. Cosine
-does not have that failure mode, because the Entities only the detailed Story
-carries dilute the score rather than deciding it.
+softened that — the Entities only the detailed Story carries dilute the score
+rather than decide it — but still pushed a concise Story away from a detailed
+one. Containment fixes it: the shared weight is read over the smaller of the two
+vectors, so a concise Story about an event is fully contained in a detailed one
+rather than being pushed apart by the detail.
 
 ## Why IDF, and why a kind weight
 
@@ -74,19 +78,19 @@ the positives.
 ## Why the signature is a second floor and not a second ranking
 
 Grouping reads Entities alone for a long time, and the negatives that cost the
-most precision were the ones it could not reach: two Stories naming exactly the
-same Entities are the same vector, their cosine is exactly 1, and no Entity floor
-below 1 separates them. On the negative set, eight of 49 are shaped that way and
-they are the pairs the rule is most confident about joining.
+most precision were the ones it could not reach: two Stories whose Entities are
+the same, or where one's Entities are contained in the other's, score exactly 1,
+and no Entity floor below 1 separates them. On the negative set, eight of 49 are
+shaped that way and they are the pairs the rule is most confident about joining.
 
 The signature is the signal that tells two reports about the same company apart
 (ADR-0007), and the embedding is the signal that tells what the Articles meant
-(ADR-0037). The merge order stays the Entity cosine descending, so which pairs are
+(ADR-0037). The merge order stays the Entity reading descending, so which pairs are
 considered first is unchanged and the ordering argument above survives untouched.
 A merge has to clear the signature floor and the semantic floor against every
 member of the resulting Cluster, not merely the pair being merged — a Story that
 reads unlike the Cluster it would join has not been shown to belong to it on
-either signal. The Entity cosine no longer refuses a pair on its own: it orders
+either signal. The Entity reading no longer refuses a pair on its own: it orders
 the merges, and its IDF-weighted kind weight decides how much each Entity counts,
 but it is not a condition a merge must satisfy.
 
@@ -203,7 +207,7 @@ carries the frontier the floor was chosen from.
 
 **The two ceilings, printed together so neither is read as the other.** For a
 rule reading Entities alone the precision bound is 83.7%: eight of the 49
-different-event pairs name exactly the same Entities, so their cosine is exactly
+different-event pairs name exactly the same Entities, so their reading is exactly
 1.0 and no Entity floor below 1 separates them. For a rule reading both signals
 it is **95.9%**: only two of the 49 are identical in both representations, so no
 threshold on either can hold them apart. The shipped rule is the second one, and
@@ -217,13 +221,13 @@ share no Entity at all — two reports of one event where one outlet's extractor
 found nothing the other's did — so no similarity function over Entities joins
 them. Five of those six clear a signature floor of 0.04 anyway. More than half
 of real event families still come back split, and what finally moves them is the
-signature and the meaning: the Entity cosine orders the merges and weighs each
+signature and the meaning: the Entity reading orders the merges and weighs each
 Entity, but it no longer refuses a pair, so it cannot be the lever that joins a
 family the other two readings hold apart.
 
 **The gate stays a conjunction, and that is now measured rather than assumed.**
 The conjunction a merge must clear is the signature floor and the semantic floor;
-the Entity cosine no longer refuses a pair on its own. The wider gate (`either`)
+the Entity reading no longer refuses a pair on its own. The wider gate (`either`)
 is measured beside it rather than shipped, so widening the gate is a decision
 somebody takes against those numbers rather than a default that arrives with a
 change to the linkage. The figures priced below were taken under the prior
@@ -247,7 +251,7 @@ carries the figures, the corpus and what widening it did to the shipped point.
 **More than half the different-event families score above the gate.** The
 signature is a gate, not a separator: on this negative set the median
 different-event family scores 0.061, above the floor, so those families are held
-apart by the Entity cosine or not at all. Precision above 71.4% is reachable —
+apart by the Entity reading or not at all. Precision above 71.4% is reachable —
 0.10 buys 85.7% — and costs 13.8 points of recall. This ADR takes the recall.
 
 The floors are 0.45 (Entity), 0.04 (signature) and 0.45 (semantic), stated

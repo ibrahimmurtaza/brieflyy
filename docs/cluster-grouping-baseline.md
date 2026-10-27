@@ -721,7 +721,7 @@ a third statement beside them rather than a value either of them can be read as.
 
 **Precision is capped at 83.7% for a rule reading Entities, and the cap is
 arithmetic.** Eight of the 49 different-event families name exactly the same
-Entities as one another, so their cosine is exactly 1.0 and no Entity floor below
+Entities as one another, so their reading is exactly 1.0 and no Entity floor below
 1 separates them.
 
 **It is also not the application's ceiling.** A Story carries a signature — its
@@ -742,7 +742,7 @@ these families the same-event pairs run 0.024 to 0.149 and the different-event
 pairs 0.000 to 1.000, so the two classes overlap almost completely and no
 threshold separates them. What the gate buys is precision on the negatives
 Entities cannot separate. More than half the different-event families score above
-the floor — the median is 0.061 — and those are held apart by the Entity cosine
+the floor — the median is 0.061 — and those are held apart by the Entity reading
 or not at all. This is also why the floor is not borrowed from ADR-0007: that
 threshold sits between same-story rewrites at 0.20 and unrelated reports at 0.10,
 measured on ingest fixtures, and the signature's behaviour on Cluster grouping is
@@ -1029,14 +1029,14 @@ archived feed and its page is behind a bot wall):
 
 ```
 cluster grouping benchmark
-  rule      IDF-weighted cosine over Entities at a floor of 0.45, a Story signature floor of 0.04 and a Story embedding floor of 0.50, merged most-similar first with an all-pairs floor over all three
+  rule      IDF-weighted containment over Entities at a floor of 0.45, a Story signature floor of 0.04 and a Story embedding floor of 0.50, merged most-similar first with an all-pairs floor over all three
   corpus    1 topics, window ending 2026-10-21T13:18:53.272Z
 
   recall      65.5%  19 of 29 same-event pairs end up in one Cluster (29 topic observations)
   precision   77.1%  37 of 48 different-event pairs stay apart (48 topic observations)
   signature   0.04  the floor a merge's two signatures clear; same-event families score 0.000 to 1.000, different-event families score 0.000 to 1.000
   semantic    0.50  the floor a merge's two embeddings clear; same-event families score 0.047 to 1.000 (29 of 29 weighed), different-event families score 0.070 to 1.000 (48 of 48 weighed)
-  ceiling     85.4%  for a rule reading Entities only: 7 of 48 are identical as Entity vectors, and their cosine is exactly 1
+  ceiling     85.4%  for a rule reading Entities only: 7 of 48 are identical as Entity vectors, and their reading is exactly 1
   ceiling     93.8%  for a rule reading Entities and signature: 3 of 48 are identical as Entity vectors and in text
   ceiling     97.9%  for a rule reading Entities, signature and embedding: 1 of 48 is identical in all three
 
@@ -1044,6 +1044,8 @@ cluster grouping benchmark
   largest     7 stories in one Cluster
   singletons  84.4%  1338 of 1585 clusters hold one Story
 ```
+
+The Entity reading above is a containment — the shared weight of the common Entities over the smaller of the two vectors — rather than the cosine this block was measured with. The numbers in this block were recorded under the cosine reading; ticket #167 re-reads the floor over the rebuilt corpus under containment, and the re-read numbers belong beside this block rather than in it.
 
 The largest-Cluster bound is re-checked over the shipped grid — `{ 0.40, 0.45, 0.50 }`
 Entity by `{ 0.03, 0.04, 0.05 }` signature by `{ 0.45, 0.50, 0.55 }` semantic —

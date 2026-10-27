@@ -296,11 +296,12 @@ function ceilingOf(
  * How high precision can go on a set of labelled pairs for a rule reading
  * Entities, and nothing else.
  *
- * Two Stories naming the same Entities score a cosine of exactly 1 — their
- * vectors are the same vector — so no floor below 1 holds them apart and no
- * amount of tuning reaches a family like that. Counting those pairs separately
- * separates "the rule is not tuned yet" from "this negative is not separable by
- * Entity at all".
+ * Two Stories naming the same Entities score a containment of exactly 1 — their
+ * vectors are the same vector — and so does a Story whose Entities are contained
+ * in the other's, so no floor below 1 holds either family apart and no amount of
+ * tuning reaches a family like that. Counting those pairs separately separates
+ * "the rule is not tuned yet" from "this negative is not separable by Entity at
+ * all".
  *
  * **This bounds a rule reading Entities, and only those.** A rule reading the
  * Story signature as well clears this number, and the report prints the bound for
@@ -617,8 +618,8 @@ export interface GateRefusals {
  * a model does not think means one thing.
  *
  * A family is judged in the Topic that comes nearest to admitting it, and the
- * cosine is weighed by the Entity weights of *that* Topic's Stories, because the
- * cosine is: the same two Stories are one event where the thing they share is
+ * reading is weighed by the Entity weights of *that* Topic's Stories, because the
+ * reading is: the same two Stories are one event where the thing they share is
  * rare and two where every Story shares it. Taking the best of them is also the
  * only reading consistent with how a family's verdict is formed elsewhere — a
  * Topic holding both Stories welds them and the family counts as welded, so the
@@ -629,7 +630,7 @@ export function gateRefusals(input: {
   readonly topics: readonly TopicScope[];
   readonly thresholds: MergeThresholds;
 }): GateRefusals {
-  // Weights and index read once per Topic rather than once per family: the cosine
+  // Weights and index read once per Topic rather than once per family: the reading
   // is weighed by the rarity each Entity has across that Topic's Stories, so
   // working it out needs the whole of that Topic and nothing of any other one.
   const scopes = input.topics.map((topic) => ({
@@ -683,7 +684,7 @@ for (const pair of input.pairs) {
         ),
       );
       // A Story carries one signature and one embedding whatever Topic it is read
-      // in, so the first are taken and the rest of the loop is spent on the cosine.
+      // in, so the first are taken and the rest of the loop is spent on the reading.
       left ??= scope.readings[atLeft]!;
       right ??= scope.readings[atRight]!;
       semantic ??= embeddingSimilarity(left.embedding, right.embedding);
@@ -978,7 +979,7 @@ export function evaluateClusterGrouping(input: {
     ceilings: [
       {
         reads: 'Entities only',
-        indistinguishable: 'identical as Entity vectors, and their cosine is exactly 1',
+        indistinguishable: 'identical as Entity vectors, or one contained in the other, and their reading is exactly 1',
         ceiling: entityPrecisionCeiling(
           input.resolution.differentEvent,
           input.readingOf,

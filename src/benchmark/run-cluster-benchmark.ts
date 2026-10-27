@@ -146,7 +146,7 @@ async function main(): Promise<number> {
 
     process.stdout.write(
       formatClusterReport(report, {
-        rule: `IDF-weighted cosine over Entities at a floor of ${ENTITY_SIMILARITY_FLOOR}, a Story signature floor of ${SIGNATURE_SIMILARITY_FLOOR} and a Story embedding floor of ${SEMANTIC_SIMILARITY_FLOOR}, merged most-similar first with an all-pairs floor over all three`,
+        rule: `IDF-weighted containment over Entities at a floor of ${ENTITY_SIMILARITY_FLOOR}, a Story signature floor of ${SIGNATURE_SIMILARITY_FLOOR} and a Story embedding floor of ${SEMANTIC_SIMILARITY_FLOOR}, merged most-similar first with an all-pairs floor over all three`,
         corpus,
       }),
     );
