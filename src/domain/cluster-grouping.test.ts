@@ -355,7 +355,7 @@ describe('groupIntoClusters', () => {
 
   it('does not form a Cluster out of a chain of incidental links', () => {
     // Adjacent pairs share a signature and meaning, so they merge; the cross
-    // pairs differ in both and are refused. The Entity cosine never refuses.
+    // pairs differ in both and are refused. The Entity reading never refuses.
     const aSig = text('acme', 'foo');
     const bSig = text('ruling', 'overturns');
 
@@ -456,7 +456,7 @@ describe('groupIntoClusters', () => {
 
   it('joins two Stories naming the same Entities only when their signatures agree too', () => {
     // The two hardest different-event pairs on the benchmark's negative set are
-    // exactly this shape: the same Entity vector, so a cosine of exactly 1, and
+    // exactly this shape: the same Entity vector, so a reading of exactly 1, and
     // two reports about different things. Entities alone cannot tell them apart.
     const shared = entity();
 
@@ -652,7 +652,7 @@ describe('the gate a merge has to clear', () => {
   });
 
   it('joins a pair the Entity floor alone refuses when the signature clears it', () => {
-    // The cosine between two Entity vectors sharing nothing is exactly zero, so
+    // The reading between two Entity vectors sharing nothing is exactly zero, so
     // this is the whole of what the widened gate is for: the same-event families
     // `docs/cluster-grouping-baseline.md` says the Entity rule cannot reach. The
     // two mean opposite things, so the semantic floor says nothing here too and
@@ -675,10 +675,9 @@ describe('the gate a merge has to clear', () => {
 
   it('holds a Story out of a widened-gate Cluster whose members do not read like it', () => {
     // The first two merge on their Entities, their text and their meaning alike. The
-    // third shares the Entities and not the text or the meaning — which the
-    // conjunction would refuse on either of the other two, and which the widened
-    // gate must still weigh against every member rather than against the pair being
-    // merged.
+    // third names nothing the first two name, differs in text and in meaning, so under
+    // the widened gate no floor admits it against either member — the all-pairs
+    // constraint weighs it against every member of the Cluster it would join.
     const shared = entity();
     const other = entity();
 
@@ -686,7 +685,7 @@ describe('the gate a merge has to clear', () => {
       [
         reading([shared], SAME_TEXT, meaning('x')),
         reading([shared], SAME_TEXT, meaning('x')),
-        reading([shared, other], text('ruling', 'overturns', 'appeal'), meaning('y')),
+        reading([other], text('ruling', 'overturns', 'appeal'), meaning('y')),
       ],
       undefined,
       'either',
@@ -722,7 +721,7 @@ describe('clearsMergeGate', () => {
     // The predicate itself rather than the grouping, because two things read it —
     // the rule deciding merges and the benchmark pricing them — and a measure that
     // disagreed with the thing it measures would be pricing a rule nobody runs.
-    // The Entity floor no longer refuses: a low Entity cosine is ignored.
+    // The Entity floor no longer refuses: a low Entity reading is ignored.
     expect(clears(0.4, 0.06, 0.8, 'both')).toBe(true);
     expect(clears(0.6, 0.06, 0.6, 'both')).toBe(false);
     expect(clears(0.6, 0.01, 0.8, 'both')).toBe(false);
@@ -1021,7 +1020,7 @@ describe('the semantic floor', () => {
 
   it('cannot be widened by moving either of the other two floors', () => {
     // The third acceptance criterion, and the reason the floor is a field of
-    // `MergeThresholds` rather than something folded into the Entity cosine: a
+    // `MergeThresholds` rather than something folded into the Entity reading: a
     // caller widening the rule has to name this one too.
     const apart = sameWordsAboutDifferentThings(meaning('x'), meaning('y'));
 

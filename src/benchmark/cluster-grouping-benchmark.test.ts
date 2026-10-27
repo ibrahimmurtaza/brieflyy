@@ -331,7 +331,7 @@ it('measures the largest Cluster at each pair of thresholds swept beside the shi
 
 describe('entityPrecisionCeiling', () => {
   it('counts the different-event families no Entity floor can keep apart', () => {
-    // Two Stories whose Entity sets are identical score a cosine of exactly 1,
+    // Two Stories whose Entity sets are identical score a containment of exactly 1,
     // so no floor below 1 can hold them apart. A rule reading Entities alone
     // cannot beat this number however it is tuned.
     const resolution = resolutionOf(
@@ -390,7 +390,7 @@ describe('bothSignalsPrecisionCeiling', () => {
   it('separates a family that is identical as Entities and plainly different as text', () => {
     // This is the family the Entity-only ceiling cannot reach, and the reason the
     // second signal is worth a threshold of its own: C and D name exactly the same
-    // Entity, so their cosine is exactly 1, and their signatures share nothing.
+    // Entity, so their reading is exactly 1, and their signatures share nothing.
     const resolution = resolutionOf(
       { sameEvent: [], differentEvent: [pair(ref('bbc', '2'), ref('cnbc', '2'))] },
       corpus,
@@ -613,7 +613,7 @@ describe('gateRefusals', () => {
   const rare: GroundedEntity = { id: 'entity-rare' as EntityId, kind: 'concept' };
   const crowded: GroundedEntity = { id: 'entity-crowded' as EntityId, kind: 'org' };
   // Places, so the shared Entity outweighs the one Entity each Story has besides
-  // it: an org aside of equal rarity would cap the cosine near 0.5 and the test
+  // it: an org aside of equal rarity would cap the reading near 0.5 and the test
   // would be about the size of the Topic rather than about which Topic is read.
   const asideOne: GroundedEntity = { id: 'entity-aside-1' as EntityId, kind: 'place' };
   const asideTwo: GroundedEntity = { id: 'entity-aside-2' as EntityId, kind: 'place' };
@@ -686,7 +686,7 @@ describe('gateRefusals', () => {
   });
 
   it('counts a family a signature floor alone admits and the conjunction refuses', () => {
-    // Two Stories sharing no Entity at all, so their cosine is exactly zero. This
+    // Two Stories sharing no Entity at all, so their reading is exactly zero. This
     // is the bucket the ticket's question is about: how much recall the Entity
     // floor costs, counted rather than argued. They mean the same thing as well,
     // so all three floors admit this pair and the semantic one is not what puts it
@@ -784,12 +784,12 @@ describe('gateRefusals', () => {
   });
 
   it('judges a family in the Topic that comes nearest to admitting it', () => {
-    // The Entity cosine is weighed by how rare each Entity is across the Stories of
+    // The Entity reading is weighed by how rare each Entity is across the Stories of
     // the Topic doing the weighing, so the same two Stories score differently in a
     // crowded Topic than in a sparse one. Entity still reports in the refusal
     // partition, but it no longer gates the merge: signature and meaning decide.
     // A family whose signature and meaning clear is cleared whatever the Entity
-    // cosine says.
+    // reading says.
     const inACrowdedTopic = scopeOf([
       [storyA, reads([crowded, asideOne], sameWords, sameMeaning)],
       [storyB, reads([crowded, asideTwo], alsoSameWords, sameMeaning)],
