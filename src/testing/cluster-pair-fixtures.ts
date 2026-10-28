@@ -459,6 +459,149 @@ export const SAME_EVENT_PAIRS: readonly LabelledStoryPair[] = [
     },
     note: 'One Bloomberg report: a touchscreen MacBook Pro and a new iPad Mini for 27 October.',
   },
+  {
+    left: {
+      source: 'bbc-news',
+      externalId: 'https://www.bbc.co.uk/news/articles/crje8edqyej9o#1',
+      headline: 'Netanyahu says Flydubai flight attacker underwent Islamist radical indoctrination',
+    },
+    right: {
+      source: 'the-guardian',
+      externalId: 'https://www.theguardian.com/world/2026/oct/02/indian-pilot-smit-machchhar-recalls-flydubai-cockpit-attack',
+      headline: '‘I was fighting for my life’: Indian pilot hailed as hero recalls Flydubai cockpit attack',
+    },
+    note: 'The same Flydubai cockpit attack, carried by the BBC and by the Guardian as an interview with the pilot.',
+  },
+  {
+    left: {
+      source: 'bbc-news',
+      externalId: 'https://www.bbc.co.uk/news/articles/cw33x4y8k82no#1',
+      headline: 'Twelve killed in attack on airport in Saudi capital Riyadh',
+    },
+    right: {
+      source: 'the-guardian',
+      externalId: 'https://www.theguardian.com/world/2026/oct/11/saudi-coalition-retaliation-houthi-attack-riyadh-airport',
+      headline: 'Riyadh airport hit again after deadly Houthi missile attack, Saudi authorities say',
+    },
+    note: 'The same Houthi missile attack on Riyadh airport, carried by the BBC and by the Guardian.',
+  },
+  {
+    left: {
+      source: 'bbc-news',
+      externalId: 'https://www.bbc.co.uk/news/videos/c962yz01l7mmo#4',
+      headline: 'Watch: Why was the sign at the British consulate in East Jerusalem removed?',
+    },
+    right: {
+      source: 'the-guardian',
+      externalId: 'https://www.theguardian.com/world/2026/oct/07/uk-consulate-east-jerusalem-prepares-close-israel',
+      headline: '‘Palestinians will bear the cost’: UK consulate in East Jerusalem prepares to shut its doors',
+    },
+    note: 'The same decision to close the UK consulate in East Jerusalem, carried by the BBC and by the Guardian.',
+  },
+  {
+    left: {
+      source: 'bbc-news',
+      externalId: 'https://www.bbc.co.uk/news/articles/ck3r5dxxwqzpo#1',
+      headline: 'Riot police clash with students as education protests rage in France',
+    },
+    right: {
+      source: 'sky-news',
+      externalId: 'https://news.sky.com/story/french-schools-set-alight-by-students-in-violent-protests-over-teacher-shortages-and-run-down-buildings-13594112',
+      headline: 'Schools set alight by students in protests across France',
+    },
+    note: 'The same French school protests, carried by the BBC and by Sky News.',
+  },
+  {
+    left: {
+      source: 'bbc-news',
+      externalId: 'https://www.bbc.co.uk/news/articles/ck3r5dxxwqzpo#1',
+      headline: 'Riot police clash with students as education protests rage in France',
+    },
+    right: {
+      source: 'the-guardian',
+      externalId: 'https://www.theguardian.com/world/2026/oct/08/thursday-briefing-why-young-people-are-taking-to-the-streets-across-france',
+      headline: 'Thursday briefing: Why young people are taking to the streets across France',
+    },
+    note: 'The same French school protests, carried by the BBC and by the Guardian.',
+  },
+  {
+    left: {
+      source: 'sky-news',
+      externalId: 'https://news.sky.com/story/french-schools-set-alight-by-students-in-violent-protests-over-teacher-shortages-and-run-down-buildings-13594112',
+      headline: 'Schools set alight by students in protests across France',
+    },
+    right: {
+      source: 'the-guardian',
+      externalId: 'https://www.theguardian.com/world/2026/oct/08/thursday-briefing-why-young-people-are-taking-to-the-streets-across-france',
+      headline: 'Thursday briefing: Why young people are taking to the streets across France',
+    },
+    note: 'The same French school protests, carried by Sky News and by the Guardian.',
+  },
+  {
+    left: {
+      source: 'bbc-news',
+      externalId: 'https://www.bbc.co.uk/news/articles/ck1l34ed592no#1',
+      headline: 'Polls close in Brazil as Lula and Flávio Bolsonaro remain neck and neck',
+    },
+    right: {
+      source: 'the-guardian',
+      externalId: 'https://www.theguardian.com/world/2026/oct/07/flavio-bolsonaro-vows-to-re-democratise-brazil-election',
+      headline: '‘Another coup d’état’: fears grow as Flávio Bolsonaro vows to re-democratise Brazil',
+    },
+    note: 'The same Brazilian election run-off, with Flávio Bolsonaro facing Lula, carried by the BBC and by the Guardian.',
+  },
+  {
+    left: {
+      source: 'bbc-news',
+      externalId: 'https://www.bbc.co.uk/news/articles/cm2d6xd2g4w2o#1',
+      headline: 'Thousands of security personnel deployed as Delhi braces for Cockroach protest',
+    },
+    right: {
+      source: 'the-guardian',
+      externalId: 'https://www.theguardian.com/world/2026/oct/02/india-cockroach-movement-protests-mumbai-changes-voter-roll',
+      headline: 'India’s Cockroach movement launches new protests over changes to voter roll',
+    },
+    note: 'The same Cockroach movement protests in India over voter roll changes, carried by the BBC and by the Guardian.',
+  },
+  {
+    left: {
+      source: 'arstechnica',
+      externalId: 'https://arstechnica.com/health/2026/10/researchers-death-from-undisclosed-illness-sparks-mass-quarantine-in-russia/',
+      headline: 'Mass quarantine issued in Russia after unexplained death of plague researcher',
+    },
+    right: {
+      source: 'the-guardian',
+      externalId: 'https://www.theguardian.com/world/2026/oct/07/who-says-it-does-not-have-full-picture-from-russia-following-suspected-plague-death',
+      headline: 'WHO says it does not have full picture from Russia following suspected plague death',
+    },
+    note: 'The same death of a Russian plague researcher and the quarantine it triggered, carried by Ars Technica and by the Guardian.',
+  },
+  {
+    left: {
+      source: 'bbc-news',
+      externalId: 'https://www.bbc.co.uk/news/articles/cm2kej47095no#1',
+      headline: 'Anger in the streets: Tens of thousands protest in Spain over housing crisis',
+    },
+    right: {
+      source: 'the-guardian',
+      externalId: 'https://www.theguardian.com/world/2026/oct/07/maria-del-carmen-abascal-spain-housing-protests-dies',
+      headline: 'María del Carmen Abascal, symbol of Spain’s housing protests, dies aged 87',
+    },
+    note: 'The same Spain housing crisis and its protests, with the death of a symbol of the movement, carried by the BBC and by the Guardian.',
+  },
+  {
+    left: {
+      source: 'bbc-news',
+      externalId: 'https://www.bbc.co.uk/news/articles/c8zxl62yzxzxo#1',
+      headline: 'Tennessee prison chief to resign after Christa Pike failed execution',
+    },
+    right: {
+      source: 'sky-news',
+      externalId: 'https://news.sky.com/story/prisons-chief-resigns-after-failed-execution-of-christa-pike-in-tennessee-13594688',
+      headline: 'Tennessee prisons chief resigns after failed execution of Christa Pike',
+    },
+    note: 'The same resignation of the Tennessee prisons chief after the botched Christa Pike execution, carried by the BBC and by Sky News.',
+  },
 ];
 
 export const DIFFERENT_EVENT_PAIRS: readonly LabelledStoryPair[] = [
@@ -1118,6 +1261,84 @@ export const DIFFERENT_EVENT_PAIRS: readonly LabelledStoryPair[] = [
       headline: 'Poll: 1 in 4 Trump voters say GOP candidates should break from the president',
     },
     note: 'A leaked plan to roll back the beef import rule, and a poll about Republican disloyalty.',
+  },
+  {
+    left: {
+      source: 'the-guardian',
+      externalId: 'https://www.theguardian.com/environment/2026/oct/02/weather-tracker-eastern-spain-torrential-rain-flooding-nepal-landslides',
+      headline: 'Eastern Spain braces for torrential rain and flooding',
+    },
+    right: {
+      source: 'the-guardian',
+      externalId: 'https://www.theguardian.com/world/2026/oct/07/uk-consulate-east-jerusalem-prepares-close-israel',
+      headline: '‘Palestinians will bear the cost’: UK consulate in East Jerusalem prepares to shut its doors',
+    },
+    note: 'Two Guardian stories about Spain and about the UK consulate in Jerusalem: the same outlet, two different events.',
+  },
+  {
+    left: {
+      source: 'the-guardian',
+      externalId: 'https://www.theguardian.com/world/2026/oct/07/flydubai-attack-investigation-widens-as-alleged-hijackers-training-in-new-zealand-scrutinised-ntwnfb',
+      headline: 'Flydubai attack investigation widens as alleged hijacker’s training in New Zealand scrutinised',
+    },
+    right: {
+      source: 'the-guardian',
+      externalId: 'https://www.theguardian.com/world/2026/oct/07/maria-del-carmen-abascal-spain-housing-protests-dies',
+      headline: 'María del Carmen Abascal, symbol of Spain’s housing protests, dies aged 87',
+    },
+    note: 'Two Guardian stories on the same day: the Flydubai investigation and the death of a housing-protest symbol, two different events.',
+  },
+  {
+    left: {
+      source: 'bbc-news',
+      externalId: 'https://www.bbc.co.uk/news/articles/ck1l34ed592no#1',
+      headline: 'Polls close in Brazil as Lula and Flávio Bolsonaro remain neck and neck',
+    },
+    right: {
+      source: 'bbc-news',
+      externalId: 'https://www.bbc.co.uk/news/articles/ck3r5dxxwqzpo#1',
+      headline: 'Riot police clash with students as education protests rage in France',
+    },
+    note: 'Two BBC stories: Brazil’s election and France’s school protests, the same outlet, two different events.',
+  },
+  {
+    left: {
+      source: 'bbc-news',
+      externalId: 'https://www.bbc.co.uk/news/articles/cw33x4y8k82no#1',
+      headline: 'Twelve killed in attack on airport in Saudi capital Riyadh',
+    },
+    right: {
+      source: 'bbc-news',
+      externalId: 'https://www.bbc.co.uk/news/articles/c8zxl62yzxzxo#1',
+      headline: 'Tennessee prison chief to resign after Christa Pike failed execution',
+    },
+    note: 'Two BBC stories: the Riyadh airport attack and the Tennessee prison chief’s resignation, the same outlet, two different events.',
+  },
+  {
+    left: {
+      source: 'sky-news',
+      externalId: 'https://news.sky.com/story/french-schools-set-alight-by-students-in-violent-protests-over-teacher-shortages-and-run-down-buildings-13594112',
+      headline: 'Schools set alight by students in protests across France',
+    },
+    right: {
+      source: 'sky-news',
+      externalId: 'https://news.sky.com/story/flydubai-co-pilot-australian-links-probed-after-axe-attack-on-captain-13595012',
+      headline: 'Flydubai co-pilot: Australian links probed after axe attack on captain',
+    },
+    note: 'Two Sky News stories: French school protests and the Flydubai co-pilot, the same outlet, two different events.',
+  },
+  {
+    left: {
+      source: 'bbc-news',
+      externalId: 'https://www.bbc.co.uk/news/articles/c8zxl62yzxzxo#1',
+      headline: 'Tennessee prison chief to resign after Christa Pike failed execution',
+    },
+    right: {
+      source: 'the-guardian',
+      externalId: 'https://www.theguardian.com/us-news/2026/oct/07/texas-execution-jamaal-howard',
+      headline: 'Texas kills man in first US execution since botched lethal injection of Christa Pike',
+    },
+    note: 'Two executions ten days apart in different states, linked only by the name Christa Pike: the same Entity, two different events.',
   },
 ];
 

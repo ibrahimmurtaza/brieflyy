@@ -47,7 +47,7 @@ A focused measurement at the shipped threshold alone (signature + semantic, no
 family) and precision 46.2% (6 of 13 different-event families)** — but only 14 of
 the 78 labelled families resolve in this rebuilt corpus, so that number is over
 the measurable subset and is not a like-for-like against the before reading above.
-A full before/after over all 78 families requires a rebuilt corpus that holds
+A full before/after over all 95 families requires a rebuilt corpus that holds
 every labelled reference (this one holds only those whose archived feed entries
 or pages could be read), and a machine where the 27-cell sweep does not time out.
 
@@ -93,13 +93,13 @@ diffable against the run before it.
 ## The labelled sets
 
 `SAME_EVENT_PAIRS` is the recall set: two Stories that are one thing that
-happened, however many outlets reported it. 29 pairs.
+happened, however many outlets reported it. 40 pairs.
 
 `DIFFERENT_EVENT_PAIRS` is the precision set, and it is the hard half. Every pair
 in it shares something real with its partner — the same recurring column, the same
 Entities, or nearly the same words — because two unrelated reports are easy to
 keep apart and a set of easy negatives reports a precision number that means
-nothing. 49 pairs, tagged with what they share:
+nothing. 55 pairs, tagged with what they share:
 
 | Boilerplate | What it is | Pairs |
 | --- | --- | --- |
@@ -112,7 +112,7 @@ nothing. 49 pairs, tagged with what they share:
 | `poll-series` | Two POLITICO polls a day apart. | 1 |
 | `advice-column` | Two readers' money questions an hour apart. | 1 |
 
-The other 29 share Entities rather than a column: two Man City stories, two
+The other 35 share Entities rather than a column: two Man City stories, two
 Brazilian election stories, two reports on the same consulate closure a week
 apart. They are the pairs a rule has to work for, and they are what makes the
 precision number mean anything. Three pairs were cut from an earlier draft of this
