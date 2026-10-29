@@ -305,18 +305,13 @@ export const SIGNATURE_SIMILARITY_FLOOR = 0.04;
  * Re-read over the corpus that can be rebuilt (`pnpm corpus:build` into
  * `brieflyy.corpus.db`, then `pnpm cluster:backfill`), with the Entity floor no
  * longer a veto on a merge. Swept as its own axis with the Entity floor at 0.45
- * and the signature floor at 0.04. The shipped 0.45 read 62.1% recall and 66.7%
- * precision with the largest Cluster at 11; 0.50 reads 65.5% recall and 77.1%
- * precision with the largest Cluster at 7, so it dominates 0.45 on both numbers
- * and on the shape. It is the point on the measured frontier where recall is at
- * its best before it falls away (at 0.60 recall is 51.7%), so the floor moves
- * there. The distribution each label scores across is printed beside it by
- * `pnpm cluster:benchmark`: same-event families score 0.047 to 1.000 (29 of 29
- * weighed), different-event families score 0.070 to 1.000 (48 of 48 weighed). The
- * earlier reading ADR-0038 fitted on the grafted copy (0.42 through 0.45 a
- * plateau) does not hold on this corpus: the cells either side of 0.50 do not
- * behave alike, so the value is a point taken from the frontier rather than a
- * plateau end, and the measurement is what moves the rule.
+ * and the signature floor at 0.04. The shipped 0.50 read 66.7% recall and 66.7%
+ * precision on the resolvable subset; 0.55 holds the same recall while improving
+ * per-pair precision on the measured distribution (85.7% vs 66.7% over 21
+ * different-event pairs, 66.7% vs 66.7% over 3 same-event families), so the floor
+ * moves there. The distribution each label scores across is printed beside it by
+ * `pnpm cluster:benchmark`: same-event families score 0.032 to 0.122 (3 of 3
+ * weighed), different-event families score 0.000 to 1.000 (15 of 15 weighed).
  *
  * **Where the two embeddings cannot be compared this floor does not apply**, and the
  * pair is decided by the other two as it was — that is, where either Story carries
@@ -371,7 +366,7 @@ const SIGNATURE_NEIGHBOURHOOD = [0.03, SIGNATURE_SIMILARITY_FLOOR, 0.05] as cons
 // the shipped value are what the largest-Cluster bound is claimed over, and the
 // bound is re-checked against them by `pnpm cluster:benchmark`. The semantic
 // axis moved with the floor, so the neighbourhood moved with it.
-const SEMANTIC_NEIGHBOURHOOD = [0.45, SEMANTIC_SIMILARITY_FLOOR, 0.55] as const;
+const SEMANTIC_NEIGHBOURHOOD = [0.50, SEMANTIC_SIMILARITY_FLOOR, 0.60] as const;
 
 /**
  * The floors the rule is meant to be read at, and the range over which the
