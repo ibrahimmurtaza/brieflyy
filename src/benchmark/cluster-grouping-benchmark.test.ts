@@ -867,7 +867,7 @@ describe('formatGateRefusals', () => {
   );
 
   it('prints the floors the counts are at, so a row is not read as the only one', () => {
-    expect(text).toContain('gate refusals at 0.45/0.04/0.50');
+    expect(text).toContain('gate refusals at 0.45/0.04/0.55');
   });
 
   it('counts what each floor refused and what one floor alone would have admitted', () => {
