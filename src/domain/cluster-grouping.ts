@@ -335,7 +335,7 @@ export const SIGNATURE_SIMILARITY_FLOOR = 0.04;
  * fault, so grouping refuses the whole set and names the models instead. See
  * {@link groupIntoClusters} and {@link mixedEmbeddingSet}.
  */
-export const SEMANTIC_SIMILARITY_FLOOR = 0.50;
+export const SEMANTIC_SIMILARITY_FLOOR = 0.55;
 
 /**
  * The floors the rule runs at, as one link.
