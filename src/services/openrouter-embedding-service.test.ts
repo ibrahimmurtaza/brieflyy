@@ -394,4 +394,37 @@ describe('createEmbeddingProvider', () => {
     expect(explicit).not.toBeNull();
     expect(createEmbeddingProvider({ env: { OPENROUTER_API_KEY: 'from-env' } })).not.toBeNull();
   });
+
+  it('builds a failover provider from OPENROUTER_API_KEYS with several keys', () => {
+    const provider = createEmbeddingProvider({
+      env: {
+        OPENROUTER_API_KEYS: 'key-one, key-two ,key-three',
+        OPENROUTER_EMBEDDINGS_URL: 'https://elsewhere.test/v1/embeddings',
+        OPENROUTER_EMBEDDING_MODEL: 'vendor/some-embedding-1',
+      },
+    });
+    expect(provider).not.toBeNull();
+    expect(provider).not.toBeInstanceOf(OpenRouterEmbeddingService);
+    expect(typeof (provider as { embedBatch?: unknown }).embedBatch).toBe('function');
+  });
+
+  it('builds a single provider when OPENROUTER_API_KEYS has one key', () => {
+    const provider = createEmbeddingProvider({
+      env: { OPENROUTER_API_KEYS: 'only-key' },
+    });
+    expect(provider).toBeInstanceOf(OpenRouterEmbeddingService);
+  });
+
+  it('takes explicit apiKeys over the environment', () => {
+    const provider = createEmbeddingProvider({
+      apiKeys: ['explicit-one', 'explicit-two'],
+      env: { OPENROUTER_API_KEYS: 'from-env-one, from-env-two' },
+    });
+    expect(provider).not.toBeNull();
+    expect(provider).not.toBeInstanceOf(OpenRouterEmbeddingService);
+  });
+
+  it('builds nothing when OPENROUTER_API_KEYS is all blanks', () => {
+    expect(createEmbeddingProvider({ env: { OPENROUTER_API_KEYS: ' , , ' } })).toBeNull();
+  });
 });

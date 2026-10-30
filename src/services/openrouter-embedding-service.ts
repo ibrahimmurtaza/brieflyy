@@ -9,12 +9,15 @@ import type {
   EmbeddingProvider,
   StoryEmbedding,
 } from '../domain/embedding.js';
-import { readOptionalString, readString, type EnvSource } from '../env.js';
+import { readEmbeddingApiKeys, readString, type EnvSource } from '../env.js';
+import { FailoverEmbeddingService } from './failover-embedding-service.js';
 
 export interface EmbeddingServiceOptions {
   readonly timeoutMs?: number | undefined;
-  /** The credential, resolved by the caller. Absent means the path is switched off. */
+  /** A single credential, resolved by the caller. Absent means the path is switched off. */
   readonly apiKey?: string | undefined;
+  /** Several credentials, tried in order; a failed key rotates to the next. */
+  readonly apiKeys?: readonly string[] | undefined;
   readonly endpointUrl?: string | undefined;
   readonly model?: string | undefined;
 }
@@ -237,17 +240,27 @@ export function createEmbeddingProvider(
   } = {},
 ): EmbeddingProvider | null {
   const env = opts.env ?? {};
-  const apiKey =
-    readOptionalString({ OPENROUTER_API_KEY: opts.apiKey }, 'OPENROUTER_API_KEY') ??
-    readOptionalString(env, 'OPENROUTER_API_KEY');
-  if (apiKey === undefined) return null;
+  let apiKeys: readonly string[];
+  if (opts.apiKeys !== undefined) {
+    apiKeys = opts.apiKeys;
+  } else if (opts.apiKey !== undefined) {
+    apiKeys = [opts.apiKey];
+  } else {
+    apiKeys = readEmbeddingApiKeys(env);
+  }
+  const keys = [...apiKeys].map((key) => key.trim()).filter((key) => key.length > 0);
+  if (keys.length === 0) return null;
 
-  const { env: _env, ...options } = opts;
-  return new OpenRouterEmbeddingService({
-    ...options,
-    apiKey,
-    endpointUrl:
-      options.endpointUrl ?? readString(env, 'OPENROUTER_EMBEDDINGS_URL', OPENROUTER_EMBEDDINGS_URL_DEFAULT),
-    model: options.model ?? readString(env, 'OPENROUTER_EMBEDDING_MODEL', OPENROUTER_EMBEDDING_MODEL_DEFAULT),
-  });
+  const { env: _env, apiKeys: _apiKeys, apiKey: _apiKey, ...options } = opts;
+  const services = keys.map((apiKey) =>
+    new OpenRouterEmbeddingService({
+      ...options,
+      apiKey,
+      endpointUrl:
+        options.endpointUrl ?? readString(env, 'OPENROUTER_EMBEDDINGS_URL', OPENROUTER_EMBEDDINGS_URL_DEFAULT),
+      model: options.model ?? readString(env, 'OPENROUTER_EMBEDDING_MODEL', OPENROUTER_EMBEDDING_MODEL_DEFAULT),
+    }),
+  );
+  if (services.length === 1) return services[0]!;
+  return new FailoverEmbeddingService(services);
 }

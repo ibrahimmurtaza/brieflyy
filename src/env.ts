@@ -155,6 +155,24 @@ export function readEmbeddingBatchSize(env: EnvSource): number {
   );
 }
 
+/**
+ * The embedding credentials, in the order they are tried.
+ *
+ * Reads `OPENROUTER_API_KEYS` as a comma-separated list, trimming and dropping
+ * blanks, and falls back to `OPENROUTER_API_KEY` as a single key. An empty list
+ * means the deployment does not embed — a complete configuration, not a degraded
+ * one.
+ */
+export function readEmbeddingApiKeys(env: EnvSource): readonly string[] {
+  const listed = readOptionalString(env, 'OPENROUTER_API_KEYS');
+  if (listed !== undefined) {
+    const keys = listed.split(',').map((key) => key.trim()).filter((key) => key.length > 0);
+    if (keys.length > 0) return keys;
+  }
+  const single = readOptionalString(env, 'OPENROUTER_API_KEY');
+  return single === undefined ? [] : [single];
+}
+
 export type EmailTransportDriver = 'console' | 'resend';
 export type OauthProvider = 'google';
 
@@ -212,11 +230,12 @@ export interface ServerConfig {
   /** Where the written summaries are asked for. */
   readonly openaiApiUrl: string;
   /**
-   * The key that produces a Story's embedding, or undefined when the deployment
-   * has not configured one — in which case every Story formed carries no
-   * embedding, which is a complete configuration rather than a degraded one.
+   * The keys that produce a Story's embedding, in the order they are tried.
+   * Absent, with the single-key form below, means the deployment does not embed.
+   * When more than one key is present, calls rotate past any key that fails, so a
+   * rate-limited free account does not stop embedding altogether.
    */
-  readonly openrouterApiKey: string | undefined;
+  readonly openrouterApiKeys: readonly string[];
   /** Where an Article's embedding is asked for. */
   readonly openrouterEmbeddingsUrl: string;
   /**
@@ -309,7 +328,7 @@ export function loadServerConfig(env: EnvSource): ServerConfig {
     ),
     openaiApiKey: readOptionalString(env, 'OPENAI_API_KEY'),
     openaiApiUrl: readString(env, 'OPENAI_API_URL', OPENAI_API_URL_DEFAULT),
-    openrouterApiKey: readOptionalString(env, 'OPENROUTER_API_KEY'),
+    openrouterApiKeys: readEmbeddingApiKeys(env),
     openrouterEmbeddingsUrl: readString(
       env,
       'OPENROUTER_EMBEDDINGS_URL',
