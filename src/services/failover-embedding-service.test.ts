@@ -19,9 +19,7 @@ interface RecordedCall {
  * Stubs fetch so each key gets its own reply factory. Records every call so a
  * test can assert which key was used.
  */
-function stubByKey(
-  replies: Record<string, () => unknown>,
-): RecordedCall[] {
+function stubByKey(replies: Record<string, () => unknown>): RecordedCall[] {
   const calls: RecordedCall[] = [];
   vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
     calls.push({ url, init });
@@ -215,10 +213,31 @@ describe('FailoverEmbeddingService.embedBatch', () => {
     const batch = await service.embedBatch([`${TEXT} one`, `${TEXT} two`]);
 
     expect(batch.refused).toBe(false);
-    expect(batch.embeddings.map((e) => e?.values)).toEqual([[0.1], [0.2]]);
+    expect(batch.embeddings.map((e) => (e === null ? null : e.values))).toEqual([[0.1], [0.2]]);
+    // Both keys spent a request: the refused one and the one that answered.
+    expect(batch.usage.requests).toBe(2);
     expect(calls).toHaveLength(2);
     expect(new Headers(calls[0]!.init.headers).get('Authorization')).toBe(`Bearer ${KEY_A}`);
     expect(new Headers(calls[1]!.init.headers).get('Authorization')).toBe(`Bearer ${KEY_B}`);
+  });
+
+  it('maps vectors back onto the texts they were asked about', async () => {
+    const calls = stubByKey({
+      [KEY_A]: () => batchRefused(),
+      [KEY_B]: () => batchReply([[0.1], [0.2]]),
+    });
+
+    const service = new FailoverEmbeddingService([
+      aService(KEY_A),
+      aService(KEY_B),
+    ]);
+
+    // The first text is blank: it must stay null and not consume a vector.
+    const batch = await service.embedBatch(['   ', `${TEXT} one`, `${TEXT} two`]);
+
+    expect(batch.refused).toBe(false);
+    expect(batch.embeddings.map((e) => (e === null ? null : e.values))).toEqual([null, [0.1], [0.2]]);
+    expect(batch.usage.requests).toBe(2);
   });
 
   it('does not rotate when a batch answers but carries null entries', async () => {
@@ -241,7 +260,7 @@ describe('FailoverEmbeddingService.embedBatch', () => {
     expect(calls).toHaveLength(1);
   });
 
-  it('returns null embeddings when every batch is refused', async () => {
+  it('reports a batch every key refused as refused so the caller can retry singly', async () => {
     const calls = stubByKey({
       [KEY_A]: () => batchRefused(),
       [KEY_B]: () => batchRefused(),
@@ -252,11 +271,12 @@ describe('FailoverEmbeddingService.embedBatch', () => {
       aService(KEY_B),
     ]);
 
-    const batch = await service.embedBatch([`${TEXT} one`]);
+    const batch = await service.embedBatch([`${TEXT} one`, `${TEXT} two`]);
 
-    expect(batch.refused).toBe(false);
-    expect(batch.embeddings).toEqual([null]);
-    expect(batch.usage.requests).toBe(1);
+    expect(batch.refused).toBe(true);
+    expect(batch.embeddings).toEqual([null, null]);
+    // Both keys spent a request even though neither answered.
+    expect(batch.usage.requests).toBe(2);
     expect(calls).toHaveLength(2);
   });
 
