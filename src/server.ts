@@ -45,7 +45,7 @@ async function main(): Promise<void> {
   // existed and carries none, and grouping does not read one — so there is nothing
   // here to fail on and nothing to fall back from.
   const embeddingProvider = createEmbeddingProvider({
-    apiKey: config.openrouterApiKey,
+    apiKeys: config.openrouterApiKeys,
     endpointUrl: config.openrouterEmbeddingsUrl,
     model: config.openrouterEmbeddingModel,
     timeoutMs: config.embeddingCallTimeoutMs,

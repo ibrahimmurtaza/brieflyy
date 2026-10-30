@@ -82,7 +82,7 @@ async function main(): Promise<number> {
     const provider = createEmbeddingProvider({ env: process.env });
     if (provider === null) {
       throw new Error(
-        'a backfill needs OPENROUTER_API_KEY: without one no provider is built, and a run with no provider ' +
+        'a backfill needs OPENROUTER_API_KEYS or OPENROUTER_API_KEY: without one no provider is built, and a run with no provider ' +
           'would report that it had nothing to do, which is the line a finished run prints',
       );
     }
