@@ -1055,3 +1055,6 @@ jobs, all three required on `main`:
 No job needs a `.env`: the vitest suite and the Playwright fixture server each
 build their own throwaway SQLite database. Failed e2e runs upload `test-results/`
 so the traces Playwright records on the first retry are downloadable.
+
+
+clustering needs auditing
