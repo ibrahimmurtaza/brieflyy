@@ -414,6 +414,35 @@ describe('groupIntoClusters', () => {
     );
   });
 
+  it('orders the merges by signature agreement, not by Entity containment', () => {
+    // Two pairs clear the gate and the third does not. The Entity reading scores
+    // A–C above A–B, because A and C share three more rare Entities; the signature
+    // is the reverse. Merges are considered in text-agreement order, so A–B goes
+    // first and C is held out of the Cluster — the Entity order would have welded
+    // A–C first and held B out instead.
+    const a = text('alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta', 'eta', 'theta');
+    const b = text('alpha', 'beta', 'gamma', 'delta');
+    const c = text('epsilon', 'zeta', 'kappa', 'lambda', 'mu', 'nu', 'xi', 'omicron');
+
+    const e1 = entity('org');
+    const e2 = entity('org');
+    const e3 = entity('org');
+    const e4 = entity('org');
+    const e5 = entity('org');
+    const e6 = entity('org');
+    const e7 = entity('org');
+    const e8 = entity('org');
+
+    // A and B share only {e1}; A and C share {e1, e2, e3, e4}; B and C share none.
+    const groups = groupsOf([
+      reading([e1, e2, e3, e4, e5, e6], a),
+      reading([e1, e7], b),
+      reading([e1, e2, e3, e4, e8], c),
+    ]);
+
+    expect(groups).toEqual([[0, 1], [2]]);
+  });
+
   it('lets a Story with no Entities join when its signature and meaning agree', () => {
     const shared = entity();
 

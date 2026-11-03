@@ -14,7 +14,10 @@
 > recall moving when the admissible set changed order read against the rule as it
 > runs now: the candidate set is what the gate admits, ordered by descending
 > signature similarity. The figures in this ADR are as written before that change;
-> the rule as it runs reads 57.5% recall and 85.2% precision over the same corpus.
+> the rule as it runs reads 57.5% recall and 85.2% precision over the rebuilt
+> corpus (`brieflyy.corpus.db`, 40 same-event and 54 different-event families),
+> where the figures in this ADR measure against 29 and 49 on the corpus this ADR
+> names. That is not a comparison with unchanged inputs.
 >
 > **The floor has since been re-measured over a corpus the shipped command
 > backfilled, and it moved.** The table under *What this floor buys, measured* is
