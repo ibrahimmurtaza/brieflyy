@@ -20,6 +20,12 @@
 > above the precision bought. It stays out of the gate; the Entity reading orders
 > the merges and weighs each Entity, but it does not veto one. The reading is
 > recorded in `docs/cluster-grouping-baseline.md`.
+>
+> **The merge order reads the signature now.** [ADR-0045](0045-the-merge-order-reads-the-signature.md)
+> removes the Entity reading's ordering job: merges are considered in descending
+> signature similarity, and under the shipped gate the Entity reading is never
+> scored at all. Read every sentence below about the merge order and about the
+> candidate set being ordered by descending Entity weight against that rule.
 
 Supersedes [ADR-0006](0006-cluster-grouping-is-transitive-closure.md). Two Stories
 are scored by the shared weight of their common Entities over the smaller of the

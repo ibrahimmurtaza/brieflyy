@@ -19,10 +19,10 @@ the baseline's Entity rows was. Read the two apart rather than as one series.
 
 ## Before and after the Entity floor stopped being a veto
 
-Ticket #165 removed the Entity floor as a veto on a merge: a merge is now decided
-by the Story signature and the Story embedding readings, while the Entity reading
-still orders the merges (most-similar first) and still weighs each Entity by its
-inverse-document frequency and kind. `ADR-0030` and the glossary's `Cluster`
+Ticket #165 removed the Entity floor as a veto on a merge: a merge is decided
+by the Story signature and the Story embedding readings. The Entity reading
+ordered the merges next, until ADR-0045 re-read the evidence and moved the
+merge order onto the signature reading. `ADR-0030` and the glossary's `Cluster`
 entry record the change.
 
 The original baseline (51.7% recall / 71.4% precision) was read from a corpus
@@ -1077,6 +1077,7 @@ refuses more than seven of every ten same-event families it could otherwise
 join.
 
 The floor does not earn its place back. It stays out of the gate: the Entity
-reading orders the merges (most-similar first) and weighs each Entity by its
-inverse-document frequency and kind, but it does not refuse a pair on its own.
+reading weighs each Entity by its inverse-document frequency and kind but does
+not refuse a pair on its own, and after ADR-0045 it does not order the merges
+either — the merge order reads the signature (most-similar first by text).
 The gate remains a conjunction of the signature and semantic floors only.
