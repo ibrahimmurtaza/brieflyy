@@ -1,5 +1,7 @@
 # A User action runs an ingest cycle, and the loop is the floor between them
 
+**Amended by [ADR-0044](0044-a-sign-in-runs-no-ingest-cycle.md): the sign-in trigger is removed.** A cycle run on a sign-in could never poll a Source the six-hour loop was not about to poll at the same instant, because the per-Source cadence holds every Source until one interval after its last poll and the loop wakes for exactly that moment. The sign-in row of the trigger table below and the section *Why the sign-in trigger is bounded* are superseded; the other two triggers, `tick()` serialisation, and the loop-is-the-floor cadence stand.
+
 ADR-0003 put ingest on a fixed cadence. That cadence was tuned for a server nobody
 was watching: something has to refresh the corpus whether or not a Reader is in
 front of it, so it runs every 30 minutes and hopes it is fresh enough. It is not the

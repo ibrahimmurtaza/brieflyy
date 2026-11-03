@@ -762,7 +762,7 @@ describe('IngestScheduler', () => {
     await expect(scheduler.tick()).rejects.toThrow('cluster formation failed');
 
     // The guard has to be cleared on a rejection too. Left set, every later
-    // caller — the next tick from the loop, a sign-in, the ingest route — is
+    // caller — the next tick from the loop, a User action, the ingest route — is
     // handed the rejection of a cycle that already ended.
     const report = await scheduler.tick();
     expect(report.sources.length).toBeGreaterThan(0);
@@ -777,8 +777,8 @@ describe('IngestScheduler', () => {
       sourceIds: ['reuters'],
     });
 
-    // A sign-in or the ingest route starts this one, so the loop has never heard
-    // of it and has nothing to wait for.
+    // A User action or the ingest route starts this one, so the loop has never
+    // heard of it and has nothing to wait for.
     const fetchGate: { release: (() => void) | null } = { release: null };
     setFetcher({
       async fetch() {

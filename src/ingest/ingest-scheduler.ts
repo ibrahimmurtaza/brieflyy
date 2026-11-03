@@ -139,7 +139,7 @@ export class IngestScheduler {
    * them back, and rewrites `reachableSourceIds`, so two overlapping cycles
    * would interleave those reads and writes and leave a Source polled twice
    * against a `nextAttemptAt` neither of them saw. The loop serialises its own
-   * ticks, but a caller outside it — the ingest route, or a sign-in — is not
+   * ticks, but a caller outside it — the ingest route, or a User action — is not
    * under the loop's control, so the guard lives here where both paths pass
    * through it.
    */
@@ -182,8 +182,8 @@ export class IngestScheduler {
   /**
    * Run a cycle, or join the one already running.
    *
-   * Joining rather than queueing is deliberate. A sign-in arriving mid-cycle has
-   * nothing left to ask for: the cycle in flight is already reading the same
+   * Joining rather than queueing is deliberate. A User action arriving mid-cycle
+   * has nothing left to ask for: the cycle in flight is already reading the same
    * Sources, so waiting behind it would report a later answer than the caller
    * already has. Both callers still get the report the one cycle produced.
    */
@@ -249,9 +249,9 @@ export class IngestScheduler {
    */
   async stop(): Promise<void> {
     await this.loop.stop();
-    // The loop only waits for a cycle it started. A sign-in or the ingest route
-    // can have one running that the loop knows nothing about, and that one is
-    // just as halfway through writing Articles as any other.
+    // The loop only waits for a cycle it started. A User action or the ingest
+    // route can have one running that the loop knows nothing about, and that one
+    // is just as halfway through writing Articles as any other.
     if (this.inFlightCycle !== null) await this.inFlightCycle.catch(() => undefined);
   }
 

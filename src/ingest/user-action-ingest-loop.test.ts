@@ -1,8 +1,14 @@
 /**
  * What a User does makes an ingest cycle happen.
  *
- * Three moments: signing in, picking Topics, and following one more Source. The
- * interval loop is the floor between them, not the only thing that runs one.
+ * Two moments: picking Topics, and following one more Source. The interval loop is
+ * the floor between them, not the only thing that runs one.
+ *
+ * A sign-in is not one of them (ADR-0044). It used to be, on the day the account
+ * was created — but a cycle run between interval ticks finds every Source held by
+ * its cadence, so the only poll it could add is a retry the loop makes at its next
+ * wake, and the only other work is a re-formation the next cycle does anyway. The
+ * trigger was removed and this file pins its absence.
  *
  * Ingest is fire-and-forget from the request — a cycle polls every Source in the
  * registry and cannot be held behind a redirect — so what these tests watch is
@@ -16,7 +22,6 @@ import { SeededFeedFetcher } from '../testing/app-harness.js';
 import { createTestDb } from '../testing/test-db.js';
 import { extractMagicLinkToken } from '../testing/email.js';
 import { signedInCookies, submitForm } from '../testing/forms.js';
-import { dayKey } from '../domain/trends.js';
 import {
   deterministicRandom,
   makeTestClock,
@@ -72,7 +77,7 @@ interface Harness {
   readonly app: Awaited<ReturnType<typeof buildApp>>['app'];
   readonly driver: Awaited<ReturnType<typeof buildApp>>['driver'];
   readonly transport: ConsoleEmailTransport;
-  /** Movable, because the window under test is a day boundary and not an offset. */
+  /** Movable, because a cycle is made due by moving past the cadence. */
   readonly clock: TestClock;
 }
 
@@ -196,8 +201,8 @@ describe('HTTP: a User action runs an ingest cycle', () => {
     await signIn(h);
     await settle();
 
-    // The sign-in that starts onboarding happens before any Topic exists, so the
-    // cycle it runs has no Source to read. That is not a failure, and it must not
+    // The sign-in that starts onboarding happens before any Topic exists, so there
+    // is nothing to poll and no cycle to run. That is not a failure, and it must not
     // read as one: the User still has a session.
     expect(countRows(h, 'articles')).toBe(0);
     expect(countRows(h, 'users')).toBe(1);
@@ -221,7 +226,7 @@ describe('HTTP: a User action runs an ingest cycle', () => {
     expect(countRows(h, 'stories')).toBe(2);
   });
 
-  it('runs a cycle for a sign-in later on the day the account was created', async () => {
+  it('runs no cycle on a sign-in, even once the Sources are due', async () => {
     const built = await buildApp();
     const h: Harness = built;
     open.push(h);
@@ -230,39 +235,16 @@ describe('HTTP: a User action runs an ingest cycle', () => {
     await pickTopics(h);
     await waitForArticles(h, 2);
 
-    // Clear the Articles so a cycle that ran would be obvious, and move past the
-    // six-hour backoff so the Sources are due again — otherwise a cycle would run
-    // and correctly do nothing, and the test would pass for the wrong reason.
+    // Clear the corpus and step past the six-hour cadence, so that a cycle run now
+    // would find every Source due and would show up as Articles. A sign-in must not
+    // be a trigger (ADR-0044): the interval loop is the only thing that polls, and
+    // it is what wakes at exactly this moment in a deployment where it is running.
     clearCorpus(h);
     h.clock.advance(8 * 60 * 60 * 1000);
-    expect(dayKey(h.clock.clock.now())).toBe(dayKey(new Date(NOW)));
-
-    await signIn(h);
-    await waitForArticles(h, 2);
-  });
-
-  it('leaves a sign-in the day after sign-up to the loop', async () => {
-    const built = await buildApp();
-    const h: Harness = built;
-    open.push(h);
-
-    await signIn(h);
-    await pickTopics(h);
-    await waitForArticles(h, 2);
-
-    // Clear the Articles so a cycle that ran would be obvious, then cross midnight
-    // UTC. The account's Topics are unchanged and still readable — the only thing
-    // that changed is the date, and that is the whole claim being tested.
-    clearCorpus(h);
-    h.clock.set(new Date('2026-09-03T00:00:01Z'));
-    expect(dayKey(h.clock.clock.now())).toBe('2026-09-03');
-    expect(dayKey(new Date(NOW))).toBe('2026-09-02');
 
     await signIn(h);
     await settle();
 
-    // Past their first day the six-hour loop is what keeps a Reader fresh, and a
-    // sign-in is not a reason to run a second cycle on top of it.
     expect(countRows(h, 'articles')).toBe(0);
     expect(countRows(h, 'users')).toBe(1);
   });
