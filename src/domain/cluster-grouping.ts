@@ -17,9 +17,9 @@
  *   about the same company apart (ADR-0007); and once by their Story embeddings,
  *   which is the signal that tells two articles mean the same thing whether or not
  *   they agree about words or named things at all (ADR-0037).
- * - **Linkage**: the most similar pair of Stories is merged first, and a merge
- *   only happens when every member of the resulting Cluster clears the gate with
- *   every other member of it.
+ * - **Linkage**: the pair whose signatures agree most is merged first, and a
+ *   merge only happens when every member of the resulting Cluster clears the gate
+ *   with every other member of it.
  *
  * The second step is what stops a chain of individually reasonable links
  * running away into one Cluster: a Story can only join a Cluster it is similar
@@ -618,9 +618,9 @@ export function similarityBetween(
  * immediately before it in time, because comparing only neighbours would make the
  * grouping a function of when things happened to arrive — one Story landing
  * between two related ones would pull them apart. The order merges go in is by
- * descending Entity similarity and then by position, so the same set of Stories
- * always forms the same Clusters: the containment picks which pair to consider first,
- * and the other two floors only ever refuse one.
+ * descending signature similarity and then by position, so the same set of Stories
+ * always forms the same Clusters: the agreement in text picks which pair to
+ * consider first, while the embedding floor only ever refuses one.
  *
  * A Story whose signature says nothing is never merged on the strength of its
  * Entities under the gate the rule ships, the same way one naming no Entity is
@@ -687,7 +687,11 @@ export function groupIntoClusters<T>(
   if (items.length === 0) return { clusters: [], refusal: null };
 
   const entitySets = readings.map((reading) => reading.entities);
-  const inverseDocumentFrequency = inverseDocumentFrequencies(entitySets);
+  // Priced only where the Entity score is asked for, which the shipped
+  // conjunction never does — the merge order reads the signature instead.
+  let inverseDocumentFrequency: ReadonlyMap<EntityId, number> | undefined;
+  const idf = (): ReadonlyMap<EntityId, number> =>
+    (inverseDocumentFrequency ??= inverseDocumentFrequencies(entitySets));
 
   /** A score per pair, worked out once however many times it is asked for. */
   const perPair = <T,>(
@@ -706,7 +710,7 @@ export function groupIntoClusters<T>(
   };
 
   const entityScoreOf = perPair((i, j) =>
-    similarityBetween(entitySets[i]!, entitySets[j]!, inverseDocumentFrequency),
+    similarityBetween(entitySets[i]!, entitySets[j]!, idf()),
   );
   const signatureScoreOf = perPair((i, j) =>
     signatureSimilarity(readings[i]!.signature, readings[j]!.signature),
@@ -736,10 +740,14 @@ export function groupIntoClusters<T>(
   // partition is a separate reader: gateRefusals still takes every floor of every
   // pair — full buckets, not partial ones — because a measurement that reads the
   // buckets needs each floor's full say.
+  // The Entity score is only needed where the gate asks for it: never under the
+  // shipped conjunction (it no longer gates or orders there), always under the
+  // wider gate and under the veto.
+  const needsEntity = gate !== 'both' || requireEntity;
   const clearsTheGate = (i: number, j: number): boolean => {
-    const entity = entityScoreOf(i, j);
+    const entity = needsEntity ? entityScoreOf(i, j) : 0;
     const signature = signatureScoreOf(i, j);
-    const clearsEntity = entity >= thresholds.entity;
+    const clearsEntity = needsEntity && entity >= thresholds.entity;
     const clearsSignature = signature >= thresholds.signature;
 
     let semantic: number | null;
@@ -763,13 +771,14 @@ export function groupIntoClusters<T>(
     return clearsMergeGate({ entity, signature, semantic, thresholds, gate, requireEntity });
   };
 
-  // Most similar pair first. Ties break on position so the order is the same on
-  // every run rather than the one the sort happened to produce.
+  // Most text-alike pair first: the signature order is the one the merge is
+  // decided on. Ties break on position so the order is the same on every run
+  // rather than the one the sort happened to produce.
   const candidates: { readonly i: number; readonly j: number; readonly score: number }[] = [];
   for (let i = 0; i < items.length; i++) {
     for (let j = i + 1; j < items.length; j++) {
       if (!clearsTheGate(i, j)) continue;
-      candidates.push({ i, j, score: entityScoreOf(i, j) });
+      candidates.push({ i, j, score: signatureScoreOf(i, j) });
     }
   }
   candidates.sort((a, b) => b.score - a.score || a.i - b.i || a.j - b.j);
