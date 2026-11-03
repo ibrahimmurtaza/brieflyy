@@ -503,11 +503,12 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
    *
    * The two triggers are the two moments a User can change what Brieflyy has to
    * show them: picking Topics, and following one more Source. A sign-in is not one
-   * (ADR-0044): the per-Source cadence means a cycle run between interval ticks has
-   * nothing due to poll, so it could only re-form Clusters over Stories that had not
-   * changed. Each of the two is a request that has already been answered and is
-   * followed by a page that reads the corpus — so a cycle belongs at the end of one,
-   * and nothing else does.
+   * (ADR-0044): a cycle run between interval ticks finds every Source held by its
+   * cadence, so the only poll it could add is a retry the loop makes at its next
+   * wake, and the only other work is a re-formation the next cycle does anyway.
+   * Each of the two is a request that has already been answered and is followed by
+   * a page that reads the corpus — so a cycle belongs at the end of one, and
+   * nothing else does.
    *
    * Returns rather than handing back the cycle, so a route's `await` on the hook
    * resolves at once. `tick` joins a cycle already in flight rather than stacking

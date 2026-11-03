@@ -5,11 +5,10 @@
  * the floor between them, not the only thing that runs one.
  *
  * A sign-in is not one of them (ADR-0044). It used to be, on the day the account
- * was created — but a cycle run between interval ticks can poll nothing, because
- * each Source is held until one cadence interval after its last poll and the loop
- * wakes for exactly that moment itself. What a sign-in cycle could still do was
- * re-form every Topic's Clusters over Stories that had not changed, so the trigger
- * was removed and this file pins its absence.
+ * was created — but a cycle run between interval ticks finds every Source held by
+ * its cadence, so the only poll it could add is a retry the loop makes at its next
+ * wake, and the only other work is a re-formation the next cycle does anyway. The
+ * trigger was removed and this file pins its absence.
  *
  * Ingest is fire-and-forget from the request — a cycle polls every Source in the
  * registry and cannot be held behind a redirect — so what these tests watch is

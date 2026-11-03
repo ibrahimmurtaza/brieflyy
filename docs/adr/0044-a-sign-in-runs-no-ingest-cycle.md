@@ -8,21 +8,39 @@ other two stand, the interval loop still runs every six hours underneath them,
 and `tick()` still joins an in-flight cycle rather than stacking one behind a
 trigger.
 
-## Why it could not do what it was for
+## Why it was removed
 
 The trigger was for a Reader whose corpus might be stale: a cycle run at the
-sign-in would pick up what had appeared since the last one. It never could.
-Every trigger goes through `isDue`, and a Source is held until one cadence
-interval after its last poll (ADR-0029), so a cycle run between interval ticks
-finds **every Source in the registry held** and polls nothing. The loop itself
-wakes for exactly the moment a Source becomes due, so there was no instant a
-sign-in could reach earlier than the loop already does — with `ingestAutoStart`
-on, which `server.ts` sets, the loop is always running.
+sign-in would pick up what had appeared since the last one. On the shipped
+configuration it mostly could not. Every trigger goes through `isDue`, and a
+Source is held until one cadence interval after its last poll (ADR-0029), so a
+cycle run between interval ticks finds the registry's Sources held, and the loop
+wakes for the moment one becomes due — with `ingestAutoStart` on, which
+`server.ts` sets, the loop is always running.
 
-What the trigger *did* do was run `formForAllTopics()` again. Cluster formation
-is a function of the Stories in each Topic's window, and no Story had changed
-between two cycles, so the pass re-formed the same Clusters at the cost ADR-0029
-measured (~675k `overlaps()` calls over one corpus) and changed nothing.
+It did find two pieces of work between ticks, and both are small enough to name
+exactly rather than write "polls nothing":
+
+- **A retry the loop was not awake for.** An `IntervalLoop` chooses its sleep
+  once per pass, and a cycle started from outside it — a User action, or the
+  ingest route — cannot shorten that sleep. So a Source that fails in such a
+  cycle while the loop is asleep is due at its retry time and is not reached
+  until the loop next wakes, up to one interval later. A sign-in cycle could
+  have retried it sooner, and that is the only poll the removed trigger could
+  genuinely add. It is bounded by that window, and the loop reaches the Source
+  either way.
+- **A re-formation, which is not a no-op over unchanged Stories.** Formation
+  reads `now`: the Topic's window has moved, so Stories age out of it, and each
+  Cluster's velocity — Articles a day since its first Story — has fallen, which
+  can retire a Cluster from `active` to `archive`. A sign-in cycle refreshed
+  those time-based readings between ticks; without it, they are refreshed by the
+  next cycle, so a decayed Cluster can stay `active` for up to one interval
+  longer than it used to.
+
+Neither is why the trigger was added, and neither is worth a full cycle over the
+registry (ADR-0029 measured `formForAllTopics` at ~675k `overlaps()` calls):
+the picker's cycle covers the moment it was added for, and the loop is at most
+one interval away for the rest.
 
 The repository had already recorded the mechanism and its consequence. The
 day-one integration test had to empty the corpus and advance the clock eight
@@ -35,12 +53,10 @@ and the second sign-in has nothing left to fetch.
 
 ## What replaces it
 
-Nothing. The moments it covered are already covered:
-
-- **A new Reader's first readable corpus** is the picker's cycle, which polls
-  every Source that has never been polled with no cadence holding it back.
-- **A Reader coming back** is served by the six-hour loop, which is what ADR-0032
-  already said happened past the first day.
+Nothing is added. The moment the trigger was for is covered — the picker's cycle
+is a new Reader's first readable corpus, and a Reader coming back is served by
+the six-hour loop — and its two residual effects above are deferred to the next
+cycle rather than dropped.
 
 A sign-in now does one thing: signs the User in.
 
