@@ -1007,7 +1007,7 @@ pnpm test:e2e:install   # once per machine
 pnpm test:e2e
 ```
 
-It is 10 spec files, run once per viewport across three of them, so 30 runs. It
+It is 11 spec files, run once per viewport across three of them, so 33 runs. It
 drives the real application on a throwaway SQLite file, so a change
 to the markup, the stylesheet or a page's behaviour has somewhere to fail that an
 injected request cannot reach: no viewport, no reflow, no focus ring, no target
