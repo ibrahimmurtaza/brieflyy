@@ -3,7 +3,6 @@ import { requestTokenInput } from '../http/request-token.js';
 import { TOPIC_TITLE_MAX_LENGTH } from '../domain/slug.js';
 import {
   CADENCES,
-  DEFAULT_WEEKLY_DAY,
   WEEKDAYS,
   type Cadence,
   type Source,
@@ -136,6 +135,7 @@ ${renameSection(input, slug, title)}
 ${cadenceSection(input, slug)}
 ${sourcesSection(input, slug, followed, available)}
 ${deleteSection(slug, input.requestToken ?? null)}`,
+    afterMain: settingsScript(),
   });
 }
 
@@ -157,7 +157,7 @@ function renameSection(input: TopicSettingsInput, slug: string, title: string): 
           )}" required>
         </label>
         <p class="hint">The address of this topic does not change, so links to it keep working.</p>
-        <button type="submit">Save name</button>
+        <button type="submit" id="rename-submit">Save name</button>
       </form>
     </section>`;
 }
@@ -167,12 +167,15 @@ function renameSection(input: TopicSettingsInput, slug: string, title: string): 
  *
  * One form, because the two are one setting: a weekly brief with no day is not a
  * cadence. The day is offered whichever Cadence is selected rather than shown and
- * hidden, because this page has no script and a control that appears on a click is
- * a control that has to be submitted twice.
+ * hidden, because it only means anything for weekly and the server refuses a
+ * weekly brief without one; the save is disabled until a day is picked, so the
+ * refusal is never the first thing a User meets.
  */
 function cadenceSection(input: TopicSettingsInput, slug: string): string {
   const cadence = input.topic.cadence;
-  const day = input.topic.cadenceDay ?? DEFAULT_WEEKLY_DAY;
+  // No day chosen is a real state, not a missing one: a topic that has never
+  // been given a weekly day has to say so on screen rather than borrow Monday.
+  const day = input.topic.cadenceDay;
   const options = CADENCES.map(
     (value) => `        <label class="card">
           <input type="radio" name="cadence" value="${value}"${
@@ -190,7 +193,7 @@ function cadenceSection(input: TopicSettingsInput, slug: string): string {
   ).join('\n');
   return `    <section>
       <h2>How often</h2>
-      <form method="POST" action="/topics/${slug}/cadence">
+      <form method="POST" action="/topics/${slug}/cadence" id="cadence-form">
         ${input.requestToken ? requestTokenInput(input.requestToken) : ''}
         <fieldset class="grid">
           <legend>How often this topic briefs</legend>
@@ -198,11 +201,12 @@ ${options}
         </fieldset>
         <label for="day">Weekly, on
           <select id="day" name="day">
+          <option value=""${day === null ? ' selected' : ''}>Please select</option>
 ${days}
           </select>
         </label>
         <p class="hint">The day applies only when you pick weekly. Briefs arrive at your <a href="/settings/delivery">delivery time</a>.</p>
-        <button type="submit">Save</button>
+        <button type="submit" id="cadence-submit">Save</button>
       </form>
     </section>`;
 }
@@ -249,18 +253,19 @@ ${rows}
       ? ''
       : `      <label for="sourceId">Add a source
         <select id="sourceId" name="sourceId">
+          <option value="" selected>Please select</option>
 ${available
   .map((source) => `          <option value="${escapeHtml(source.id)}">${escapeHtml(source.name)}</option>`)
   .join('\n')}
         </select>
       </label>
-      <button type="submit">Add source</button>`;
+      <button type="submit" id="source-add-submit">Add source</button>`;
 
   return `    <section>
       <h2>Sources</h2>
       <p class="hint">The sources this topic reads from. Changing this takes effect on the next ingest.</p>
 ${list}
-      <form method="POST" action="/topics/${slug}/sources/add">
+      <form method="POST" action="/topics/${slug}/sources/add" id="source-add-form">
         ${input.requestToken ? requestTokenInput(input.requestToken) : ''}
 ${add}
       </form>
@@ -284,4 +289,69 @@ function deleteSection(slug: string, requestToken?: string | null): string {
         <button class="secondary" type="submit">Remove this topic</button>
       </form>
     </section>`;
+}
+
+/**
+ * The one script on this page, and the reason it may exist.
+ *
+ * It disables the buttons whose forms have nothing to save yet: the rename
+ * save while the title is the one that was rendered, the cadence save while
+ * nothing about the schedule has changed (or weekly is picked with no day),
+ * and the add-source button while the placeholder is chosen. The cadence
+ * save enables only when a different cadence is picked, or when weekly is
+ * picked and the day differs from the stored one. Every form still works
+ * with no script at all — the buttons render enabled and the server refuses
+ * what it cannot act on — so this is the page being kind, not the guard
+ * being somewhere else.
+ *
+ * No value is interpolated into the script: it reads the fields out of the DOM,
+ * so nothing a User typed can become markup or code.
+ */
+function settingsScript(): string {
+  return `  <script>
+    (function () {
+      var title = document.getElementById('title');
+      var renameButton = document.getElementById('rename-submit');
+      if (title && renameButton) {
+        var validateRename = function () {
+          var changed = title.value !== title.defaultValue && title.value.trim().length > 0;
+          renameButton.disabled = !changed;
+        };
+        title.addEventListener('input', validateRename);
+        validateRename();
+      }
+      var cadenceForm = document.getElementById('cadence-form');
+      var day = document.getElementById('day');
+      var cadenceButton = document.getElementById('cadence-submit');
+      if (cadenceForm && day && cadenceButton) {
+        var initiallyChecked = cadenceForm.querySelector('input[name="cadence"]:checked');
+        var initialCadence = initiallyChecked ? initiallyChecked.value : '';
+        var initialDay = day.value;
+        var validateCadence = function () {
+          var picked = cadenceForm.querySelector('input[name="cadence"]:checked');
+          if (picked === null) {
+            cadenceButton.disabled = true;
+            return;
+          }
+          var cadenceChanged = picked.value !== initialCadence;
+          // The day only means anything for a weekly brief, so a day picked
+          // beside daily or never is not a change this form can keep.
+          var dayChanged = picked.value === 'weekly' && day.value !== initialDay;
+          var weeklyOk = picked.value !== 'weekly' || day.value !== '';
+          cadenceButton.disabled = !((cadenceChanged || dayChanged) && weeklyOk);
+        };
+        cadenceForm.addEventListener('change', validateCadence);
+        validateCadence();
+      }
+      var source = document.getElementById('sourceId');
+      var sourceButton = document.getElementById('source-add-submit');
+      if (source && sourceButton) {
+        var validateSource = function () {
+          sourceButton.disabled = source.value === '';
+        };
+        source.addEventListener('change', validateSource);
+        validateSource();
+      }
+    })();
+  </script>`;
 }
