@@ -8,6 +8,7 @@ import {
 
 import { REQUEST_TOKEN_FIELD, SESSION_COOKIE_NAME } from '../../src/config.js';
 import {
+  E2E_ALL_SOURCES_SESSION_ID,
   E2E_FEEDBACK_FIXTURES,
   E2E_SESSION_ID,
   E2E_UNSUBSCRIBE_FIXTURES,
@@ -101,9 +102,16 @@ export const test = base.extend<{
   feedbackPage: Page;
   /** This viewport's reader, for the specs that spend a single-use token. */
   readerPage: Page;
+  /** The one User whose Topic follows every Source in the registry. */
+  allSourcesPage: Page;
 }>({
   signedInPage: async ({ context }, use) => {
     const page = await signedInAs(context, E2E_SESSION_ID);
+    await use(page);
+    await page.close();
+  },
+  allSourcesPage: async ({ context }, use) => {
+    const page = await signedInAs(context, E2E_ALL_SOURCES_SESSION_ID);
     await use(page);
     await page.close();
   },

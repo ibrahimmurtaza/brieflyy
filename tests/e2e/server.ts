@@ -66,6 +66,10 @@ import type {
 import { E2E_BASE_URL, E2E_PORT } from './base-url.js';
 import { registerHarnessRoutes } from './harness-routes.js';
 import {
+  E2E_ALL_SOURCES_EMAIL,
+  E2E_ALL_SOURCES_SESSION_ID,
+  E2E_ALL_SOURCES_SLUG,
+  E2E_ALL_SOURCES_TITLE,
   E2E_EMAIL,
   E2E_FEEDBACK_FIXTURES,
   E2E_FEEDBACK_SLUG,
@@ -226,6 +230,31 @@ for (const [id, title, category, origin] of [
   for (const [position, [sourceId]] of SOURCES.entries()) {
     await topicRepo.insertTopicSource(id, sourceId, position);
   }
+}
+
+// One User whose Topic follows every Source in the registry, so the settings
+// page has no Source left to add. Iris follows two of twenty-two, and a page
+// with nothing to offer is a state no spec had a way to reach until now.
+insertReader({
+  userId: 'e2e-user-all-sources',
+  email: E2E_ALL_SOURCES_EMAIL,
+  sessionId: E2E_ALL_SOURCES_SESSION_ID,
+});
+const registryIds = driver
+  .prepare('SELECT id FROM sources ORDER BY slug')
+  .all() as { id: string }[];
+await topicRepo.insert(
+  makeTopic({
+    id: E2E_ALL_SOURCES_SLUG,
+    userId: 'e2e-user-all-sources',
+    title: E2E_ALL_SOURCES_TITLE,
+    category: 'unspecified',
+    origin: { kind: 'freeform' },
+    createdAt: new Date(NOW.getTime() - 30 * DAY),
+  }),
+);
+for (const [position, { id }] of registryIds.entries()) {
+  await topicRepo.insertTopicSource(E2E_ALL_SOURCES_SLUG, id as SourceId, position);
 }
 
 /**

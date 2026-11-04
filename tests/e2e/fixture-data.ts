@@ -164,3 +164,17 @@ export const E2E_UNSUBSCRIBE_TOPIC_TITLE = 'Fusion energy';
 /** The Topic left on beside it, so the settings screen has two rows and not one. */
 export const E2E_UNSUBSCRIBE_OTHER_TOPIC_SLUG = E2E_TOPIC_SLUG;
 export const E2E_UNSUBSCRIBE_OTHER_TOPIC_TITLE = 'World news';
+
+/**
+ * The User whose one Topic follows every Source in the registry.
+ *
+ * One shared, read-only account rather than a set per viewport, for the same
+ * reason the settings specs never submit: nothing is stored, so there is no
+ * starting state to race over. It exists so the topic settings page can be seen
+ * with no Source left to add, which is the one arrangement the shared Iris
+ * fixture cannot produce — she follows two of the registry's twenty-two.
+ */
+export const E2E_ALL_SOURCES_SESSION_ID = 'e2e-session-all-sources';
+export const E2E_ALL_SOURCES_EMAIL = 'all-sources@example.com';
+export const E2E_ALL_SOURCES_SLUG = 'all-sources';
+export const E2E_ALL_SOURCES_TITLE = 'All sources';
