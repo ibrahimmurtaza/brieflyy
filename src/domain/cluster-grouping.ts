@@ -655,8 +655,26 @@ export function similarityBetween(
  * The per-pair `null` stays where it is either way. It is about a pair — one vector,
  * or none, or two models — and the set-level refusal is about the corpus, so the two
  * answer different questions and neither stands in for the other.
+ *
+ * Grouping is one long computation, and it runs on the same thread that answers
+ * requests. The pair loops hand the event loop a turn every so often (an option
+ * below, defaulting to the process's own scheduler) so a page load that lands
+ * during a cycle waits for one slice rather than for the whole grouping. The
+ * order the pairs are visited in never changes, so the Clusters that come back
+ * are the ones a single unbroken pass would have produced.
  */
-export function groupIntoClusters<T>(
+const DEFAULT_YIELD_TO_EVENT_LOOP: () => Promise<void> =
+  typeof setImmediate === 'function'
+    ? () =>
+        new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        })
+    : () =>
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        });
+
+export async function groupIntoClusters<T>(
   items: readonly T[],
   readOf: (item: T, index: number) => GroundedStory,
   options: {
@@ -671,13 +689,33 @@ export function groupIntoClusters<T>(
      * floor score is one the embedding never read, which is the shot at
      * pruning a reader can see.
      */
-    readonly onGate?: (pair: { readonly i: number; readonly j: number }, semanticPriced: boolean) => void;
-  } = {},
-): Grouping<T> {
+     readonly onGate?: (pair: { readonly i: number; readonly j: number }, semanticPriced: boolean) => void;
+      /**
+       * Called every 1024 pair evaluations — the pairs walked for candidates
+       * and the member pairs re-checked when a merge lands — so the event
+       * loop can run, defaulting to a yield on the process's own scheduler.
+       * Passing `() => Promise.resolve()` keeps a benchmark pass as tight as
+       * it can be while still being one; the grouping visits the same pairs
+       * in the same order either way.
+       */
+     readonly yieldToEventLoop?: () => Promise<void>;
+   } = {},
+): Promise<Grouping<T>> {
   const thresholds = options.thresholds ?? SHIPPED_MERGE_THRESHOLD;
   const gate = options.gate ?? SHIPPED_MERGE_GATE;
   const requireEntity = options.requireEntity ?? false;
   const readings = items.map(readOf);
+  const yieldToEventLoop = options.yieldToEventLoop ?? DEFAULT_YIELD_TO_EVENT_LOOP;
+  // Counted synchronously and awaited only at the limit: an async call per
+  // pair would hand a promise to the scheduler on steps that are not yielding,
+  // and the pairs are worth far more than the scheduling around them.
+  let pairsSinceYield = 0;
+  const yieldIfDue = (): Promise<void> | undefined => {
+    pairsSinceYield += 1;
+    if (pairsSinceYield < 1024) return undefined;
+    pairsSinceYield = 0;
+    return yieldToEventLoop();
+  };
 
   // Over the whole set, before any pair is scored: a refusal reached through the
   // scoring would be a refusal only the pairs that happened to cross the two models
@@ -777,6 +815,8 @@ export function groupIntoClusters<T>(
   const candidates: { readonly i: number; readonly j: number; readonly score: number }[] = [];
   for (let i = 0; i < items.length; i++) {
     for (let j = i + 1; j < items.length; j++) {
+      const yielding = yieldIfDue();
+      if (yielding !== undefined) await yielding;
       if (!clearsTheGate(i, j)) continue;
       candidates.push({ i, j, score: signatureScoreOf(i, j) });
     }
@@ -798,6 +838,8 @@ export function groupIntoClusters<T>(
   };
 
   for (const candidate of candidates) {
+    const yielding = yieldIfDue();
+    if (yielding !== undefined) await yielding;
     const left = rootOf(candidate.i);
     const right = rootOf(candidate.j);
     if (left === right) continue;
@@ -806,8 +848,22 @@ export function groupIntoClusters<T>(
     // Every member of the resulting Cluster, not just the pair being merged:
     // this is the difference between a Cluster and a chain of links. The gate
     // applies to every one of those pairs, because a Story that reads unlike the
-    // Cluster it would join has not been shown to belong to it either.
-    if (from.some((to) => into.some((existing) => !clearsTheGate(existing, to)))) {
+    // Cluster it would join has not been shown to belong to it either. The walk
+    // counts its pairs towards the yield the same way the candidate loop does,
+    // in the same order, stopping at the first pair that refuses.
+    let anyMemberMiss = false;
+    for (const to of from) {
+      for (const existing of into) {
+        const yielding = yieldIfDue();
+        if (yielding !== undefined) await yielding;
+        if (!clearsTheGate(existing, to)) {
+          anyMemberMiss = true;
+          break;
+        }
+      }
+      if (anyMemberMiss) break;
+    }
+    if (anyMemberMiss) {
       continue;
     }
     into.push(...from);

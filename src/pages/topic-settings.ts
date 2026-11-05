@@ -54,6 +54,14 @@ const CHANGED_NOTICES: ReadonlyMap<string, string> = new Map([
   ['cadence', 'Brief timing saved.'],
   ['source-added', 'Source added.'],
   ['source-removed', 'Source removed.'],
+  // Landed here straight from the picker because the Topic was just created from
+  // the User's own words. Not a change they made on this page: the notice is the
+  // reason the page they were sent to is the one that asks for Sources, which is
+  // the one thing a brand-new Topic cannot do without.
+  [
+    'needs-source',
+    'Your topic is ready. Give it at least one source — until then nothing can be gathered for it, so no clusters or briefs will appear.',
+  ],
 ]);
 
 export interface TopicSettingsInput {
@@ -157,7 +165,7 @@ function renameSection(input: TopicSettingsInput, slug: string, title: string): 
           )}" required>
         </label>
         <p class="hint">The address of this topic does not change, so links to it keep working.</p>
-        <button type="submit" id="rename-submit">Save name</button>
+        <button type="submit" id="rename-submit" data-pending-label="Saving…">Save name</button>
       </form>
     </section>`;
 }
@@ -206,7 +214,7 @@ ${days}
           </select>
         </label>
         <p class="hint">The day applies only when you pick weekly. Briefs arrive at your <a href="/settings/delivery">delivery time</a>.</p>
-        <button type="submit" id="cadence-submit">Save</button>
+        <button type="submit" id="cadence-submit" data-pending-label="Saving…">Save</button>
       </form>
     </section>`;
 }
@@ -236,7 +244,7 @@ function sourcesSection(
         <form class="remove" method="POST" action="/topics/${slug}/sources/remove">
           <input type="hidden" name="sourceId" value="${escapeHtml(source.id)}">
           ${input.requestToken ? requestTokenInput(input.requestToken) : ''}
-          <button class="secondary" type="submit">Remove</button>
+           <button class="secondary" type="submit" data-pending-label="Removing…">Remove</button>
         </form>
       </li>`,
     )
@@ -259,7 +267,7 @@ ${available
   .join('\n')}
         </select>
       </label>
-      <button type="submit" id="source-add-submit">Add source</button>`;
+       <button type="submit" id="source-add-submit" data-pending-label="Adding…">Add source</button>`;
 
   return `    <section>
       <h2>Sources</h2>
@@ -286,7 +294,7 @@ function deleteSection(slug: string, requestToken?: string | null): string {
       <p class="hint">This frees one of your topic slots and stops this topic's briefs. Its past briefs are kept, and the name is free to use again.</p>
       <form method="POST" action="/topics/${slug}/delete">
         ${requestToken ? requestTokenInput(requestToken) : ''}
-        <button class="secondary" type="submit">Remove this topic</button>
+        <button class="secondary" type="submit" data-pending-label="Removing…">Remove this topic</button>
       </form>
     </section>`;
 }
@@ -304,16 +312,44 @@ function deleteSection(slug: string, requestToken?: string | null): string {
  * what it cannot act on — so this is the page being kind, not the guard
  * being somewhere else.
  *
+ * Submitting shows a pending state — the button says what is happening and
+ * stops being clickable — because a submission is answered with a redirect
+ * that can sit behind a running ingest cycle, and a page that gives no
+ * sign of life reads as a dead one. The pending state is also restored away
+ * on `pageshow`: a browser coming back from its back-forward cache brings
+ * the disabled buttons with it, so the page puts the original labels back
+ * and re-checks its forms before the User gets to use them again.
+ *
  * No value is interpolated into the script: it reads the fields out of the DOM,
  * so nothing a User typed can become markup or code.
  */
 function settingsScript(): string {
   return `  <script>
     (function () {
+      // Every form on the page answers its submission with a page load, which can
+      // take as long as the ingest cycle takes to get out of the way of the
+      // request. Feedback on the submission itself — the button says what is
+      // happening and stops being clickable — is the difference between a page
+      // that is working and a page that looks dead.
+      var pendingButtons = document.querySelectorAll('button[type="submit"][data-pending-label]');
+      pendingButtons.forEach(function (button) {
+        button.setAttribute('data-pending-original', button.textContent || '');
+      });
+      document.querySelectorAll('form').forEach(function (form) {
+        form.addEventListener('submit', function () {
+          form.querySelectorAll('button[type="submit"]').forEach(function (button) {
+            button.disabled = true;
+            var pending = button.getAttribute('data-pending-label');
+            if (pending) button.textContent = pending;
+          });
+        });
+      });
+
       var title = document.getElementById('title');
       var renameButton = document.getElementById('rename-submit');
+      var validateRename = null;
       if (title && renameButton) {
-        var validateRename = function () {
+        validateRename = function () {
           var changed = title.value !== title.defaultValue && title.value.trim().length > 0;
           renameButton.disabled = !changed;
         };
@@ -323,11 +359,12 @@ function settingsScript(): string {
       var cadenceForm = document.getElementById('cadence-form');
       var day = document.getElementById('day');
       var cadenceButton = document.getElementById('cadence-submit');
+      var validateCadence = null;
       if (cadenceForm && day && cadenceButton) {
         var initiallyChecked = cadenceForm.querySelector('input[name="cadence"]:checked');
         var initialCadence = initiallyChecked ? initiallyChecked.value : '';
         var initialDay = day.value;
-        var validateCadence = function () {
+        validateCadence = function () {
           var picked = cadenceForm.querySelector('input[name="cadence"]:checked');
           if (picked === null) {
             cadenceButton.disabled = true;
@@ -345,13 +382,31 @@ function settingsScript(): string {
       }
       var source = document.getElementById('sourceId');
       var sourceButton = document.getElementById('source-add-submit');
+      var validateSource = null;
       if (source && sourceButton) {
-        var validateSource = function () {
+        validateSource = function () {
           sourceButton.disabled = source.value === '';
         };
         source.addEventListener('change', validateSource);
         validateSource();
       }
+
+      // A browser that restores this page from its back-forward cache restores
+      // the pending state with it: the buttons stay disabled and labelled with
+      // what they were doing when the submission was made. Restoring the labels
+      // and re-checking the forms on pageshow is what makes the back button
+      // land on a page that can be used rather than one waiting on a request
+      // that finished long ago.
+      window.addEventListener('pageshow', function () {
+        pendingButtons.forEach(function (button) {
+          var original = button.getAttribute('data-pending-original');
+          if (original !== null) button.textContent = original;
+          button.disabled = false;
+        });
+        if (validateRename) validateRename();
+        if (validateCadence) validateCadence();
+        if (validateSource) validateSource();
+      });
     })();
   </script>`;
 }

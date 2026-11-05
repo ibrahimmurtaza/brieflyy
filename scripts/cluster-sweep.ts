@@ -298,11 +298,11 @@ async function main(): Promise<number> {
      * The sweep reads the corpus once and groups it once per cell, so what each
      * cell says is about the rule rather than about a second reading of it.
      */
-    const cellAt = (
+    const cellAt = async (
       thresholds: MergeThresholds,
       gate: MergeGate,
       requireEntity?: boolean,
-    ): SweepCell => {
+    ): Promise<SweepCell> => {
       const opts: { thresholds: MergeThresholds; gate: MergeGate; requireEntity?: boolean } = {
         thresholds,
         gate,
@@ -326,7 +326,7 @@ async function main(): Promise<number> {
           signature,
           semantic: SEMANTIC_SIMILARITY_FLOOR,
         };
-        for (const gate of GATES) grid.push(cellAt(thresholds, gate));
+        for (const gate of GATES) grid.push(await cellAt(thresholds, gate));
       }
     }
     // The semantic floor as its own axis, with the other two held at the shipped
@@ -335,7 +335,7 @@ async function main(): Promise<number> {
     const semantic: SweepCell[] = [];
     for (const floor of SEMANTIC_FLOORS) {
       const thresholds: MergeThresholds = { ...SHIPPED_MERGE_THRESHOLD, semantic: floor };
-      for (const gate of GATES) semantic.push(cellAt(thresholds, gate));
+      for (const gate of GATES) semantic.push(await cellAt(thresholds, gate));
     }
     // The Entity floor as its own axis, with the signature and semantic floors
     // held at the shipped point and the Entity reading required as a veto on the
@@ -349,7 +349,7 @@ async function main(): Promise<number> {
         ...SHIPPED_MERGE_THRESHOLD,
         entity: floor,
       };
-      entityAxis.push(cellAt(thresholds, SHIPPED_MERGE_GATE, true));
+      entityAxis.push(await cellAt(thresholds, SHIPPED_MERGE_GATE, true));
     }
     process.stdout.write(
       formatSweepEntityAxis(entityAxis, {

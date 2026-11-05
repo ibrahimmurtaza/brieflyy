@@ -179,6 +179,38 @@ describe('HTTP: /topics/:slug/settings', () => {
     expect(resp.body).not.toContain('class="callout callout--success"');
   });
 
+  it('explains itself when the picker sent the User here for a source', async () => {
+    // A Topic named from the User's own words arrives with no Sources, so the
+    // picker sends them here rather than on to their next step — and without a
+    // word on the page, the detour reads as the app losing the thread.
+    const resp = await page(h, '/topics/topic-1/settings?changed=needs-source');
+
+    expect(resp.statusCode).toBe(200);
+    expect(resp.body).toContain('Your topic is ready.');
+    expect(resp.body).toContain('at least one source');
+  });
+
+  it('gives every submit button a pending state for its own form', async () => {
+    // A submission answers with a redirect that can sit behind a running ingest
+    // cycle, so the button that was just pressed has to say it is working — the
+    // e2e spec drives the script; this pins the labels it swaps in.
+    const resp = await page(h, '/topics/topic-1/settings');
+
+    expect(resp.body).toContain('data-pending-label="Saving…"');
+    expect(resp.body).toContain('data-pending-label="Adding…"');
+    expect(resp.body).toContain('data-pending-label="Removing…"');
+  });
+
+  it('restores the pending state on pageshow', async () => {
+    // A browser coming back from its back-forward cache returns the disabled
+    // buttons with the pending labels still on them, so the page restores the
+    // original labels and re-checks its forms when the page re-shows.
+    const resp = await page(h, '/topics/topic-1/settings');
+
+    expect(resp.body).toContain("addEventListener('pageshow'");
+    expect(resp.body).toContain('data-pending-original');
+  });
+
   it('redirects to /signup when not authenticated', async () => {
     const resp = await h.app.inject({ method: 'GET', url: '/topics/topic-1/settings' });
 

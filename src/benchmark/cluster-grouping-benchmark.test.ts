@@ -443,20 +443,21 @@ describe('clustersOf', () => {
   const group = (readings: readonly GroundedStory[]) =>
     groupIntoClusters(readings, (_story, index) => readings[index]!);
 
-  it('hands back the Clusters of a grouping that was not refused', () => {
+  it('hands back the Clusters of a grouping that was not refused', async () => {
     // Two Stories about different things, holding the same model throughout, so the
     // answer is two Clusters rather than one — the shape every command that has
     // already asked about its corpus is left holding.
-    expect(clustersOf(group(oneModel))).toHaveLength(2);
+    expect(clustersOf(await group(oneModel))).toHaveLength(2);
   });
 
-  it('says so rather than dropping a refused set out of the report', () => {
+  it('says so rather than dropping a refused set out of the report', async () => {
     // The failure it is here rather than a skip: a sweep cell that quietly left a
     // Topic out would change its own denominator halfway down, which is what the
     // command refuses outright over the labelled pairs. Both commands ask the whole
     // corpus first, so this is where a refusal that has no business being here stops
     // being one.
-    expect(() => clustersOf(group(mixedModels))).toThrow(/vendor\/a-1, vendor\/b-2/);
+    const grouping = await group(mixedModels);
+    expect(() => clustersOf(grouping)).toThrow(/vendor\/a-1, vendor\/b-2/);
   });
 });
 

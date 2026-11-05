@@ -112,12 +112,12 @@ function unscorable(): StoryEmbedding {
  * clusters at all, so a helper that returned them as an empty list would report a
  * corpus that refused as one that grouped every Story on its own.
  */
-function groupsOf(
+async function groupsOf(
   readings: readonly GroundedStory[],
   thresholds?: MergeThresholds,
   gate?: MergeGate,
-): readonly (readonly number[])[] {
-  const grouping = groupingOf(readings, thresholds, gate);
+): Promise<readonly (readonly number[])[]> {
+  const grouping = await groupingOf(readings, thresholds, gate);
   if (grouping.clusters === null) {
     throw new Error(
       `this set was refused for holding embeddings from ${grouping.refusal.models.join(', ')}`,
@@ -127,25 +127,25 @@ function groupsOf(
 }
 
 /** Group these readings, reported as whatever came back — clusters, or a refusal. */
-function groupingOf(
+async function groupingOf(
   readings: readonly GroundedStory[],
   thresholds?: MergeThresholds,
   gate?: MergeGate,
-): Grouping<number> {
+): Promise<Grouping<number>> {
   const stories = readings.map((_reading, index) => index);
-  return groupIntoClusters(stories, (story) => readings[story]!, {
+  return await groupIntoClusters(stories, (story) => readings[story]!, {
     ...(thresholds === undefined ? {} : { thresholds }),
     ...(gate === undefined ? {} : { gate }),
   });
 }
 
 /** Group Stories carrying these Entity sets, every one of them saying the same. */
-function groupsOfEntities(
+async function groupsOfEntities(
   entitySets: readonly (readonly GroundedEntity[])[],
   thresholds?: MergeThresholds,
   gate?: MergeGate,
-): readonly (readonly number[])[] {
-  return groupsOf(
+): Promise<readonly (readonly number[])[]> {
+  return await groupsOf(
     entitySets.map((entities) => reading(entities, SAME_TEXT)),
     thresholds,
     gate,
@@ -153,12 +153,12 @@ function groupsOfEntities(
 }
 
 /** The most Stories any one Cluster holds, out of Stories saying the same. */
-function largestClusterOf(
+async function largestClusterOf(
   entitySets: readonly (readonly GroundedEntity[])[],
   thresholds?: MergeThresholds,
   gate?: MergeGate,
-): number {
-  return Math.max(0, ...groupsOfEntities(entitySets, thresholds, gate).map((g) => g.length));
+): Promise<number> {
+  return Math.max(0, ...(await groupsOfEntities(entitySets, thresholds, gate)).map((g) => g.length));
 }
 
 /**
@@ -177,7 +177,7 @@ function pairsOfLinks(length: number): readonly GroundedEntity[][] {
 }
 
 describe('inverseDocumentFrequencies', () => {
-  it('weighs an Entity few Stories carry above one most Stories carry', () => {
+  it('weighs an Entity few Stories carry above one most Stories carry', async () => {
     const rare = entity();
     const common = entity();
 
@@ -191,7 +191,7 @@ describe('inverseDocumentFrequencies', () => {
     expect(frequencies.get(rare.id)!).toBeGreaterThan(frequencies.get(common.id)!);
   });
 
-  it('weighs an Entity every Story carries above nothing, so a Topic of two is not left unweldable', () => {
+  it('weighs an Entity every Story carries above nothing, so a Topic of two is not left unweldable', async () => {
     const shared = entity();
 
     const frequencies = inverseDocumentFrequencies([[shared], [shared]]);
@@ -203,7 +203,7 @@ describe('inverseDocumentFrequencies', () => {
 });
 
 describe('similarityBetween', () => {
-  it('scores two Stories held together by a rare Entity above two held by a common one', () => {
+  it('scores two Stories held together by a rare Entity above two held by a common one', async () => {
     // Two pairs of the same shape, each pair sharing one Entity and nothing else.
     // Only how rare the shared Entity is differs, and that is the whole claim: an
     // Entity most Stories name is not evidence that two of them are one event.
@@ -241,7 +241,7 @@ describe('similarityBetween', () => {
     expect(onRare).toBeGreaterThan(onCommon);
   });
 
-  it('scores two Stories sharing only what every Story shares below the floor', () => {
+  it('scores two Stories sharing only what every Story shares below the floor', async () => {
     const common = entity();
     const asideA = entity();
     const asideB = entity();
@@ -260,7 +260,7 @@ describe('similarityBetween', () => {
     ).toBeLessThan(ENTITY_SIMILARITY_FLOOR);
   });
 
-  it('scores two Stories with nothing in common as nothing rather than dividing by nothing', () => {
+  it('scores two Stories with nothing in common as nothing rather than dividing by nothing', async () => {
     const one = entity();
     const other = entity();
     const frequencies = inverseDocumentFrequencies([[one], [other]]);
@@ -268,7 +268,7 @@ describe('similarityBetween', () => {
     expect(similarityBetween([one], [other], frequencies)).toBe(0);
   });
 
-  it('lets a detailed Story score highly against a concise one about the same event', () => {
+  it('lets a detailed Story score highly against a concise one about the same event', async () => {
     // The overlap rule divided by the larger Entity set, so a pair like this
     // scored a third and could never join however clearly they were one story.
     // Here the extra Entities are ones other Stories also carry, so they weigh
@@ -287,7 +287,7 @@ describe('similarityBetween', () => {
     ).toBeGreaterThan(ENTITY_SIMILARITY_FLOOR);
   });
 
-  it('reads the kind of an Entity as well as how rare it is', () => {
+  it('reads the kind of an Entity as well as how rare it is', async () => {
     // Two pairs of Stories identical in shape: one held together by a place, one
     // by a product. A place says where, not what, so it counts for less.
     const orgA = entity('org');
@@ -314,13 +314,13 @@ describe('similarityBetween', () => {
 });
 
 describe('groupIntoClusters', () => {
-  it('merges Stories that share a signature and meaning whatever their Entities', () => {
+  it('merges Stories that share a signature and meaning whatever their Entities', async () => {
     // The Entity floor no longer refuses: disjoint Entities with the same
     // signature and meaning still merge.
     const rare = entity();
     const aside = entity();
 
-    const groups = groupsOf([
+    const groups = await groupsOf([
       reading([rare], SAME_TEXT),
       reading([aside], SAME_TEXT),
     ]);
@@ -329,12 +329,12 @@ describe('groupIntoClusters', () => {
     expect(groups).toHaveLength(1);
   });
 
-  it('splits Stories that share Entities but not a signature', () => {
+  it('splits Stories that share Entities but not a signature', async () => {
     // Entities never force a merge: the same Entity with different signatures
     // stays apart.
     const shared = entity();
 
-    const groups = groupsOf([
+    const groups = await groupsOf([
       reading([shared], text('acme', 'foo', 'launch')),
       reading([shared], text('ruling', 'overturns', 'appeal')),
     ]);
@@ -342,10 +342,10 @@ describe('groupIntoClusters', () => {
     expect(groups).toEqual([[0], [1]]);
   });
 
-  it('splits Stories that share Entities and a signature but not a meaning', () => {
+  it('splits Stories that share Entities and a signature but not a meaning', async () => {
     const shared = entity();
 
-    const groups = groupsOf([
+    const groups = await groupsOf([
       reading([shared], SAME_TEXT, meaning('x')),
       reading([shared], SAME_TEXT, meaning('y')),
     ]);
@@ -353,13 +353,13 @@ describe('groupIntoClusters', () => {
     expect(groups).toEqual([[0], [1]]);
   });
 
-  it('does not form a Cluster out of a chain of incidental links', () => {
+  it('does not form a Cluster out of a chain of incidental links', async () => {
     // Adjacent pairs share a signature and meaning, so they merge; the cross
     // pairs differ in both and are refused. The Entity reading never refuses.
     const aSig = text('acme', 'foo');
     const bSig = text('ruling', 'overturns');
 
-    const groups = groupsOf([
+    const groups = await groupsOf([
       reading([entity()], aSig, meaning('x')),
       reading([entity()], aSig, meaning('x')),
       reading([entity()], bSig, meaning('y')),
@@ -369,11 +369,11 @@ describe('groupIntoClusters', () => {
     expect(groups).toEqual([[0, 1], [2, 3]]);
   });
 
-  it('keeps a member out of a Cluster it does not read like, however alike it is to one member', () => {
+  it('keeps a member out of a Cluster it does not read like, however alike it is to one member', async () => {
     const sharedSig = text('acme', 'foo');
     const otherSig = text('ruling', 'overturns');
 
-    const groups = groupsOf([
+    const groups = await groupsOf([
       reading([entity()], sharedSig, meaning('x')),
       reading([entity()], sharedSig, meaning('x')),
       reading([entity()], otherSig, meaning('y')),
@@ -385,7 +385,7 @@ describe('groupIntoClusters', () => {
     expect(groups).toEqual([[0, 1, 3], [2]]);
   });
 
-  it('lets no Entity overlap force a merge at any shipped thresholds', () => {
+  it('lets no Entity overlap force a merge at any shipped thresholds', async () => {
     // Every Story carries a unique signature, so the signature floor refuses
     // every pair: an Entity overlap can never force a merge.
     const run = pairsOfLinks(60).map((entities, index) =>
@@ -394,13 +394,13 @@ describe('groupIntoClusters', () => {
 
     for (const thresholds of SHIPPED_MERGE_THRESHOLDS) {
       expect(
-        groupsOf(run, thresholds).length,
+        (await groupsOf(run, thresholds)).length,
         `thresholds ${describeThresholds(thresholds)} let an Entity overlap force a merge`,
       ).toBe(60);
     }
   });
 
-  it('groups the same Stories the same way whatever order they were read in', () => {
+  it('groups the same Stories the same way whatever order they were read in', async () => {
     const a = entity();
     const b = entity();
     const c = entity();
@@ -409,12 +409,12 @@ describe('groupIntoClusters', () => {
     const membership = (groups: readonly (readonly number[])[]): string[] =>
       groups.map((group) => group.join(',')).sort();
 
-    expect(membership(groupsOfEntities([...sets].reverse()))).toEqual(
-      membership(groupsOfEntities(sets)),
+    expect(membership(await groupsOfEntities([...sets].reverse()))).toEqual(
+      membership(await groupsOfEntities(sets)),
     );
   });
 
-  it('orders the merges by signature agreement, not by Entity containment', () => {
+  it('orders the merges by signature agreement, not by Entity containment', async () => {
     // Two pairs clear the gate and the third does not. The Entity reading scores
     // A–C above A–B, because A and C share three more rare Entities; the signature
     // is the reverse. Merges are considered in text-agreement order, so A–B goes
@@ -434,7 +434,7 @@ describe('groupIntoClusters', () => {
     const e8 = entity('org');
 
     // A and B share only {e1}; A and C share {e1, e2, e3, e4}; B and C share none.
-    const groups = groupsOf([
+    const groups = await groupsOf([
       reading([e1, e2, e3, e4, e5, e6], a),
       reading([e1, e7], b),
       reading([e1, e2, e3, e4, e8], c),
@@ -443,10 +443,10 @@ describe('groupIntoClusters', () => {
     expect(groups).toEqual([[0, 1], [2]]);
   });
 
-  it('lets a Story with no Entities join when its signature and meaning agree', () => {
+  it('lets a Story with no Entities join when its signature and meaning agree', async () => {
     const shared = entity();
 
-    const groups = groupsOf([
+    const groups = await groupsOf([
       reading([shared], text('acme', 'foo')),
       reading([], text('acme', 'foo')),
       reading([shared], text('ruling', 'overturns')),
@@ -456,15 +456,15 @@ describe('groupIntoClusters', () => {
     expect(groups).toContainEqual([2]);
   });
 
-  it('has no Clusters to return for no Stories at all', () => {
-    expect(groupsOf([])).toEqual([]);
+  it('has no Clusters to return for no Stories at all', async () => {
+    expect(await groupsOf([])).toEqual([]);
   });
 
-  it('reads the thresholds it was given rather than only the ones it ships', () => {
+  it('reads the thresholds it was given rather than only the ones it ships', async () => {
     const shared = entity();
 
     expect(
-      groupsOf(
+      await groupsOf(
         [
           reading([shared], text('acme', 'foo', 'launch')),
           reading([shared], text('ruling', 'overturns', 'appeal')),
@@ -473,7 +473,7 @@ describe('groupIntoClusters', () => {
       ),
     ).toHaveLength(2);
     expect(
-      groupsOf(
+      await groupsOf(
         [
           reading([shared], text('acme', 'foo', 'launch')),
           reading([shared], text('acme', 'foo', 'launch')),
@@ -483,17 +483,17 @@ describe('groupIntoClusters', () => {
     ).toHaveLength(1);
   });
 
-  it('joins two Stories naming the same Entities only when their signatures agree too', () => {
+  it('joins two Stories naming the same Entities only when their signatures agree too', async () => {
     // The two hardest different-event pairs on the benchmark's negative set are
     // exactly this shape: the same Entity vector, so a reading of exactly 1, and
     // two reports about different things. Entities alone cannot tell them apart.
     const shared = entity();
 
-    const apart = groupsOf([
+    const apart = await groupsOf([
       reading([shared], text('acme', 'foo', 'unveiled')),
       reading([shared], text('ruling', 'overturns', 'appeal')),
     ]);
-    const together = groupsOf([
+    const together = await groupsOf([
       reading([shared], text('acme', 'foo', 'unveils')),
       reading([shared], text('acme', 'foo', 'unveil')),
     ]);
@@ -502,14 +502,14 @@ describe('groupIntoClusters', () => {
     expect(together).toContainEqual([0, 1]);
   });
 
-  it('holds a Story out of a Cluster whose members do not read like it', () => {
+  it('holds a Story out of a Cluster whose members do not read like it', async () => {
     // The first two agree on signature and meaning, so they merge. The third
     // shares their Entities and clears their signature, but means something else,
     // so the meaning floor keeps it out.
     const shared = entity();
     const other = entity();
 
-    const groups = groupsOf([
+    const groups = await groupsOf([
       reading([shared], text('acme', 'foo', 'launch'), meaning('x')),
       reading([shared], text('acme', 'foo', 'launch'), meaning('x')),
       reading([shared, other], text('acme', 'quarterly', 'earnings'), meaning('y')),
@@ -519,12 +519,12 @@ describe('groupIntoClusters', () => {
     expect(groups).toContainEqual([2]);
   });
 
-  it('leaves a Story carrying no signature in a Cluster of its own', () => {
+  it('leaves a Story carrying no signature in a Cluster of its own', async () => {
     // An unreadable signature is not evidence that two Stories are one thing, so
     // the gate refuses rather than waving it through.
     const shared = entity();
 
-    const groups = groupsOf([
+    const groups = await groupsOf([
       reading([shared], text('acme', 'foo')),
       reading([shared], EMPTY_SIGNATURE),
     ]);
@@ -533,7 +533,7 @@ describe('groupIntoClusters', () => {
     expect(groups).toContainEqual([1]);
   });
 
-  it('moves only the floor a caller named, leaving the other where the rule ships it', () => {
+  it('moves only the floor a caller named, leaving the other where the rule ships it', async () => {
     const shared = entity();
     const readings = [
       reading([shared], text('acme', 'foo', 'unveiled')),
@@ -542,19 +542,19 @@ describe('groupIntoClusters', () => {
 
     // Lifting the signature floor alone joins them; lifting the Entity floor
     // alone does not, because Entities no longer refuse.
-    expect(groupsOf(readings, { ...SHIPPED_MERGE_THRESHOLD, signature: 0 })).toContainEqual([
+    expect(await groupsOf(readings, { ...SHIPPED_MERGE_THRESHOLD, signature: 0 })).toContainEqual([
       0, 1,
     ]);
     expect(
-      groupsOf(readings, { ...SHIPPED_MERGE_THRESHOLD, entity: 0 }),
+      await groupsOf(readings, { ...SHIPPED_MERGE_THRESHOLD, entity: 0 }),
     ).not.toContainEqual([0, 1]);
   });
 
-  it('does not refuse a pair on its Entities, and reads its embedding', () => {
+  it('does not refuse a pair on its Entities, and reads its embedding', async () => {
     const aside = entity();
     const other = entity();
 
-    const groups = groupsOf([
+    const groups = await groupsOf([
       reading([aside], SAME_TEXT, SAME_MEANING),
       reading([other], SAME_TEXT, SAME_MEANING),
     ]);
@@ -562,10 +562,10 @@ describe('groupIntoClusters', () => {
     expect(groups).toContainEqual([0, 1]);
   });
 
-  it('refuses a pair the signature floor fails without reading its embedding', () => {
+  it('refuses a pair the signature floor fails without reading its embedding', async () => {
     const shared = entity();
 
-    const groups = groupsOf([
+    const groups = await groupsOf([
       reading([shared], text('acme', 'foo', 'launch'), unscorable()),
       reading([shared], text('ruling', 'overturns', 'appeal'), unscorable()),
     ]);
@@ -573,11 +573,11 @@ describe('groupIntoClusters', () => {
     expect(groups).toEqual([[0], [1]]);
   });
 
-  it('admits a pair the Entity floor clears without reading its embedding, under the widened gate', () => {
+  it('admits a pair the Entity floor clears without reading its embedding, under the widened gate', async () => {
     const shared = entity();
 
     expect(
-      groupsOf(
+      await groupsOf(
         [
           reading([shared], SAME_TEXT, unscorable()),
           reading([shared], text('ruling', 'overturns', 'appeal'), unscorable()),
@@ -588,12 +588,12 @@ describe('groupIntoClusters', () => {
     ).toContainEqual([0, 1]);
   });
 
-  it('admits a pair the signature floor clears without reading its embedding, under the widened gate', () => {
+  it('admits a pair the signature floor clears without reading its embedding, under the widened gate', async () => {
     const shared = entity();
     const aside = entity();
 
     expect(
-      groupsOf(
+      await groupsOf(
         [
           reading([aside], SAME_TEXT, unscorable()),
           reading([shared], SAME_TEXT, unscorable()),
@@ -604,14 +604,14 @@ describe('groupIntoClusters', () => {
     ).toContainEqual([0, 1]);
   });
 
-  it('reads the embedding where both cheap floors miss under the widened gate', () => {
+  it('reads the embedding where both cheap floors miss under the widened gate', async () => {
     // The one place the embedding can decide on its own: both cheap floors miss,
     // so the score is taken and admits the pair.
     const shared = entity();
     const aside = entity();
 
     expect(
-      groupsOf(
+      await groupsOf(
         [
           reading([aside], text('acme', 'foo', 'launch'), meaning('x')),
           reading([shared], text('ruling', 'overturns', 'appeal'), meaning('x')),
@@ -622,13 +622,13 @@ describe('groupIntoClusters', () => {
     ).toContainEqual([0, 1]);
   });
 
-  it('reads the embedding where both cheap floors clear under the gate the rule ships', () => {
+  it('reads the embedding where both cheap floors clear under the gate the rule ships', async () => {
     // The one place the embedding can decide on its own: both cheap floors clear,
     // so the score is taken and refuses the pair.
     const shared = entity();
 
     expect(
-      groupsOf([
+      await groupsOf([
         reading([shared], SAME_TEXT, meaning('x')),
         reading([shared], SAME_TEXT, meaning('y')),
       ]),
@@ -654,42 +654,42 @@ describe('the gate a merge has to clear', () => {
     ];
   }
 
-  it('gates on a conjunction by default, which is what the rule ships', () => {
+  it('gates on a conjunction by default, which is what the rule ships', async () => {
     expect(SHIPPED_MERGE_GATE).toBe('both');
 
     // Read as the default rather than as the absence of the wider gate, because
     // "no gate named" and "the gate the rule ships" are the same rule today and a
     // future reader should not have to know that to trust the first one.
-    expect(groupsOf(unreadTogether(), undefined, SHIPPED_MERGE_GATE)).toEqual(
-      groupsOf(unreadTogether()),
+    expect(await groupsOf(unreadTogether(), undefined, SHIPPED_MERGE_GATE)).toEqual(
+      await groupsOf(unreadTogether()),
     );
   });
 
-  it('joins a pair that shares no Entity when its signature and meaning agree', () => {
+  it('joins a pair that shares no Entity when its signature and meaning agree', async () => {
     // The Entity floor no longer refuses: two Stories that name nothing in common
     // but read alike and mean the same thing merge.
-    expect(groupsOf(unreadTogether())).toContainEqual([0, 1]);
+    expect(await groupsOf(unreadTogether())).toContainEqual([0, 1]);
   });
 
-  it('still refuses a pair whose signature fails, whatever its Entities', () => {
+  it('still refuses a pair whose signature fails, whatever its Entities', async () => {
     expect(
-      groupsOf([
+      await groupsOf([
         reading([entity()], text('acme', 'foo', 'launch'), SAME_MEANING),
         reading([entity()], text('ruling', 'overturns', 'appeal'), SAME_MEANING),
       ]),
     ).not.toContainEqual([0, 1]);
   });
 
-  it('joins a pair the Entity floor alone refuses when the signature clears it', () => {
+  it('joins a pair the Entity floor alone refuses when the signature clears it', async () => {
     // The reading between two Entity vectors sharing nothing is exactly zero, so
     // this is the whole of what the widened gate is for: the same-event families
     // `docs/cluster-grouping-baseline.md` says the Entity rule cannot reach. The
     // two mean opposite things, so the semantic floor says nothing here too and
     // the half being widened is the signature's alone.
-    expect(groupsOf(unreadTogether(meaning('x')), undefined, 'either')).toContainEqual([0, 1]);
+    expect(await groupsOf(unreadTogether(meaning('x')), undefined, 'either')).toContainEqual([0, 1]);
   });
 
-  it('still refuses a pair no floor clears, however wide the gate is', () => {
+  it('still refuses a pair no floor clears, however wide the gate is', async () => {
     // Neither signal saying anything is not a low score on both of them, and a
     // widened gate that waves it through is not a widened gate. Nothing here means
     // anything either, so all three floors refuse and the disjunction has nothing
@@ -699,10 +699,10 @@ describe('the gate a merge has to clear', () => {
       reading([entity()], text('ruling', 'overturns', 'appeal'), meaning('y')),
     ];
 
-    expect(groupsOf(readings, undefined, 'either')).not.toContainEqual([0, 1]);
+    expect(await groupsOf(readings, undefined, 'either')).not.toContainEqual([0, 1]);
   });
 
-  it('holds a Story out of a widened-gate Cluster whose members do not read like it', () => {
+  it('holds a Story out of a widened-gate Cluster whose members do not read like it', async () => {
     // The first two merge on their Entities, their text and their meaning alike. The
     // third names nothing the first two name, differs in text and in meaning, so under
     // the widened gate no floor admits it against either member — the all-pairs
@@ -710,7 +710,7 @@ describe('the gate a merge has to clear', () => {
     const shared = entity();
     const other = entity();
 
-    const groups = groupsOf(
+    const groups = await groupsOf(
       [
         reading([shared], SAME_TEXT, meaning('x')),
         reading([shared], SAME_TEXT, meaning('x')),
@@ -724,7 +724,7 @@ describe('the gate a merge has to clear', () => {
     expect(groups).toContainEqual([2]);
   });
 
-  it('merges a Story carrying no signature on its Entities when the gate is widened', () => {
+  it('merges a Story carrying no signature on its Entities when the gate is widened', async () => {
     // Not a consequence the widened gate can dodge, and worth stating rather than
     // discovering: reading nothing is still not evidence, but under `either` the
     // Entity half is no longer waiting on the signature's permission. The two mean
@@ -735,8 +735,8 @@ describe('the gate a merge has to clear', () => {
       reading([shared], EMPTY_SIGNATURE, meaning('y')),
     ];
 
-    expect(groupsOf(readings)).not.toContainEqual([0, 1]);
-    expect(groupsOf(readings, undefined, 'either')).toContainEqual([0, 1]);
+    expect(await groupsOf(readings)).not.toContainEqual([0, 1]);
+    expect(await groupsOf(readings, undefined, 'either')).toContainEqual([0, 1]);
   });
 });
 
@@ -746,7 +746,7 @@ describe('clearsMergeGate', () => {
   const clears = (entity: number, signature: number, semantic: number, gate: MergeGate): boolean =>
     clearsMergeGate({ entity, signature, semantic, thresholds: over, gate });
 
-  it('clears on signature and semantic under the gate the rule ships, ignoring Entities', () => {
+  it('clears on signature and semantic under the gate the rule ships, ignoring Entities', async () => {
     // The predicate itself rather than the grouping, because two things read it —
     // the rule deciding merges and the benchmark pricing them — and a measure that
     // disagreed with the thing it measures would be pricing a rule nobody runs.
@@ -759,20 +759,20 @@ describe('clearsMergeGate', () => {
     expect(clears(0.4, 0.01, 0.6, 'both')).toBe(false);
   });
 
-  it('clears on one alone only when the gate has been widened', () => {
+  it('clears on one alone only when the gate has been widened', async () => {
     expect(clears(0.6, 0.01, 0.6, 'either')).toBe(true);
     expect(clears(0.4, 0.06, 0.6, 'either')).toBe(true);
     expect(clears(0.4, 0.01, 0.8, 'either')).toBe(true);
     expect(clears(0.4, 0.01, 0.6, 'either')).toBe(false);
   });
 
-  it('takes a score sitting exactly on a floor as clearing it, as the rule does', () => {
+  it('takes a score sitting exactly on a floor as clearing it, as the rule does', async () => {
     expect(clears(0.5, 0.05, 0.7, 'both')).toBe(true);
   });
 });
 
 describe('the weights and the floors the rule ships', () => {
-  it('counts a place as half of what an actor or a thing counts', () => {
+  it('counts a place as half of what an actor or a thing counts', async () => {
     expect(ENTITY_KIND_WEIGHTS.place).toBe(0.5);
     expect(ENTITY_KIND_WEIGHTS.person).toBe(1);
     expect(ENTITY_KIND_WEIGHTS.org).toBe(1);
@@ -780,7 +780,7 @@ describe('the weights and the floors the rule ships', () => {
     expect(ENTITY_KIND_WEIGHTS.concept).toBe(1);
   });
 
-  it('floors all three similarities at a number one can sit either side of', () => {
+  it('floors all three similarities at a number one can sit either side of', async () => {
     expect(ENTITY_SIMILARITY_FLOOR).toBeGreaterThan(0);
     expect(ENTITY_SIMILARITY_FLOOR).toBeLessThan(1);
     expect(SIGNATURE_SIMILARITY_FLOOR).toBeGreaterThan(0);
@@ -789,7 +789,7 @@ describe('the weights and the floors the rule ships', () => {
     expect(SEMANTIC_SIMILARITY_FLOOR).toBeLessThan(1);
   });
 
-  it('refuses a pair on signature or meaning alone, but never on Entities alone', () => {
+  it('refuses a pair on signature or meaning alone, but never on Entities alone', async () => {
     // One pair per floor that refuses: a pair naming the same Entities but plainly
     // different in text, and a pair identical in both that mean opposite things.
     // Each is held apart at the shipped point, and each joins once its own floor
@@ -812,11 +812,11 @@ describe('the weights and the floors the rule ships', () => {
 
     for (const [floor, build] of Object.entries(pairs)) {
       const readings = build();
-      expect(groupsOf(readings), `${floor} floor did not refuse its pair`).not.toContainEqual([
+      expect(await groupsOf(readings), `${floor} floor did not refuse its pair`).not.toContainEqual([
         0, 1,
       ]);
       expect(
-        groupsOf(readings, { ...SHIPPED_MERGE_THRESHOLD, [floor]: 0 }),
+        await groupsOf(readings, { ...SHIPPED_MERGE_THRESHOLD, [floor]: 0 }),
         `lifting the ${floor} floor alone did not join its pair`,
       ).toContainEqual([0, 1]);
     }
@@ -827,10 +827,10 @@ describe('the weights and the floors the rule ships', () => {
       reading([entity()], SAME_TEXT),
       reading([entity()], SAME_TEXT),
     ];
-    expect(groupsOf(entityReadings)).toContainEqual([0, 1]);
+    expect(await groupsOf(entityReadings)).toContainEqual([0, 1]);
   });
 
-  it('ships the thresholds among the ones it is measured across', () => {
+  it('ships the thresholds among the ones it is measured across', async () => {
     expect(SHIPPED_MERGE_THRESHOLDS).toContain(SHIPPED_MERGE_THRESHOLD);
   });
 });
@@ -856,24 +856,24 @@ describe('the semantic floor', () => {
     ];
   }
 
-  it('holds apart two Stories that mean different things, however alike they read otherwise', () => {
+  it('holds apart two Stories that mean different things, however alike they read otherwise', async () => {
     // The whole of the third question. Under the two floors this rule already
     // shipped, these two are the most alike pair in any Topic there is: the same
     // Entity, and the same words and phrases down to the set.
     expect(
-      groupsOf(sameWordsAboutDifferentThings(meaning('x'), meaning('y'))),
+      await groupsOf(sameWordsAboutDifferentThings(meaning('x'), meaning('y'))),
     ).not.toContainEqual([0, 1]);
   });
 
-  it('joins two Stories that mean the same thing once their cosine clears it', () => {
+  it('joins two Stories that mean the same thing once their cosine clears it', async () => {
     // The other direction, and the one the floor costs: a pair the first two floors
     // already admit is still admitted, so nothing that grouped before stops.
     expect(
-      groupsOf(sameWordsAboutDifferentThings(SAME_MEANING, SAME_MEANING)),
+      await groupsOf(sameWordsAboutDifferentThings(SAME_MEANING, SAME_MEANING)),
     ).toContainEqual([0, 1]);
   });
 
-  it('takes a pair whose cosine sits exactly on the floor as clearing it', () => {
+  it('takes a pair whose cosine sits exactly on the floor as clearing it', async () => {
     const orthogonal: StoryEmbedding = {
       model: 'test/model',
       values: [SEMANTIC_SIMILARITY_FLOOR, Math.sqrt(1 - SEMANTIC_SIMILARITY_FLOOR ** 2), 0, 0],
@@ -882,13 +882,13 @@ describe('the semantic floor', () => {
 
     // Built to sit on the floor rather than near it, because the rule compares with
     // `>=` and a floor that admitted only what was above it would be a different rule.
-    expect(groupsOf(readings)).toContainEqual([0, 1]);
+    expect(await groupsOf(readings)).toContainEqual([0, 1]);
     expect(
-      groupsOf(readings, { ...SHIPPED_MERGE_THRESHOLD, semantic: SEMANTIC_SIMILARITY_FLOOR + 0.01 }),
+      await groupsOf(readings, { ...SHIPPED_MERGE_THRESHOLD, semantic: SEMANTIC_SIMILARITY_FLOOR + 0.01 }),
     ).not.toContainEqual([0, 1]);
   });
 
-  it('leaves the semantic floor out of it where either Story carries no embedding', () => {
+  it('leaves the semantic floor out of it where either Story carries no embedding', async () => {
     // The state ADR-0037 designed for rather than a gap, and the one place the
     // third floor differs from the other two. A Story nothing has measured is not a
     // Story that means nothing in particular, and this floor has no backfill behind
@@ -901,10 +901,10 @@ describe('the semantic floor', () => {
       reading([shared], SAME_TEXT, null),
     ];
 
-    expect(groupsOf(readings)).toContainEqual([0, 1]);
+    expect(await groupsOf(readings)).toContainEqual([0, 1]);
   });
 
-  it('still refuses a pair the other two floors refuse, where one Story carries no embedding', () => {
+  it('still refuses a pair the other two floors refuse, where one Story carries no embedding', async () => {
     // Inapplicable is not unconstrained: a pair this floor cannot judge is still a
     // pair the other two have to admit, and here they do not.
     const readings: readonly GroundedStory[] = [
@@ -912,10 +912,10 @@ describe('the semantic floor', () => {
       reading([entity()], text('ruling', 'overturns', 'appeal'), null),
     ];
 
-    expect(groupsOf(readings)).not.toContainEqual([0, 1]);
+    expect(await groupsOf(readings)).not.toContainEqual([0, 1]);
   });
 
-  it('reports a set two models embedded rather than grouping it', () => {
+  it('reports a set two models embedded rather than grouping it', async () => {
     // The state ADR-0037 stores the model beside the vector to make findable, and
     // what it looks like when nobody found it: the configured model changed, only
     // some Stories were recomputed, and every cosine in the corpus is still a
@@ -924,7 +924,7 @@ describe('the semantic floor', () => {
     // check has moved up a level rather than down. The report names both models,
     // because a corpus to be brought back onto one of them cannot be brought back
     // without knowing which.
-    const grouping = groupingOf(
+    const grouping = await groupingOf(
       sameWordsAboutDifferentThings(
         { model: 'vendor/a-1', values: [1, 0, 0, 0] },
         { model: 'vendor/b-2', values: [1, 0, 0, 0] },
@@ -935,13 +935,13 @@ describe('the semantic floor', () => {
     expect(grouping.refusal?.models).toEqual(['vendor/a-1', 'vendor/b-2']);
   });
 
-  it('reports a set two models embedded however one Story carries no embedding', () => {
+  it('reports a set two models embedded however one Story carries no embedding', async () => {
     // The mixed set is not two Stories facing each other — it is a corpus, so the
     // Stories between them count, and one holding nothing is not a third model. A
     // check over pairs would never have found this: no pair here is a pair two
     // models embedded.
     const shared = entity();
-    const grouping = groupingOf([
+    const grouping = await groupingOf([
       reading([shared], SAME_TEXT, { model: 'vendor/a-1', values: [1, 0, 0, 0] }),
       reading([shared], SAME_TEXT, null),
       reading([shared], SAME_TEXT, { model: 'vendor/b-2', values: [1, 0, 0, 0] }),
@@ -951,13 +951,13 @@ describe('the semantic floor', () => {
     expect(grouping.refusal?.models).toEqual(['vendor/a-1', 'vendor/b-2']);
   });
 
-  it('refuses one model held at two widths before any pair is scored', () => {
+  it('refuses one model held at two widths before any pair is scored', async () => {
     // The width door: every cosine in this set is still a number and the two pairs
     // that share a width still score, but the set is refused outright because the
     // model's name no longer says one width. The refusal names the model and both
     // widths, and no pair is judged at all.
     const wide = (width: number): StoryEmbedding => ({ model: 'one', values: Array.from({ length: width }, () => 0) });
-    const grouping = groupingOf([
+    const grouping = await groupingOf([
       reading([entity()], SAME_TEXT, wide(4)),
       reading([entity()], SAME_TEXT, wide(5)),
     ]);
@@ -968,7 +968,7 @@ describe('the semantic floor', () => {
     expect(grouping.refusal!.widths).toEqual([4, 5]);
   });
 
-  it('reports nothing about a set carrying no embedding, and groups it as it did before', () => {
+  it('reports nothing about a set carrying no embedding, and groups it as it did before', async () => {
     // The other half of the same rule, and the one that decides where the check is
     // allowed to live. "No models at all" is a set holding zero models rather than
     // one, and refusing it would take every corpus predating ADR-0037 from grouping
@@ -981,13 +981,13 @@ describe('the semantic floor', () => {
       reading([shared], SAME_TEXT, { model: 'vendor/a-1', values: [1, 0, 0, 0] }),
     ]);
     const none = embedded.map((story) => reading(story.entities, story.signature, null));
-    const grouping = groupingOf(none);
+    const grouping = await groupingOf(none);
 
     expect(grouping.refusal).toBeNull();
-    expect(grouping.clusters).toEqual(groupsOf(embedded));
+    expect(grouping.clusters).toEqual(await groupsOf(embedded));
   });
 
-  it('holds a Story out of a Cluster whose other members do not mean what it does', () => {
+  it('holds a Story out of a Cluster whose other members do not mean what it does', async () => {
     // The first two merge, and they mean the same thing. The third shares their
     // Entity and their words and means something else, so the merge the rule
     // refuses is the one putting it in with the pair — the all-pairs constraint
@@ -995,7 +995,7 @@ describe('the semantic floor', () => {
     const shared = entity();
     const other = entity();
 
-    const groups = groupsOf([
+    const groups = await groupsOf([
       reading([shared], SAME_TEXT, meaning('x')),
       reading([shared], SAME_TEXT, meaning('x')),
       reading([shared, other], SAME_TEXT, meaning('y')),
@@ -1005,7 +1005,7 @@ describe('the semantic floor', () => {
     expect(groups).toContainEqual([2]);
   });
 
-  it('groups a Story carrying no embedding exactly as it did before, at every floor of the grid', () => {
+  it('groups a Story carrying no embedding exactly as it did before, at every floor of the grid', async () => {
     // The property that makes the floor landable ahead of a backfill: a corpus
     // holding no embeddings at all is not a corpus that groups worse, it is a
     // corpus that groups exactly as it did. Stated as a comparison rather than as a
@@ -1025,20 +1025,20 @@ describe('the semantic floor', () => {
 
     for (const thresholds of SHIPPED_MERGE_THRESHOLDS) {
       expect(
-        membership(groupsOf(none, thresholds)),
+        membership(await groupsOf(none, thresholds)),
         `thresholds ${describeThresholds(thresholds)} moved a Story carrying no embedding`,
-      ).toBe(membership(groupsOf(embedded, thresholds)));
+      ).toBe(membership(await groupsOf(embedded, thresholds)));
     }
   });
 
-  it('lets a Story carrying no embedding join a Cluster its other members would have', () => {
+  it('lets a Story carrying no embedding join a Cluster its other members would have', async () => {
     // The same claim for one Story rather than a whole corpus, and the one that
     // makes the grid check above mean something: the Story is not held out, and it
     // is not a bridge either — every member of the resulting Cluster still clears
     // every floor that applies.
     const shared = entity();
 
-    const groups = groupsOf([
+    const groups = await groupsOf([
       reading([shared], SAME_TEXT, SAME_MEANING),
       reading([shared], SAME_TEXT, null),
       reading([shared], SAME_TEXT, SAME_MEANING),
@@ -1047,22 +1047,22 @@ describe('the semantic floor', () => {
     expect(groups).toContainEqual([0, 1, 2]);
   });
 
-  it('cannot be widened by moving either of the other two floors', () => {
+  it('cannot be widened by moving either of the other two floors', async () => {
     // The third acceptance criterion, and the reason the floor is a field of
     // `MergeThresholds` rather than something folded into the Entity reading: a
     // caller widening the rule has to name this one too.
     const apart = sameWordsAboutDifferentThings(meaning('x'), meaning('y'));
 
-    expect(groupsOf(apart, { ...SHIPPED_MERGE_THRESHOLD, entity: 0 })).not.toContainEqual([0, 1]);
-    expect(groupsOf(apart, { ...SHIPPED_MERGE_THRESHOLD, signature: 0 })).not.toContainEqual([
+    expect(await groupsOf(apart, { ...SHIPPED_MERGE_THRESHOLD, entity: 0 })).not.toContainEqual([0, 1]);
+    expect(await groupsOf(apart, { ...SHIPPED_MERGE_THRESHOLD, signature: 0 })).not.toContainEqual([
       0, 1,
     ]);
     expect(
-      groupsOf(apart, { entity: 0, signature: 0, semantic: 0 }),
+      await groupsOf(apart, { entity: 0, signature: 0, semantic: 0 }),
     ).toContainEqual([0, 1]);
   });
 
-  it('leaves a Story carrying no embedding able to join a Cluster of its own kind', () => {
+  it('leaves a Story carrying no embedding able to join a Cluster of its own kind', async () => {
     // The other half of "inapplicable rather than blocking", and the one a reader
     // of the service test cannot see: the Story is judged by the two floors that do
     // apply, so it is neither stranded nor waved through regardless of what the
@@ -1070,7 +1070,7 @@ describe('the semantic floor', () => {
     const shared = entity();
     const apart = entity();
 
-    const together = groupsOf([
+    const together = await groupsOf([
       reading([shared], text('acme', 'foo'), null),
       reading([shared], text('acme', 'foo'), null),
       reading([apart], text('ruling', 'overturns'), null),
@@ -1082,7 +1082,7 @@ describe('the semantic floor', () => {
 });
 
 describe('sharedEntityCount', () => {
-  it('counts how many of one Story\'s Entities the other names', () => {
+  it('counts how many of one Story\'s Entities the other names', async () => {
     expect(
       sharedEntityCount(
         new Set(['a', 'b', 'c'] as EntityId[]),
@@ -1095,7 +1095,7 @@ describe('sharedEntityCount', () => {
 describe('refusedSets', () => {
   const of = (model: string): StoryEmbedding => ({ model, values: [1, 0, 0, 0] });
 
-  it('finds the sets whose embeddings came from more than one model, and leaves the rest', () => {
+  it('finds the sets whose embeddings came from more than one model, and leaves the rest', async () => {
     // What the four corpus commands ask before they print: a corpus read whole, so
     // the answer is per set rather than for the corpus — two Topics each holding one
     // model are two consistent sets, and their Stories are never compared with each
@@ -1112,7 +1112,7 @@ describe('refusedSets', () => {
     ]);
   });
 
-  it('refuses one model held at two widths through the corpus-level read', () => {
+  it('refuses one model held at two widths through the corpus-level read', async () => {
     const of = (model: string, width: number): StoryEmbedding => ({ model, values: Array.from({ length: width }, () => 0) });
     const refusals = refusedSets([
       { label: 'shipping', embeddings: [of('vendor/c-3', 4), of('vendor/c-3', 5)] },
@@ -1123,7 +1123,7 @@ describe('refusedSets', () => {
     ]);
   });
 
-  it('leaves a corpus that embeds nothing with nothing to refuse', () => {
+  it('leaves a corpus that embeds nothing with nothing to refuse', async () => {
     expect(
       refusedSets([
         { label: 'fusion-energy', embeddings: [null, null] },
@@ -1134,7 +1134,7 @@ describe('refusedSets', () => {
 });
 
 describe('formatGroupingRefusal', () => {
-  it('names every model of every set it refused, and what to do about them', () => {
+  it('names every model of every set it refused, and what to do about them', async () => {
     // The whole job of these lines: a corpus carrying two models is the one state an
     // operator can fix, and it cannot be fixed without knowing which two and where
     // they are — so a line each, not a count of how many there were.
@@ -1152,7 +1152,7 @@ describe('formatGroupingRefusal', () => {
     expect(text).toContain('pnpm cluster:backfill');
   });
 
-  it('names one model beside every width it was found to hold', () => {
+  it('names one model beside every width it was found to hold', async () => {
     const text = formatGroupingRefusal(
       [{ label: 'shipping', models: ['vendor/c-3'], widths: [4, 5] }],
       { corpus: 'one topic' },
@@ -1162,7 +1162,7 @@ describe('formatGroupingRefusal', () => {
     expect(text).toContain('one model at more than one width');
   });
 
-  it('says a benchmark over this corpus would mean nothing rather than print one', () => {
+  it('says a benchmark over this corpus would mean nothing rather than print one', async () => {
     // What a reader of the command's output needs to be told, because the report it
     // would have printed is not obviously worthless: every cosine in the corpus is
     // still a number, and the only symptom is a benchmark that looks merely
@@ -1175,7 +1175,7 @@ describe('formatGroupingRefusal', () => {
     expect(text).toContain('cluster grouping refused');
   });
 
-  it('ends in a newline, because every other line this repository prints does', () => {
+  it('ends in a newline, because every other line this repository prints does', async () => {
     const text = formatGroupingRefusal([{ label: 'one topic', models: ['a', 'b'], widths: [4] }], {
       corpus: 'one topic',
     });
@@ -1308,13 +1308,13 @@ describe('groundingFor', () => {
      * Group these readings while observing every pair the gate is asked of, and
      * whether the semantic floor was priced for it.
      */
-    function observed(
+    async function observed(
       readings: readonly GroundedStory[],
       gate: MergeGate = SHIPPED_MERGE_GATE,
-    ): { readonly walkthrough: number; readonly floorPairs: number } {
+    ): Promise<{ readonly walkthrough: number; readonly floorPairs: number }> {
       let walkthrough = 0;
       let floorPairs = 0;
-      groupIntoClusters(
+      await groupIntoClusters(
         readings.map((_, index) => index),
         (_, index) => readings[index]!,
         { gate, onGate: (_pair, semanticPriced) => {
@@ -1325,26 +1325,26 @@ describe('groundingFor', () => {
       return { walkthrough, floorPairs };
     }
 
-    it('counts every pair the gate walks, candidate enumeration and linkage re-asks alike', () => {
+    it('counts every pair the gate walks, candidate enumeration and linkage re-asks alike', async () => {
       const shared = entity();
       const readings = [
         reading([shared], SAME_TEXT, SAME_MEANING),
         reading([shared], SAME_TEXT, SAME_MEANING),
       ];
       // One candidate pair, re-asked once when the two Stories merge: two gate steps.
-      expect(observed(readings, 'both').walkthrough).toBe(2);
+      expect((await observed(readings, 'both')).walkthrough).toBe(2);
     });
 
-    it('prices the semantic floor only where the signature clears it, under the conjunction', () => {
+    it('prices the semantic floor only where the signature clears it, under the conjunction', async () => {
       const shared = entity();
-      const priced = observed([
+      const priced = await observed([
         reading([shared], SAME_TEXT, SAME_MEANING),
         reading([shared], SAME_TEXT, SAME_MEANING),
       ], 'both');
       expect(priced.walkthrough).toBe(2);
       expect(priced.floorPairs).toBe(2);
 
-      const refused = observed([
+      const refused = await observed([
         reading([entity()], text('acme', 'foo', 'launch')),
         reading([entity()], text('ruling', 'overturns', 'appeal')),
       ], 'both');
@@ -1353,16 +1353,16 @@ describe('groundingFor', () => {
       expect(refused.floorPairs).toBe(0);
     });
 
-    it('prices the semantic floor only where both cheap floors fail, under the wider gate', () => {
+    it('prices the semantic floor only where both cheap floors fail, under the wider gate', async () => {
       const shared = entity();
-      const admittedCheap = observed([
+      const admittedCheap = await observed([
         reading([shared], SAME_TEXT, SAME_MEANING),
         reading([shared], SAME_TEXT, SAME_MEANING),
       ], 'either');
       expect(admittedCheap.walkthrough).toBe(2);
       expect(admittedCheap.floorPairs).toBe(0);
 
-      const priced = observed([
+      const priced = await observed([
         reading([entity()], text('alpha', 'beta'), SAME_MEANING),
         reading([entity()], text('gamma', 'delta'), SAME_MEANING),
       ], 'either');
@@ -1372,9 +1372,9 @@ describe('groundingFor', () => {
       expect(priced.floorPairs).toBe(2);
     });
 
-    it('leaves the semantic floor unpriced where either Story carries no embedding', () => {
+    it('leaves the semantic floor unpriced where either Story carries no embedding', async () => {
       const shared = entity();
-      const unembedded = observed([
+      const unembedded = await observed([
         reading([shared], SAME_TEXT, SAME_MEANING),
         reading([shared], SAME_TEXT, null),
       ], 'both');

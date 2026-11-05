@@ -91,7 +91,7 @@ export interface SweepCell {
  * `evaluateClusterGrouping` scores only the unmarked grouping: the marker is how
  * the benchmark keeps a swept grouping out of the shipped point's totals.
  */
-export function sweepCell(input: {
+export async function sweepCell(input: {
   readonly reads: readonly SweepRead[];
   readonly resolution: PairResolution;
   /** How each Story reads, for the ceilings and the margins beside the numbers. */
@@ -100,21 +100,24 @@ export function sweepCell(input: {
   readonly gate: MergeGate;
   /** Whether the Entity reading must also clear as a veto on the merge. */
   readonly requireEntity?: boolean;
-}): SweepCell {
-  const grouped: GroupedTopic[] = input.reads.map((read) => ({
-    topicId: read.topicId,
-    clusters: clustersOf(
-      groupIntoClusters(
-        read.storyIds,
-        (_storyId, index) => read.grounding[index]!,
-        {
-          thresholds: input.thresholds,
-          gate: input.gate,
-          ...(input.requireEntity !== undefined ? { requireEntity: input.requireEntity } : {}),
-        },
+}): Promise<SweepCell> {
+  const grouped: GroupedTopic[] = [];
+  for (const read of input.reads) {
+    grouped.push({
+      topicId: read.topicId,
+      clusters: clustersOf(
+        await groupIntoClusters(
+          read.storyIds,
+          (_storyId, index) => read.grounding[index]!,
+          {
+            thresholds: input.thresholds,
+            gate: input.gate,
+            ...(input.requireEntity !== undefined ? { requireEntity: input.requireEntity } : {}),
+          },
+        ),
       ),
-    ),
-  }));
+    });
+  }
   const report = evaluateClusterGrouping({
     grouped,
     resolution: input.resolution,
