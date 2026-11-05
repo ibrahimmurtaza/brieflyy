@@ -136,6 +136,33 @@ test.describe('the topic settings page', () => {
     await expect(add).toBeDisabled();
   });
 
+  test('a button left pending is restored when the page returns from the browser cache', async ({
+    signedInPage: page,
+  }) => {
+    // A real submission would mutate the shared fixture account, so the pending
+    // state is applied by hand and pageshow is dispatched — the same event a
+    // back-forward-cache restore fires, and the one the page's restore logic
+    // listens for. Without it the User lands on a page whose buttons are stuck
+    // on what they were doing when the request was made.
+    await page.goto(SETTINGS);
+    const add = addSource(page);
+    const select = page.locator('#sourceId');
+
+    await select.selectOption('npr-news');
+    await expect(add).toBeEnabled();
+
+    await page.evaluate(() => {
+      const button = document.querySelector<HTMLButtonElement>('#source-add-submit')!;
+      button.disabled = true;
+      button.textContent = 'Adding…';
+      window.dispatchEvent(new Event('pageshow'));
+    });
+
+    await expect(add).toHaveText('Add source');
+    // The form's own check re-ran: the picked source means the save is live again.
+    await expect(add).toBeEnabled();
+  });
+
   test('offers no add control when the topic already follows every source', async ({
     allSourcesPage: page,
   }) => {

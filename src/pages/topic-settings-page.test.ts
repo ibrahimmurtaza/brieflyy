@@ -201,6 +201,16 @@ describe('HTTP: /topics/:slug/settings', () => {
     expect(resp.body).toContain('data-pending-label="Removing…"');
   });
 
+  it('restores the pending state on pageshow', async () => {
+    // A browser coming back from its back-forward cache returns the disabled
+    // buttons with the pending labels still on them, so the page restores the
+    // original labels and re-checks its forms when the page re-shows.
+    const resp = await page(h, '/topics/topic-1/settings');
+
+    expect(resp.body).toContain("addEventListener('pageshow'");
+    expect(resp.body).toContain('data-pending-original');
+  });
+
   it('redirects to /signup when not authenticated', async () => {
     const resp = await h.app.inject({ method: 'GET', url: '/topics/topic-1/settings' });
 
