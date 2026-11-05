@@ -116,8 +116,8 @@ const resolution: PairResolution = {
 };
 
 /** The shipped cell over the fixture corpus. */
-const shipped = (): SweepCell =>
-  sweepCell({
+const shipped = async (): Promise<SweepCell> =>
+  await sweepCell({
     reads,
     resolution,
     readingOf,
@@ -152,8 +152,8 @@ function cellOf(input: {
 }
 
 describe('sweepCell', () => {
-  it('scores a cell over the labelled families the corpus holds', () => {
-    const cell = shipped();
+  it('scores a cell over the labelled families the corpus holds', async () => {
+    const cell = await shipped();
 
     expect(cell.recall.families).toBe(2);
     expect(cell.recall.correct).toBe(1);
@@ -163,8 +163,8 @@ describe('sweepCell', () => {
     expect(cell.precision.ratio).toBe(0.5);
   });
 
-  it('counts the shape of the corpus the cell produced', () => {
-    const cell = shipped();
+  it('counts the shape of the corpus the cell produced', async () => {
+    const cell = await shipped();
 
     // Six Clusters over eight Stories, of which two hold a pair and four hold one.
     expect(cell.clusters).toBe(6);
@@ -172,17 +172,19 @@ describe('sweepCell', () => {
     expect(cell.singletonProportion).toBeCloseTo(4 / 6);
   });
 
-  it('agrees with the benchmark over the same corpus', () => {
+  it('agrees with the benchmark over the same corpus', async () => {
     // The claim the sweep rests on: the number it prints beside the shipped cell
     // is the number `pnpm cluster:benchmark` prints for the same corpus. The
     // benchmark groups at the shipped thresholds by naming none, so the two paths
     // are compared as they are run rather than as they are written.
-    const grouped = reads.map((read) => ({
-      topicId: read.topicId,
-      clusters: clustersOf(
-        groupIntoClusters(read.storyIds, (_storyId, index) => read.grounding[index]!),
-      ),
-    }));
+    const grouped = await Promise.all(
+      reads.map(async (read) => ({
+        topicId: read.topicId,
+        clusters: clustersOf(
+          await groupIntoClusters(read.storyIds, (_storyId, index) => read.grounding[index]!),
+        ),
+      })),
+    );
     const report = evaluateClusterGrouping({
       grouped,
       resolution,
@@ -190,7 +192,7 @@ describe('sweepCell', () => {
       signatureFloor: SIGNATURE_SIMILARITY_FLOOR,
       semanticFloor: SEMANTIC_SIMILARITY_FLOOR,
     });
-    const cell = shipped();
+    const cell = await shipped();
 
     expect(cell.recall.ratio).toBe(report.recall.ratio);
     expect(cell.recall.correct).toBe(report.recall.correct);
@@ -203,16 +205,16 @@ describe('sweepCell', () => {
     expect(cell.singletonProportion).toBe(report.singletonProportion);
   });
 
-  it('groups the shipped cell the way the rule the application runs groups', () => {
+  it('groups the shipped cell the way the rule the application runs groups', async () => {
     // The benchmark names no thresholds and the sweep names the shipped ones, so
     // the two are the same grouping only while the defaults are the shipped
     // floors and the shipped gate.
-    const named = groupIntoClusters(
+    const named = await groupIntoClusters(
       reads[0]!.storyIds,
       (_storyId, index) => readings[index]!,
       { thresholds: SHIPPED_MERGE_THRESHOLD, gate: SHIPPED_MERGE_GATE },
     );
-    const defaulted = groupIntoClusters(
+    const defaulted = await groupIntoClusters(
       reads[0]!.storyIds,
       (_storyId, index) => readings[index]!,
     );
@@ -220,8 +222,8 @@ describe('sweepCell', () => {
     expect(named.clusters).toEqual(defaulted.clusters);
   });
 
-  it('says it measured nothing rather than scoring over an empty set', () => {
-    const cell = sweepCell({
+  it('says it measured nothing rather than scoring over an empty set', async () => {
+    const cell = await sweepCell({
       reads,
       resolution: { ...resolution, sameEvent: [], differentEvent: [] },
       readingOf,
@@ -235,14 +237,14 @@ describe('sweepCell', () => {
 });
 
 describe('accuracyFrontier', () => {
-  it('leaves out a cell another cell beats on both recall and precision', () => {
+  it('leaves out a cell another cell beats on both recall and precision', async () => {
     const beaten = cellOf({ recall: 0.5, precision: 0.5 });
     const better = cellOf({ recall: 0.8, precision: 0.8, thresholds: { entity: 0.5, signature: 0.05, semantic: 0.5 } });
 
     expect(accuracyFrontier([beaten, better])).toEqual([better]);
   });
 
-  it('leaves out a cell another cell ties on one side and beats on the other', () => {
+  it('leaves out a cell another cell ties on one side and beats on the other', async () => {
     // The tie is what makes it a frontier and not a ranking: a cell that loses on
     // one side and ties on the other has been beaten, even though no cell beats
     // it on both at once.
@@ -252,14 +254,14 @@ describe('accuracyFrontier', () => {
     expect(accuracyFrontier([beaten, better])).toEqual([better]);
   });
 
-  it('keeps the cells that beat each other on different sides', () => {
+  it('keeps the cells that beat each other on different sides', async () => {
     const highRecall = cellOf({ recall: 0.9, precision: 0.4 });
     const highPrecision = cellOf({ recall: 0.4, precision: 0.9, thresholds: { entity: 0.5, signature: 0.05, semantic: 0.5 } });
 
     expect(accuracyFrontier([highRecall, highPrecision])).toEqual([highRecall, highPrecision]);
   });
 
-  it('counts a cell both tables sweep once', () => {
+  it('counts a cell both tables sweep once', async () => {
     // The shipped cell is in the grid and in the semantic axis, and it is one
     // cell: a frontier that listed it twice would read as two floors.
     const cell = cellOf({ recall: 0.9, precision: 0.9 });
@@ -267,7 +269,7 @@ describe('accuracyFrontier', () => {
     expect(accuracyFrontier([cell, cell])).toEqual([cell]);
   });
 
-  it('leaves out a cell that could not be measured on both sides', () => {
+  it('leaves out a cell that could not be measured on both sides', async () => {
     // There is no pair of numbers to compare, so the cell is not on the frontier
     // rather than on it as a zero.
     const unmeasured = cellOf({ recall: null, precision: 0.9 });
@@ -278,8 +280,8 @@ describe('accuracyFrontier', () => {
 });
 
 describe('formatSweepGrid', () => {
-  it('prints the columns the sweep has always printed', () => {
-    const text = formatSweepGrid([shipped()]);
+  it('prints the columns the sweep has always printed', async () => {
+    const text = formatSweepGrid([await shipped()]);
 
     expect(text).toBe(
       'gate\tfloors\trecall\tprecision\tclusters\tlargest\tsingletons\n' +
@@ -289,8 +291,8 @@ describe('formatSweepGrid', () => {
 });
 
 describe('formatSweepSemanticAxis', () => {
-  it('prints the columns the sweep has always printed', () => {
-    const text = formatSweepSemanticAxis([shipped()], { entity: 0.45, signature: 0.04 });
+  it('prints the columns the sweep has always printed', async () => {
+    const text = formatSweepSemanticAxis([await shipped()], { entity: 0.45, signature: 0.04 });
 
     expect(text).toBe(
       '\nsemantic floor, with the Entity floor at 0.45 and the signature floor at 0.04\n' +
@@ -301,7 +303,7 @@ describe('formatSweepSemanticAxis', () => {
 });
 
 describe('formatSweepFrontier', () => {
-  it('prints the cells on the frontier and no others', () => {
+  it('prints the cells on the frontier and no others', async () => {
     const onIt = cellOf({ recall: 0.9, precision: 0.5 });
     const offIt = cellOf({ recall: 0.1, precision: 0.1 });
 
@@ -313,7 +315,7 @@ describe('formatSweepFrontier', () => {
     expect(text).not.toContain('10.0%');
   });
 
-  it('says so when no cell could be compared', () => {
+  it('says so when no cell could be compared', async () => {
     const text = formatSweepFrontier([]);
 
     expect(text).toContain('no cell could be compared');
@@ -321,8 +323,8 @@ describe('formatSweepFrontier', () => {
 });
 
 describe('formatScoredOver', () => {
-  it('names the families the cells were weighed over', () => {
-    const text = formatScoredOver({ cell: shipped(), resolution });
+  it('names the families the cells were weighed over', async () => {
+    const text = formatScoredOver({ cell: await shipped(), resolution });
 
     expect(text).toContain('recall      over 2 same-event families');
     expect(text).toContain('precision   over 2 different-event families');
@@ -331,9 +333,9 @@ describe('formatScoredOver', () => {
     expect(text).toContain('different-event family weighed: different-event: beta and delta');
   });
 
-  it('names the families it could not weigh', () => {
+  it('names the families it could not weigh', async () => {
     const text = formatScoredOver({
-      cell: shipped(),
+      cell: await shipped(),
       resolution: {
         ...resolution,
         unresolved: ['the-guardian: a story the corpus does not hold'],
@@ -348,8 +350,8 @@ describe('formatScoredOver', () => {
     expect(text).toContain('family one labelled set claims twice, dropped as unusable: a family one set claims twice');
   });
 
-  it('names a family no Topic holds both Stories for', () => {
-    const cell = sweepCell({
+  it('names a family no Topic holds both Stories for', async () => {
+    const cell = await sweepCell({
       reads: [{ topicId: topicOne, storyIds: [storyA], grounding: [readings[0]!] }],
       resolution,
       readingOf,
@@ -363,11 +365,11 @@ describe('formatScoredOver', () => {
     expect(text).toContain('different-event pair no topic holds both stories for: different-event: beta and delta');
   });
 
-  it('names a reference two families wanted once', () => {
+  it('names a reference two families wanted once', async () => {
     // The corpus does not hold the reference, so it is one reference it does not
     // hold and not one per family that wanted it.
     const text = formatScoredOver({
-      cell: shipped(),
+      cell: await shipped(),
       resolution: {
         ...resolution,
         unresolved: ['the-guardian: a story the corpus does not hold', 'the-guardian: a story the corpus does not hold'],
@@ -380,8 +382,8 @@ describe('formatScoredOver', () => {
     ).toBe(1);
   });
 
-  it('says the corpus cannot be scored rather than scoring over an empty set', () => {
-    const cell = sweepCell({
+  it('says the corpus cannot be scored rather than scoring over an empty set', async () => {
+    const cell = await sweepCell({
       reads,
       resolution: { ...resolution, sameEvent: [], differentEvent: [] },
       readingOf,
@@ -395,9 +397,9 @@ describe('formatScoredOver', () => {
     expect(text).not.toMatch(/over 0 same-event families/);
   });
 
-  it('says the numbers are over the families the corpus holds when a family is missing', () => {
+  it('says the numbers are over the families the corpus holds when a family is missing', async () => {
     const text = formatScoredOver({
-      cell: shipped(),
+      cell: await shipped(),
       resolution: { ...resolution, unresolved: ['the-guardian: a story the corpus does not hold'] },
     });
 
@@ -405,12 +407,12 @@ describe('formatScoredOver', () => {
     expect(text).toContain('the measurement is over the families it holds');
   });
 
-  it('says nothing about the set when the labelling contradicts itself', () => {
+  it('says nothing about the set when the labelling contradicts itself', async () => {
     // A family both sets claim, or one set claims twice, is out of the
     // benchmark's measurement as much as it is out of the sweep's, so the two
     // numbers are over the same families and there is nothing to say about them.
     const text = formatScoredOver({
-      cell: shipped(),
+      cell: await shipped(),
       resolution: { ...resolution, contested: ['a family both sets claim'] },
     });
 

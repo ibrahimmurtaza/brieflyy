@@ -257,7 +257,7 @@ export class ClusterFormationService {
     if (stories.length === 0) return { clusters: [], refusal: null };
     const grounded = await groundingFor(topic, stories, this.deps.articleRepo);
 
-    const grouping = groupIntoClusters(stories, (_story, index) => grounded[index]!);
+    const grouping = await groupIntoClusters(stories, (_story, index) => grounded[index]!);
     if (grouping.clusters === null) return grouping;
     return {
       clusters: grouping.clusters.map((group) =>

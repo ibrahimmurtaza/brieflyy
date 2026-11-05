@@ -321,7 +321,7 @@ describe('HTTP: POST /onboarding/pick-topics', () => {
     // a cycle only gathers for the Sources some live Topic names — so this one would
     // sit permanently empty. Its settings page is where the registry and the control
     // that answers this already are.
-    expect(response.headers.location).toBe('/topics/fusion-energy/settings');
+    expect(response.headers.location).toBe('/topics/fusion-energy/settings?changed=needs-source');
   });
 
   it('goes straight on when every topic picked came from a template', async () => {
@@ -876,7 +876,7 @@ describe('HTTP: /pick-topics (managing topics after onboarding)', () => {
     expect(added.statusCode).toBe(302);
     // The same ask as the onboarding path, from the topic-management page: a Topic
     // the User named reads nothing until somebody says what it should read.
-    expect(added.headers.location).toBe('/topics/world-news/settings');
+    expect(added.headers.location).toBe('/topics/world-news/settings?changed=needs-source');
 
     const page = await app.inject({
       method: 'GET',

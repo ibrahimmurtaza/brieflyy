@@ -76,7 +76,7 @@ async function measureTopic(
   let walkthroughPairs = 0;
   let floorPairsTaken = 0;
   const started = Date.now();
-  const grouping = groupIntoClusters(stories, (_story, index) => grounding[index]!, {
+  const grouping = await groupIntoClusters(stories, (_story, index) => grounding[index]!, {
     onGate: (_pair, semanticPriced) => {
       walkthroughPairs += 1;
       if (semanticPriced) floorPairsTaken += 1;

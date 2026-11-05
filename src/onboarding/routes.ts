@@ -40,13 +40,18 @@ const selectInputSchema = z.object({
  *
  * Sending them to that Topic's settings is the ask: it is the page that lists the
  * registry and already has the control that answers it, so the question is asked
- * where the answer lives rather than on a page built for it. The flow still moves
- * on afterwards — settings has a link back to the Topic — because somebody who named
- * a Topic and changed their mind is not owed a step they did not ask for.
+ * where the answer lives rather than on a page built for it. The page they land
+ * on says why they were sent there (`?changed=needs-source` renders a notice
+ * above the registry), so the detour does not read as the app losing the thread.
+ * The flow still moves on afterwards — settings has a link back to the Topic — because
+ * somebody who named a Topic and changed their mind is not owed a step they did not
+ * ask for.
  */
 function nextAfterPicking(topics: readonly Topic[], otherwise: string): string {
   const freeform = topics.find((t) => t.origin.kind === 'freeform');
-  return freeform ? `/topics/${encodeURIComponent(freeform.slug)}/settings` : otherwise;
+  return freeform
+    ? `/topics/${encodeURIComponent(freeform.slug)}/settings?changed=needs-source`
+    : otherwise;
 }
 
 function readField(body: unknown, key: string): string | undefined {

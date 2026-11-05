@@ -112,16 +112,17 @@ async function main(): Promise<number> {
       return 1;
     }
 
-    const grouped: GroupedTopic[] = reads.map((read) => {
-      const grouping = groupTopic(read, undefined);
+    const grouped: GroupedTopic[] = [];
+    for (const read of reads) {
+      const grouping = await groupTopic(read, undefined);
       // The shipped thresholds carry no marker, so the report's own numbers and
       // the sweep's are read off one grouping rather than two copies.
-      return { topicId: read.topicId, clusters: clustersOf(grouping) };
-    });
+      grouped.push({ topicId: read.topicId, clusters: clustersOf(grouping) });
+    }
     for (const thresholds of SHIPPED_MERGE_THRESHOLDS) {
       if (thresholds === SHIPPED_MERGE_THRESHOLD) continue;
       for (const read of reads) {
-        const grouping = groupTopic(read, thresholds);
+        const grouping = await groupTopic(read, thresholds);
         grouped.push({
           topicId: read.topicId,
           thresholds,
@@ -214,10 +215,10 @@ function corpusNow(db: Db): Date {
  * embeddings came from more than one model has no grouping to report and the
  * caller is the one that has to say so.
  */
-function groupTopic(
+async function groupTopic(
   read: TopicRead,
   thresholds: MergeThresholds | undefined,
-): Grouping<StoryId> {
+): Promise<Grouping<StoryId>> {
   return groupIntoClusters(
     read.storyIds,
     (_storyId, index) => read.grounding[index]!,
