@@ -493,9 +493,10 @@ describe('HTTP: GET /onboarding/delivery-time', () => {
     );
     expect(response.body).toMatch(/<summary>Change delivery time<\/summary>/);
     expect(response.body).toMatch(/action="\/settings\/delivery"/);
-    expect(response.body).toMatch(/>Save time<\/button>/);
-    // The change control is a native disclosure, so it works without JavaScript.
-    expect(response.body).not.toMatch(/<script/);
+    expect(response.body).toMatch(/disabled>Save time<\/button>/);
+    // The Save button starts disabled; a small script re-enables it once any
+    // field differs from the saved time.
+    expect(response.body).toMatch(/<script/);
   });
 
   it('confirms a save on the settings screen and shows the new time', async () => {
