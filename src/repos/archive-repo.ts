@@ -280,21 +280,21 @@ export class DrizzleArchiveRepo implements ArchiveRepo {
     const [topicRows, sourceRows, entityRows] = await Promise.all([
       this.db
         .selectDistinct({ id: topics.id, slug: topics.slug, title: topics.title })
-        .from(archiveItems)
-        .innerJoin(topics, eq(topics.id, archiveItems.topicId))
+        .from(topics)
+        .innerJoin(archiveItems, eq(archiveItems.topicId, topics.id))
         .where(and(owned, window))
         .orderBy(topics.title),
       this.db
         .selectDistinct({ id: sources.id, name: sources.name })
-        .from(archiveItems)
-        .innerJoin(topics, eq(topics.id, archiveItems.topicId))
+        .from(topics)
+        .innerJoin(archiveItems, eq(archiveItems.topicId, topics.id))
         .innerJoin(sources, listHas(sql`${archiveItems.sourceIds}`, sql`${sources.id}`))
         .where(and(owned, window))
         .orderBy(sources.name),
       this.db
         .selectDistinct({ id: entities.id, name: entities.canonicalName })
-        .from(archiveItems)
-        .innerJoin(topics, eq(topics.id, archiveItems.topicId))
+        .from(topics)
+        .innerJoin(archiveItems, eq(archiveItems.topicId, topics.id))
         .innerJoin(entities, listHas(sql`${archiveItems.entityIds}`, sql`${entities.id}`))
         .where(and(owned, window))
         .orderBy(entities.canonicalName),
