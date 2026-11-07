@@ -1263,10 +1263,6 @@ export function deliveryTimePage(input: {
   // A validation failure is not a reason to keep the form folded away: the User
   // is sent back here to correct something, so the fields have to be on screen.
   const hasError = input.message !== null && input.message !== 'saved';
-  // When a time is already set, the Save button starts disabled. It is only
-  // re-enabled once the user changes hour, minute, or timezone away from the
-  // saved values. The client script below toggles it on input/change.
-  const disabled = input.isSet && !hasError ? ' disabled' : '';
   const errorHtml = hasError
     ? `    <div class="error-summary" role="alert" tabindex="-1">
       <p>${escapeHtml(input.message ?? '')}</p>
@@ -1304,15 +1300,15 @@ export function deliveryTimePage(input: {
         </label>
       </div>
       <p class="hint">The timezone decides when the brief lands, so pick the one you keep your hours in.</p>
-      <button type="submit" id="delivery-submit"${disabled}>${escapeHtml(
+      <button type="submit" id="delivery-submit">${escapeHtml(
         submitLabel,
       )}</button>
     </form>`;
 
   // Nothing saved yet, so there is nothing to change: show the form outright.
   // Once a time exists, state it and let the user open the form deliberately.
-  // <details> keeps the disclosure working without JavaScript; a small script
-  // below toggles the Save button once the user changes any field.
+  // <details> keeps that working without JavaScript, which is also why this page
+  // must never grow one: the test suite asserts it has no <script> at all.
   const body = input.isSet && !hasError
     ? `    <details class="change" id="change-delivery">
       <summary>Change delivery time</summary>
@@ -1326,29 +1322,6 @@ ${formHtml}
     account: input.account,
     activeHref: '/settings/delivery',
     requestToken: input.requestToken ?? null,
-    afterMain: input.isSet && !hasError
-      ? `  <script>
-    (function () {
-      var form = document.getElementById('delivery-form');
-      if (!form) return;
-      var hour = form.elements.hour;
-      var minute = form.elements.minute;
-      var timezone = form.elements.timezone;
-      var button = form.querySelector('button[type=submit]');
-      var initialHour = hour.value;
-      var initialMinute = minute.value;
-      var initialTimezone = timezone.value;
-      function update() {
-        button.disabled = hour.value === initialHour
-          && minute.value === initialMinute
-          && timezone.value === initialTimezone;
-      }
-      hour.addEventListener('input', update);
-      minute.addEventListener('input', update);
-      timezone.addEventListener('change', update);
-    })();
-  </script>`
-      : '',
     body: `    <h1>${isOnboarding ? 'Pick your delivery time' : 'Delivery time'}</h1>
     <p class="lede">${
       isOnboarding
