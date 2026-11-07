@@ -7,6 +7,9 @@ import type { Tier, UserId } from '../domain/types.js';
 /** How many results one page of the Archive asks for. */
 export const ARCHIVE_RESULT_LIMIT = 25;
 
+/** How long the filter options stay cached, in milliseconds. */
+export const FILTER_CACHE_TTL_MS = 30_000;
+
 /**
  * How far into the Archive the paging links will go.
  *
@@ -55,6 +58,11 @@ export interface ArchiveViewer {
  * hour depending on which server answered them.
  */
 export class ArchiveSearchService {
+  private readonly filterCache: Map<
+    string,
+    { readonly value: ArchiveFilters; readonly expiresAt: number }
+  > = new Map();
+
   constructor(
     private readonly deps: {
       readonly archiveRepo: ArchiveRepo;
@@ -131,9 +139,19 @@ export class ArchiveSearchService {
    * to a page with nothing in it.
    */
   async filtersFor(viewer: ArchiveViewer): Promise<ArchiveFilters> {
-    return this.deps.archiveRepo.listFilters({
+    const now = this.deps.clock.now().getTime();
+    const cached = this.filterCache.get(viewer.userId);
+    if (cached !== undefined && now < cached.expiresAt) {
+      return cached.value;
+    }
+    const value = await this.deps.archiveRepo.listFilters({
       userId: viewer.userId,
       retainedSince: this.windowFor(viewer),
     });
+    this.filterCache.set(viewer.userId, {
+      value,
+      expiresAt: now + FILTER_CACHE_TTL_MS,
+    });
+    return value;
   }
 }

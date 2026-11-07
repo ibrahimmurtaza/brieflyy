@@ -277,28 +277,28 @@ export class DrizzleArchiveRepo implements ArchiveRepo {
     const owned = eq(topics.userId, input.userId);
     const window = withinWindow(input.retainedSince);
 
-    const topicRows = (await this.db
-      .selectDistinct({ id: topics.id, slug: topics.slug, title: topics.title })
-      .from(archiveItems)
-      .innerJoin(topics, eq(topics.id, archiveItems.topicId))
-      .where(and(owned, window))
-      .orderBy(topics.title)) as readonly Pick<TopicRow, 'id' | 'slug' | 'title'>[];
-
-    const sourceRows = (await this.db
-      .selectDistinct({ id: sources.id, name: sources.name })
-      .from(archiveItems)
-      .innerJoin(topics, eq(topics.id, archiveItems.topicId))
-      .innerJoin(sources, listHas(sql`${archiveItems.sourceIds}`, sql`${sources.id}`))
-      .where(and(owned, window))
-      .orderBy(sources.name)) as readonly Pick<SourceRow, 'id' | 'name'>[];
-
-    const entityRows = (await this.db
-      .selectDistinct({ id: entities.id, name: entities.canonicalName })
-      .from(archiveItems)
-      .innerJoin(topics, eq(topics.id, archiveItems.topicId))
-      .innerJoin(entities, listHas(sql`${archiveItems.entityIds}`, sql`${entities.id}`))
-      .where(and(owned, window))
-      .orderBy(entities.canonicalName)) as readonly ArchiveChoice[];
+    const [topicRows, sourceRows, entityRows] = await Promise.all([
+      this.db
+        .selectDistinct({ id: topics.id, slug: topics.slug, title: topics.title })
+        .from(topics)
+        .innerJoin(archiveItems, eq(archiveItems.topicId, topics.id))
+        .where(and(owned, window))
+        .orderBy(topics.title),
+      this.db
+        .selectDistinct({ id: sources.id, name: sources.name })
+        .from(topics)
+        .innerJoin(archiveItems, eq(archiveItems.topicId, topics.id))
+        .innerJoin(sources, listHas(sql`${archiveItems.sourceIds}`, sql`${sources.id}`))
+        .where(and(owned, window))
+        .orderBy(sources.name),
+      this.db
+        .selectDistinct({ id: entities.id, name: entities.canonicalName })
+        .from(topics)
+        .innerJoin(archiveItems, eq(archiveItems.topicId, topics.id))
+        .innerJoin(entities, listHas(sql`${archiveItems.entityIds}`, sql`${entities.id}`))
+        .where(and(owned, window))
+        .orderBy(entities.canonicalName),
+    ]);
 
     return {
       topics: topicRows.map((t) => ({ id: t.id as TopicId, slug: t.slug, title: t.title })),

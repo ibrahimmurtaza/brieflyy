@@ -437,14 +437,15 @@ export async function registerPageRoutes(
       // rest of the paging rather than here, so a bound written for the page cannot
       // be left out of the route that reads the number off the URL.
       const offset = archiveOffset(Number(req.query.offset ?? 0));
-      const [results, filters, settings] = await Promise.all([
+      const [results, filters, settings, account] = await Promise.all([
         opts.archiveSearchService.search({ viewer, filter, offset }),
         opts.archiveSearchService.filtersFor(viewer),
         opts.onboardingService.getDeliveryTime(req.auth.user.id),
+        shellFor(req),
       ]);
       return reply.type('text/html').send(
         archiveSearchPage({
-          account: await shellFor(req),
+          account,
           viewer,
           filter,
           filters,
