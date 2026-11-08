@@ -101,6 +101,12 @@ export interface CreateAppOptions {
    * stays server-side.
    */
   readonly googleOAuthClientId?: string | undefined;
+  /**
+   * The URL of the Google Identity Services SDK the sign-in page loads.
+   * Defaults to Google's hosted SDK; tests point it at a local stand-in so the
+   * browser suite never reaches Google's network.
+   */
+  readonly googleSdkUrl?: string | undefined;
   readonly logger?: boolean | undefined;
   readonly feedFetcher?: FeedFetcher | undefined;
   /**
@@ -581,6 +587,7 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     archiveSearchService,
     googleSignInAvailable,
     googleOAuthClientId: opts.googleOAuthClientId,
+    googleSdkUrl: opts.googleSdkUrl,
     billingService,
   });
 

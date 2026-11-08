@@ -151,6 +151,12 @@ export interface PageRoutesOptions {
    */
   readonly googleOAuthClientId: string | undefined;
   /**
+   * The URL of the Google Identity Services SDK the sign-in page loads.
+   * Defaults to Google's hosted SDK; tests point it at a local stand-in so the
+   * browser suite never reaches Google's network.
+   */
+  readonly googleSdkUrl: string | undefined;
+  /**
    * Whether this instance can take a payment, and where the hosted checkout comes
    * from — asked here rather than read out of configuration, so the button the
    * upgrade page offers and the route behind it cannot disagree. The same shape
@@ -192,7 +198,7 @@ export async function registerPageRoutes(
   });
 
   fastify.get('/signup', PUBLIC_ROUTE_CONFIG, async (_req, reply) => {
-    return reply.type('text/html').send(signupPage({ googleSignInAvailable: opts.googleSignInAvailable, googleOAuthClientId: opts.googleOAuthClientId }));
+    return reply.type('text/html').send(signupPage({ googleSignInAvailable: opts.googleSignInAvailable, googleOAuthClientId: opts.googleOAuthClientId, googleSdkUrl: opts.googleSdkUrl }));
   });
 
   fastify.get('/onboarding/pick-topics', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
@@ -952,6 +958,7 @@ export async function registerPageRoutes(
 function signupPage(input: {
   readonly googleSignInAvailable: boolean;
   readonly googleOAuthClientId: string | undefined;
+  readonly googleSdkUrl: string | undefined;
 }): string {
   // Google is a second way in, so it is offered only where one exists. Rendered
   // unconditionally it was a button to a route that answers 503 on a deployment
@@ -961,8 +968,9 @@ function signupPage(input: {
     ? `    <div class="divider"><span>or</span></div>
     <div id="google-signin"></div>`
     : '';
+  const sdkUrl = input.googleSdkUrl ?? 'https://accounts.google.com/gsi/client';
   const gisScript = input.googleOAuthClientId
-    ? `  <script src="https://accounts.google.com/gsi/client" async defer></script>
+    ? `  <script src="${sdkUrl}" async defer></script>
   <script>
     (function () {
       var clientId = ${JSON.stringify(input.googleOAuthClientId)};

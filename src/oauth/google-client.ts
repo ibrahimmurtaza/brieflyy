@@ -107,10 +107,18 @@ export class GoogleOAuthClient implements OAuthClient {
     } catch {
       return { status: 'invalid', reason: 'invalid_id_token' };
     }
+    const header = signedIdTokenHeader(tokenJson.id_token);
+    if (header === null || !header.kid) {
+      return { status: 'invalid', reason: 'invalid_id_token' };
+    }
+    const resolved = await this.resolveSigningKeys(header.kid);
+    if (resolved === null) {
+      return { status: 'invalid', reason: 'invalid_id_token' };
+    }
     const profile = verifyGoogleIdToken(tokenJson.id_token, {
       clientId: this.clientId,
       clock: this.clock,
-      jwks: jwks.keys,
+      jwks: resolved.keys,
     });
     if (!profile) {
       return { status: 'invalid', reason: 'invalid_id_token' };
@@ -120,39 +128,44 @@ export class GoogleOAuthClient implements OAuthClient {
 
   async verifyIdToken(input: { readonly idToken: string }): Promise<GoogleOAuthProfile | null> {
     // Reject tokens with a clearly wrong shape before touching the network.
-    const parts = input.idToken.split('.');
-    if (parts.length !== 3) return null;
-    let header: { alg?: string; kid?: string };
-    try {
-      header = JSON.parse(decodeBase64Url(parts[0]!)) as { alg?: string; kid?: string };
-    } catch {
-      return null;
-    }
-    if (header.alg !== 'RS256' || !header.kid) return null;
+    const header = signedIdTokenHeader(input.idToken);
+    if (header === null || header.alg !== 'RS256' || !header.kid) return null;
 
+    const resolved = await this.resolveSigningKeys(header.kid);
+    if (resolved === null) return null;
+    if (resolved.jwk.kty !== 'RSA' || resolved.jwk.alg !== 'RS256') return null;
+    return verifyGoogleIdToken(input.idToken, {
+      clientId: this.clientId,
+      clock: this.clock,
+      jwks: resolved.keys,
+    });
+  }
+
+  /**
+   * Return the signing key that matches `kid`, refreshing the certificates
+   * once on a miss: a valid token signed with a newly rotated Google key must
+   * not be rejected until the cache would have refreshed on its own. Returns
+   * the matching key and the certificate set to verify against, or null when
+   * neither the cache nor one refresh carries the key.
+   */
+  private async resolveSigningKeys(
+    kid: string,
+  ): Promise<{ jwk: Jwk; keys: Jwk[] } | null> {
     const jwks = await this.jwks();
-    let jwk = jwks.keys.find((k) => k.kid === header.kid);
+    let jwk = jwks.keys.find((k) => k.kid === kid);
     let verifiedKeys = jwks.keys;
 
-    // Google rotates signing keys. If the cached certificates do not carry the
-    // kid that signed this token, refresh the certificates once: a valid token
-    // signed with a new key must not be rejected until the cache would have
-    // refreshed on its own. One refresh per call keeps junk tokens from forcing
-    // repeated downloads, and concurrent calls share the same refresh.
+    // Google rotates signing keys. One refresh per call keeps junk tokens from
+    // forcing repeated downloads, and concurrent calls share the same refresh.
     if (!jwk) {
       const refreshed = await this.refreshJwksOnce();
       if (refreshed === null) return null;
-      jwk = refreshed.keys.find((k) => k.kid === header.kid);
+      jwk = refreshed.keys.find((k) => k.kid === kid);
       if (!jwk) return null;
       verifiedKeys = refreshed.keys;
     }
 
-    if (jwk.kty !== 'RSA' || jwk.alg !== 'RS256') return null;
-    return verifyGoogleIdToken(input.idToken, {
-      clientId: this.clientId,
-      clock: this.clock,
-      jwks: verifiedKeys,
-    });
+    return { jwk, keys: verifiedKeys };
   }
 
   /**
@@ -298,6 +311,21 @@ function decodeBase64Url(input: string): string {
     '='.repeat((4 - (input.length % 4)) % 4);
   if (typeof atob === 'function') return atob(padded);
   return Buffer.from(padded, 'base64').toString('binary');
+}
+
+/**
+ * Decode and parse an ID token's JOSE header, or null when it is not a
+ * well-formed three-part JWT with a readable header. Malformed tokens never
+ * reach the network.
+ */
+function signedIdTokenHeader(idToken: string): { alg?: string; kid?: string } | null {
+  const parts = idToken.split('.');
+  if (parts.length !== 3) return null;
+  try {
+    return JSON.parse(decodeBase64Url(parts[0]!)) as { alg?: string; kid?: string };
+  } catch {
+    return null;
+  }
 }
 
 export const __test_only__ = { verifyGoogleIdToken, encodeBase64Url };

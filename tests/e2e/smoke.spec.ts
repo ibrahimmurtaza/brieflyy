@@ -11,11 +11,9 @@ test('the browser suite is actually running a browser', async ({ page }) => {
   await page.goto('/signup');
   await expect(page).toHaveTitle('Sign in · Brieflyy');
   await expect(page.getByRole('heading', { level: 1, name: 'Sign in to Brieflyy' })).toBeVisible();
-  // The Google Identity Services SDK is wired up on the sign-in page, which is
-  // what renders the branded Sign in with Google button. The SDK itself is not
-  // loaded here (no network to Google in the suite), so assert the page carries
-  // the script and the button container it renders into rather than the button
-  // itself.
-  await expect(page.locator('script[src*="accounts.google.com/gsi/client"]')).toHaveCount(1);
-  await expect(page.locator('#google-signin')).toHaveCount(1);
+  // The sign-in page loads a local stand-in for the Google Identity Services SDK
+  // (nothing reaches Google's network in the suite), which renders the branded
+  // button into the page's `google-signin` container.
+  await expect(page.locator('script[src*="/e2e/google-sdk.js"]')).toHaveCount(1);
+  await expect(page.getByRole('button', { name: 'Sign in with Google' })).toBeVisible();
 });
