@@ -17,7 +17,7 @@ import {
 } from '../domain/crypto.js';
 import type { EmailTransport } from '../email/transport.js';
 import { DEFAULT_TIER } from '../domain/tier.js';
-import type { OAuthClient } from '../oauth/client.js';
+import type { GoogleOAuthProfile, OAuthClient } from '../oauth/client.js';
 import type {
   Account,
   MagicLink,
@@ -135,7 +135,8 @@ export type CompleteGoogleOutcome =
         | 'verifier_mismatch'
         | 'unverified_email'
         | 'unusable_email'
-        | 'provider_exchange_failed';
+        | 'provider_exchange_failed'
+        | 'invalid_id_token';
     };
 
 /**
@@ -468,10 +469,25 @@ export class AuthService {
     const email = parsedEmail.data;
 
     await this.oauthStateRepo.markConsumed(stateRow.id, now);
+    return this.completeGoogleSignIn(exchange.profile, email);
+  }
 
+  /**
+   * One account + session for a verified Google profile, however it was proved:
+   * the PKCE code exchange or a Google Identity Services ID token. Shared so the
+   * two ways in cannot disagree about who an address belongs to.
+   */
+  async completeGoogleSignIn(
+    profile: GoogleOAuthProfile,
+    email: string,
+  ): Promise<CompleteGoogleOutcome> {
+    if (!this.oauthAccountRepo) {
+      throw new Error('Google OAuth is not configured on this AuthService');
+    }
+    const now = this.clock.now();
     const existingLink = await this.oauthAccountRepo.getByProviderSubject(
-      exchange.profile.provider,
-      exchange.profile.subject,
+      profile.provider,
+      profile.subject,
     );
     let account: Account;
     let user: User;
@@ -504,8 +520,8 @@ export class AuthService {
       await this.oauthAccountRepo.insert({
         id: this.random.uuid(),
         accountId: account.id,
-        provider: exchange.profile.provider,
-        providerSubject: exchange.profile.subject,
+        provider: profile.provider,
+        providerSubject: profile.subject,
         createdAt: now,
       });
     }
@@ -525,6 +541,32 @@ export class AuthService {
     await this.sessionRepo.insert(session);
 
     return { status: 'ok', session, user, account };
+  }
+
+  async verifyGoogleIdToken(credential: string): Promise<GoogleOAuthProfile | null> {
+    if (!this.oauthClient) return null;
+    return this.oauthClient.verifyIdToken({ idToken: credential });
+  }
+
+  /**
+   * Sign in with a Google Identity Services ID token: verify the credential,
+   * then complete the same account + session the PKCE flow produces.
+   */
+  async completeGoogleSignInWithCredential(
+    credential: string,
+  ): Promise<CompleteGoogleOutcome> {
+    const profile = await this.verifyGoogleIdToken(credential);
+    if (!profile) {
+      return { status: 'invalid', reason: 'invalid_id_token' };
+    }
+    if (!profile.emailVerified) {
+      return { status: 'invalid', reason: 'unverified_email' };
+    }
+    const parsedEmail = emailSchema.safeParse(profile.email);
+    if (!parsedEmail.success) {
+      return { status: 'invalid', reason: 'unusable_email' };
+    }
+    return this.completeGoogleSignIn(profile, parsedEmail.data);
   }
 }
 

@@ -111,6 +111,17 @@ export class GoogleOAuthClient implements OAuthClient {
     }
     return { status: 'ok', profile };
   }
+
+  async verifyIdToken(input: { readonly idToken: string }): Promise<GoogleOAuthProfile | null> {
+    const jwksResponse = await this.fetchImpl(GOOGLE_JWKS_URI, { method: 'GET' });
+    if (!jwksResponse.ok) return null;
+    const jwks = (await jwksResponse.json()) as Jwks;
+    return verifyGoogleIdToken(input.idToken, {
+      clientId: this.clientId,
+      clock: this.clock,
+      jwks: jwks.keys,
+    });
+  }
 }
 
 function encodeBase64Url(bytes: Uint8Array): string {

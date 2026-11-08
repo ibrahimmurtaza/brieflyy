@@ -272,6 +272,46 @@ export async function registerAuthRoutes(
         .send();
     },
   );
+
+  /**
+   * Google Identity Services hands the frontend a signed ID token; this route
+   * verifies it against Google's public certs and completes the same account +
+   * session the PKCE callback produces, so the two ways in agree on who is
+   * signing in.
+   */
+  fastify.post<{ Body: { credential?: unknown } }>(
+    '/auth/google/identity',
+    PUBLIC_ROUTE_CONFIG,
+    async (req, reply) => {
+      if (!authService.googleSignInAvailable()) {
+        return refuseGoogle(reply);
+      }
+      const credential =
+        typeof req.body.credential === 'string' ? req.body.credential : '';
+      if (!credential) {
+        return reply
+          .code(400)
+          .type('text/html')
+          .send(oauthFailurePage('Google sign-in was incomplete. Please try again.'));
+      }
+      const outcome = await authService.completeGoogleSignInWithCredential(credential);
+      if (outcome.status === 'invalid') {
+        return reply
+          .code(400)
+          .type('text/html')
+          .send(oauthFailurePage(humanOauthReason(outcome.reason)));
+      }
+      writeSessionCookie(reply, outcome.session.id, {
+        cookieSecure: opts.cookieSecure,
+        sessionTtlMs: opts.sessionTtlMs,
+      });
+      return reply
+        .code(200)
+        .type('application/json')
+        .send({ redirectTo: postSigninPath(outcome.user.onboardingState) });
+    },
+  );
+
 }
 
 function refuseGoogle(reply: FastifyReply): FastifyReply {
@@ -308,6 +348,8 @@ function humanOauthReason(reason: CompleteGoogleFailure): string {
       return 'Google sent an address Brieflyy cannot use. Sign in with a magic link instead.';
     case 'provider_exchange_failed':
       return 'Google could not complete the sign-in. Please try again.';
+    case 'invalid_id_token':
+      return 'Google could not verify your account. Please try again.';
   }
 }
 

@@ -84,6 +84,7 @@ async function main(): Promise<void> {
     trustProxy: config.trustProxy,
     logger: true,
     oauthClient,
+    googleOAuthClientId: config.googleOAuthClientId,
     feedFetcher,
     devToolsEnabled: config.devToolsEnabled,
     ...(llmSummaryClient ? { llmSummaryClient } : {}),

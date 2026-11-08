@@ -31,6 +31,7 @@ export const PUBLIC_ROUTES: ReadonlySet<string> = new Set([
   'POST /auth/logout',
   'GET /auth/google/start',
   'GET /auth/google/callback',
+  'POST /auth/google/identity',
   'GET /api/onboarding/templates',
   // The links a brief carries. Public because the token in the URL is the whole
   // authorisation: a reader following a link in their inbox is by definition not
@@ -133,6 +134,10 @@ export const WRITE_GUARD_EXEMPTIONS: ReadonlyMap<string, string> = new Map([
   [
     'POST /auth/magic-link/request',
     'the sign-in page\'s own script: no signed-in User, so no page carries the field it would echo, and it spends no session',
+  ],
+  [
+    'POST /auth/google/identity',
+    'the Google Identity Services SDK calls it from the sign-in page: no signed-in User, so no page carries the field it would echo, and the signed ID token from Google is the authorisation',
   ],
   [
     `POST ${UNSUBSCRIBE_TOPIC_PATH}`,
