@@ -47,6 +47,8 @@ export class GoogleOAuthClient implements OAuthClient {
   private readonly clock: { now(): Date };
   /** Google's public certs, cached so junk tokens do not keep fetching them. */
   private jwksCache: { keys: Jwk[]; fetchedAt: number } | null = null;
+  /** A certificate fetch already in flight, shared by concurrent callers. */
+  private jwksFetchPromise: Promise<Jwks> | null = null;
   private static readonly JWKS_CACHE_TTL_MS = 10 * 60 * 1000;
 
   constructor(opts: GoogleOAuthClientOptions) {
@@ -99,11 +101,12 @@ export class GoogleOAuthClient implements OAuthClient {
     if (!tokenJson.id_token) {
       return { status: 'invalid', reason: 'exchange_failed' };
     }
-    const jwksResponse = await this.fetchImpl(GOOGLE_JWKS_URI, { method: 'GET' });
-    if (!jwksResponse.ok) {
+    let jwks: Jwks;
+    try {
+      jwks = await this.jwks();
+    } catch {
       return { status: 'invalid', reason: 'invalid_id_token' };
     }
-    const jwks = (await jwksResponse.json()) as Jwks;
     const profile = verifyGoogleIdToken(tokenJson.id_token, {
       clientId: this.clientId,
       clock: this.clock,
@@ -128,16 +131,34 @@ export class GoogleOAuthClient implements OAuthClient {
     if (header.alg !== 'RS256' || !header.kid) return null;
 
     const jwks = await this.jwks();
-    const jwk = jwks.keys.find((k) => k.kid === header.kid);
-    if (!jwk) return null;
+    let jwk = jwks.keys.find((k) => k.kid === header.kid);
+    let verifiedKeys = jwks.keys;
+
+    // Google rotates signing keys. If the cached certificates do not carry the
+    // kid that signed this token, refresh the certificates once: a valid token
+    // signed with a new key must not be rejected until the cache would have
+    // refreshed on its own. One refresh per call keeps junk tokens from forcing
+    // repeated downloads, and concurrent calls share the same refresh.
+    if (!jwk) {
+      const refreshed = await this.refreshJwksOnce();
+      if (refreshed === null) return null;
+      jwk = refreshed.keys.find((k) => k.kid === header.kid);
+      if (!jwk) return null;
+      verifiedKeys = refreshed.keys;
+    }
+
     if (jwk.kty !== 'RSA' || jwk.alg !== 'RS256') return null;
     return verifyGoogleIdToken(input.idToken, {
       clientId: this.clientId,
       clock: this.clock,
-      jwks: jwks.keys,
+      jwks: verifiedKeys,
     });
   }
 
+  /**
+   * Return the cached certificates when they are still fresh; otherwise fetch
+   * them once, sharing the download with any concurrent caller.
+   */
   private async jwks(): Promise<Jwks> {
     const now = this.clock.now().getTime();
     if (
@@ -146,14 +167,47 @@ export class GoogleOAuthClient implements OAuthClient {
     ) {
       return this.jwksCache;
     }
+    return this.forceFetchJwks();
+  }
+
+  /**
+   * Force a fresh certificate download, deduplicated across concurrent callers.
+   * Falls back to the cached certificates when the network fails.
+   */
+  private async forceFetchJwks(): Promise<Jwks> {
+    if (this.jwksFetchPromise !== null) {
+      return this.jwksFetchPromise;
+    }
+    const promise = this.doFetchJwks().finally(() => {
+      this.jwksFetchPromise = null;
+    });
+    this.jwksFetchPromise = promise;
+    return promise;
+  }
+
+  private async doFetchJwks(): Promise<Jwks> {
     const response = await this.fetchImpl(GOOGLE_JWKS_URI, { method: 'GET' });
     if (!response.ok) {
       if (this.jwksCache !== null) return this.jwksCache;
       throw new Error('could not fetch Google public certificates');
     }
     const jwks = (await response.json()) as Jwks;
-    this.jwksCache = { keys: jwks.keys, fetchedAt: now };
+    this.jwksCache = { keys: jwks.keys, fetchedAt: this.clock.now().getTime() };
     return jwks;
+  }
+
+  /**
+   * Refresh the certificates exactly once, so a token signed with a newly
+   * rotated Google key is not rejected until the cache would have refreshed on
+   * its own. Returns the refreshed (or cached) certificates, or null when
+   * neither is available.
+   */
+  private async refreshJwksOnce(): Promise<Jwks | null> {
+    try {
+      return await this.forceFetchJwks();
+    } catch {
+      return this.jwksCache ?? null;
+    }
   }
 }
 

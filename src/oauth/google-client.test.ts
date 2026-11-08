@@ -411,3 +411,108 @@ describe('GoogleOAuthClient.exchangeCode', () => {
     expect(outcome).toEqual({ status: 'invalid', reason: 'invalid_id_token' });
   });
 });
+
+describe('GoogleOAuthClient.verifyIdToken', () => {
+  const baseClaims = {
+    iss: 'https://accounts.google.com',
+    aud: 'cid',
+    sub: 'google-uid-42',
+    email: 'iris@example.com',
+    email_verified: true,
+    exp: Math.floor(FIXED_NOW.getTime() / 1000) + 3600,
+  };
+
+  let fetchCalls: FetchCall[];
+  let certs: { keys: unknown[] };
+
+  beforeEach(() => {
+    fetchCalls = [];
+    certs = { keys: [] };
+  });
+
+  function makeClientWithFetch(fetchImpl: typeof fetch): GoogleOAuthClient {
+    return new GoogleOAuthClient({
+      clientId: 'cid',
+      clientSecret: 'csecret',
+      fetchImpl,
+      clock: { now: () => FIXED_NOW },
+    });
+  }
+
+  function certsFetch(): typeof fetch {
+    return makeFetch(async (call) => {
+      fetchCalls.push(call);
+      if (call.url === 'https://www.googleapis.com/oauth2/v3/certs') {
+        return new Response(JSON.stringify(certs), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response('{}', { status: 404 });
+    });
+  }
+
+  it('verifies a token signed by a cached key without refetching', async () => {
+    const key = makeTestKey('cached-kid');
+    certs.keys = [key.jwk];
+    const client = makeClientWithFetch(certsFetch());
+    const token = signIdToken(key, baseClaims);
+    const profile = await client.verifyIdToken({ idToken: token });
+    expect(profile?.subject).toBe('google-uid-42');
+    expect(fetchCalls.map((c) => c.url)).toEqual([
+      'https://www.googleapis.com/oauth2/v3/certs',
+    ]);
+  });
+
+  it('refreshes certificates once on a kid miss and verifies the new key', async () => {
+    const oldKey = makeTestKey('old-kid');
+    const newKey = makeTestKey('new-kid');
+    certs.keys = [oldKey.jwk];
+    const client = makeClientWithFetch(certsFetch());
+
+    // A token signed by the cached key verifies without a refresh.
+    const oldToken = signIdToken(oldKey, baseClaims);
+    expect((await client.verifyIdToken({ idToken: oldToken }))?.subject).toBe(
+      'google-uid-42',
+    );
+    expect(fetchCalls.map((c) => c.url)).toEqual([
+      'https://www.googleapis.com/oauth2/v3/certs',
+    ]);
+
+    // Rotate the published certificates to include a new key.
+    certs.keys = [oldKey.jwk, newKey.jwk];
+
+    // A token signed by the new key triggers one refresh and then verifies.
+    const newToken = signIdToken(newKey, { ...baseClaims, sub: 'google-uid-99' });
+    const profile = await client.verifyIdToken({ idToken: newToken });
+    expect(profile?.subject).toBe('google-uid-99');
+    // Two fetches total: the first cached fetch, one refresh on the kid miss.
+    expect(fetchCalls.map((c) => c.url)).toEqual([
+      'https://www.googleapis.com/oauth2/v3/certs',
+      'https://www.googleapis.com/oauth2/v3/certs',
+    ]);
+  });
+
+  it('rejects a token signed by a key that is not published even after a refresh', async () => {
+    const oldKey = makeTestKey('old-kid');
+    const unknownKey = makeTestKey('unknown-kid');
+    certs.keys = [oldKey.jwk];
+    const client = makeClientWithFetch(certsFetch());
+
+    const token = signIdToken(unknownKey, baseClaims);
+    const profile = await client.verifyIdToken({ idToken: token });
+    expect(profile).toBeNull();
+    // One refresh attempt on the kid miss, then no more.
+    expect(fetchCalls.map((c) => c.url)).toEqual([
+      'https://www.googleapis.com/oauth2/v3/certs',
+      'https://www.googleapis.com/oauth2/v3/certs',
+    ]);
+  });
+
+  it('does not fetch certificates for a malformed token', async () => {
+    const client = makeClientWithFetch(certsFetch());
+    expect(await client.verifyIdToken({ idToken: 'not.a.jwt' })).toBeNull();
+    expect(await client.verifyIdToken({ idToken: 'a.b' })).toBeNull();
+    expect(fetchCalls).toEqual([]);
+  });
+});
