@@ -11,8 +11,9 @@ test('the browser suite is actually running a browser', async ({ page }) => {
   await page.goto('/signup');
   await expect(page).toHaveTitle('Sign in · Brieflyy');
   await expect(page.getByRole('heading', { level: 1, name: 'Sign in to Brieflyy' })).toBeVisible();
-  // The Google button is one of the controls that went white-on-white whenever
-  // the browser was in dark mode, because the page declared `color-scheme:
-  // light dark` and shipped no dark rules.
-  await expect(page.getByRole('link', { name: 'Sign in with Google' })).toBeVisible();
+  // The sign-in page loads a local stand-in for the Google Identity Services SDK
+  // (nothing reaches Google's network in the suite), which renders the branded
+  // button into the page's `google-signin` container.
+  await expect(page.locator('script[src*="/e2e/google-sdk.js"]')).toHaveCount(1);
+  await expect(page.getByRole('button', { name: 'Sign in with Google' })).toBeVisible();
 });

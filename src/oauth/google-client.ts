@@ -45,6 +45,11 @@ export class GoogleOAuthClient implements OAuthClient {
   private readonly clientSecret: string;
   private readonly fetchImpl: typeof fetch;
   private readonly clock: { now(): Date };
+  /** Google's public certs, cached so junk tokens do not keep fetching them. */
+  private jwksCache: { keys: Jwk[]; fetchedAt: number } | null = null;
+  /** A certificate fetch already in flight, shared by concurrent callers. */
+  private jwksFetchPromise: Promise<Jwks> | null = null;
+  private static readonly JWKS_CACHE_TTL_MS = 10 * 60 * 1000;
 
   constructor(opts: GoogleOAuthClientOptions) {
     this.clientId = opts.clientId;
@@ -96,20 +101,126 @@ export class GoogleOAuthClient implements OAuthClient {
     if (!tokenJson.id_token) {
       return { status: 'invalid', reason: 'exchange_failed' };
     }
-    const jwksResponse = await this.fetchImpl(GOOGLE_JWKS_URI, { method: 'GET' });
-    if (!jwksResponse.ok) {
+    let jwks: Jwks;
+    try {
+      jwks = await this.jwks();
+    } catch {
       return { status: 'invalid', reason: 'invalid_id_token' };
     }
-    const jwks = (await jwksResponse.json()) as Jwks;
+    const header = signedIdTokenHeader(tokenJson.id_token);
+    if (header === null || !header.kid) {
+      return { status: 'invalid', reason: 'invalid_id_token' };
+    }
+    const resolved = await this.resolveSigningKeys(header.kid);
+    if (resolved === null) {
+      return { status: 'invalid', reason: 'invalid_id_token' };
+    }
     const profile = verifyGoogleIdToken(tokenJson.id_token, {
       clientId: this.clientId,
       clock: this.clock,
-      jwks: jwks.keys,
+      jwks: resolved.keys,
     });
     if (!profile) {
       return { status: 'invalid', reason: 'invalid_id_token' };
     }
     return { status: 'ok', profile };
+  }
+
+  async verifyIdToken(input: { readonly idToken: string }): Promise<GoogleOAuthProfile | null> {
+    // Reject tokens with a clearly wrong shape before touching the network.
+    const header = signedIdTokenHeader(input.idToken);
+    if (header === null || header.alg !== 'RS256' || !header.kid) return null;
+
+    const resolved = await this.resolveSigningKeys(header.kid);
+    if (resolved === null) return null;
+    if (resolved.jwk.kty !== 'RSA' || resolved.jwk.alg !== 'RS256') return null;
+    return verifyGoogleIdToken(input.idToken, {
+      clientId: this.clientId,
+      clock: this.clock,
+      jwks: resolved.keys,
+    });
+  }
+
+  /**
+   * Return the signing key that matches `kid`, refreshing the certificates
+   * once on a miss: a valid token signed with a newly rotated Google key must
+   * not be rejected until the cache would have refreshed on its own. Returns
+   * the matching key and the certificate set to verify against, or null when
+   * neither the cache nor one refresh carries the key.
+   */
+  private async resolveSigningKeys(
+    kid: string,
+  ): Promise<{ jwk: Jwk; keys: Jwk[] } | null> {
+    const jwks = await this.jwks();
+    let jwk = jwks.keys.find((k) => k.kid === kid);
+    let verifiedKeys = jwks.keys;
+
+    // Google rotates signing keys. One refresh per call keeps junk tokens from
+    // forcing repeated downloads, and concurrent calls share the same refresh.
+    if (!jwk) {
+      const refreshed = await this.refreshJwksOnce();
+      if (refreshed === null) return null;
+      jwk = refreshed.keys.find((k) => k.kid === kid);
+      if (!jwk) return null;
+      verifiedKeys = refreshed.keys;
+    }
+
+    return { jwk, keys: verifiedKeys };
+  }
+
+  /**
+   * Return the cached certificates when they are still fresh; otherwise fetch
+   * them once, sharing the download with any concurrent caller.
+   */
+  private async jwks(): Promise<Jwks> {
+    const now = this.clock.now().getTime();
+    if (
+      this.jwksCache !== null &&
+      now - this.jwksCache.fetchedAt < GoogleOAuthClient.JWKS_CACHE_TTL_MS
+    ) {
+      return this.jwksCache;
+    }
+    return this.forceFetchJwks();
+  }
+
+  /**
+   * Force a fresh certificate download, deduplicated across concurrent callers.
+   * Falls back to the cached certificates when the network fails.
+   */
+  private async forceFetchJwks(): Promise<Jwks> {
+    if (this.jwksFetchPromise !== null) {
+      return this.jwksFetchPromise;
+    }
+    const promise = this.doFetchJwks().finally(() => {
+      this.jwksFetchPromise = null;
+    });
+    this.jwksFetchPromise = promise;
+    return promise;
+  }
+
+  private async doFetchJwks(): Promise<Jwks> {
+    const response = await this.fetchImpl(GOOGLE_JWKS_URI, { method: 'GET' });
+    if (!response.ok) {
+      if (this.jwksCache !== null) return this.jwksCache;
+      throw new Error('could not fetch Google public certificates');
+    }
+    const jwks = (await response.json()) as Jwks;
+    this.jwksCache = { keys: jwks.keys, fetchedAt: this.clock.now().getTime() };
+    return jwks;
+  }
+
+  /**
+   * Refresh the certificates exactly once, so a token signed with a newly
+   * rotated Google key is not rejected until the cache would have refreshed on
+   * its own. Returns the refreshed (or cached) certificates, or null when
+   * neither is available.
+   */
+  private async refreshJwksOnce(): Promise<Jwks | null> {
+    try {
+      return await this.forceFetchJwks();
+    } catch {
+      return this.jwksCache ?? null;
+    }
   }
 }
 
@@ -200,6 +311,21 @@ function decodeBase64Url(input: string): string {
     '='.repeat((4 - (input.length % 4)) % 4);
   if (typeof atob === 'function') return atob(padded);
   return Buffer.from(padded, 'base64').toString('binary');
+}
+
+/**
+ * Decode and parse an ID token's JOSE header, or null when it is not a
+ * well-formed three-part JWT with a readable header. Malformed tokens never
+ * reach the network.
+ */
+function signedIdTokenHeader(idToken: string): { alg?: string; kid?: string } | null {
+  const parts = idToken.split('.');
+  if (parts.length !== 3) return null;
+  try {
+    return JSON.parse(decodeBase64Url(parts[0]!)) as { alg?: string; kid?: string };
+  } catch {
+    return null;
+  }
 }
 
 export const __test_only__ = { verifyGoogleIdToken, encodeBase64Url };

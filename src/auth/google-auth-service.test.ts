@@ -67,6 +67,9 @@ function makeStubOAuthClient(opts: StubOAuthOptions = {}): OAuthClient & {
         },
       };
     },
+    async verifyIdToken() {
+      return null;
+    },
   };
   Object.defineProperty(client, 'lastExchange', {
     get(): { input: ExchangeGoogleCodeInput } | null {

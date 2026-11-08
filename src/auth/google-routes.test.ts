@@ -111,6 +111,7 @@ async function makeTestApp(opts: MakeTestAppOptions = {}): Promise<TestAppHandle
     clock: makeTestClock(new Date(NOW_MS)).clock,
     random: deterministicRandom,
     oauthClient,
+    googleOAuthClientId: opts.providerConfigured === false ? undefined : 'cid',
   });
   return {
     app,
@@ -331,6 +332,89 @@ describe('HTTP /auth/google/callback', () => {
   });
 });
 
+describe('HTTP: the Google Identity Services sign-in route', () => {
+  let handle: TestAppHandle;
+  beforeEach(async () => {
+    handle = await makeTestApp();
+  });
+  afterEach(async () => {
+    await handle.app.close();
+    handle.driver.close();
+  });
+
+  it('signs a User in from a Google ID token and sets a session', async () => {
+    const idToken = makeSignedIdToken({
+      iss: 'https://accounts.google.com',
+      aud: 'cid',
+      sub: 'google-uid-1',
+      email: 'iris@example.com',
+      email_verified: true,
+      exp: Math.floor(NOW_MS / 1000) + 3600,
+    });
+    const response = await handle.app.inject({
+      method: 'POST',
+      url: '/auth/google/identity',
+      headers: {
+        'content-type': 'application/json',
+        origin: 'https://app.brieflyy.test',
+      },
+      payload: JSON.stringify({ credential: idToken }),
+    });
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body);
+    expect(body.redirectTo).toBe('/onboarding/pick-topics');
+    expect(pickCookie(response.headers, 'brieflyy_session')).not.toBeNull();
+  });
+
+  it('refuses an ID token Google did not sign', async () => {
+    const response = await handle.app.inject({
+      method: 'POST',
+      url: '/auth/google/identity',
+      headers: {
+        'content-type': 'application/json',
+        origin: 'https://app.brieflyy.test',
+      },
+      payload: JSON.stringify({ credential: 'not.a.valid.token' }),
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toContain('Sign-in failed');
+    // A junk token is rejected on shape before any certificate is fetched.
+    expect(handle.fetchCalls.count).toBe(0);
+  });
+
+  it('refuses an empty request with no body', async () => {
+    const response = await handle.app.inject({
+      method: 'POST',
+      url: '/auth/google/identity',
+      headers: { origin: 'https://app.brieflyy.test' },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toContain('Sign-in failed');
+  });
+
+  it('refuses a credential posted from another origin', async () => {
+    const idToken = makeSignedIdToken({
+      iss: 'https://accounts.google.com',
+      aud: 'cid',
+      sub: 'google-uid-1',
+      email: 'iris@example.com',
+      email_verified: true,
+      exp: Math.floor(NOW_MS / 1000) + 3600,
+    });
+    const response = await handle.app.inject({
+      method: 'POST',
+      url: '/auth/google/identity',
+      headers: {
+        'content-type': 'application/json',
+        origin: 'https://elsewhere.example',
+      },
+      payload: JSON.stringify({ credential: idToken }),
+    });
+    expect(response.statusCode).toBe(403);
+    expect(response.body).toContain('did not come from this Brieflyy page');
+  });
+});
+
 describe('HTTP: the Google login button on signup page', () => {
   let handle: TestAppHandle;
   beforeEach(async () => {
@@ -341,11 +425,12 @@ describe('HTTP: the Google login button on signup page', () => {
     handle.driver.close();
   });
 
-  it('renders a "Sign in with Google" button pointing at /auth/google/start', async () => {
+  it('renders the Google Identity Services button on the sign-up page', async () => {
     const response = await handle.app.inject({ method: 'GET', url: '/signup' });
     expect(response.statusCode).toBe(200);
-    expect(response.body).toContain('Sign in with Google');
-    expect(response.body).toContain('href="/auth/google/start"');
+    expect(response.body).toContain('id="google-signin"');
+    expect(response.body).toContain('accounts.google.com/gsi/client');
+    expect(response.body).toContain('client_id');
   });
 });
 

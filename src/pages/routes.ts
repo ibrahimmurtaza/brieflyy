@@ -146,6 +146,17 @@ export interface PageRoutesOptions {
    */
   readonly googleSignInAvailable: boolean;
   /**
+   * The public Google OAuth client ID, so the sign-in page can initialize the
+   * Google Identity Services button. Undefined when Google is not offered.
+   */
+  readonly googleOAuthClientId: string | undefined;
+  /**
+   * The URL of the Google Identity Services SDK the sign-in page loads.
+   * Defaults to Google's hosted SDK; tests point it at a local stand-in so the
+   * browser suite never reaches Google's network.
+   */
+  readonly googleSdkUrl: string | undefined;
+  /**
    * Whether this instance can take a payment, and where the hosted checkout comes
    * from — asked here rather than read out of configuration, so the button the
    * upgrade page offers and the route behind it cannot disagree. The same shape
@@ -187,7 +198,7 @@ export async function registerPageRoutes(
   });
 
   fastify.get('/signup', PUBLIC_ROUTE_CONFIG, async (_req, reply) => {
-    return reply.type('text/html').send(signupPage({ googleSignInAvailable: opts.googleSignInAvailable }));
+    return reply.type('text/html').send(signupPage({ googleSignInAvailable: opts.googleSignInAvailable, googleOAuthClientId: opts.googleOAuthClientId, googleSdkUrl: opts.googleSdkUrl }));
   });
 
   fastify.get('/onboarding/pick-topics', AUTHENTICATED_ROUTE_CONFIG, async (req, reply) => {
@@ -944,14 +955,60 @@ export async function registerPageRoutes(
   );
 }
 
-function signupPage(input: { readonly googleSignInAvailable: boolean }): string {
+function signupPage(input: {
+  readonly googleSignInAvailable: boolean;
+  readonly googleOAuthClientId: string | undefined;
+  readonly googleSdkUrl: string | undefined;
+}): string {
   // Google is a second way in, so it is offered only where one exists. Rendered
   // unconditionally it was a button to a route that answers 503 on a deployment
   // with no provider configured, and the divider above it promised a choice the
   // instance does not have.
   const googleButton = input.googleSignInAvailable
     ? `    <div class="divider"><span>or</span></div>
-    <a class="button secondary" href="/auth/google/start">Sign in with Google</a>`
+    <div id="google-signin"></div>`
+    : '';
+  const sdkUrl = input.googleSdkUrl ?? 'https://accounts.google.com/gsi/client';
+  const gisScript = input.googleOAuthClientId
+    ? `  <script src="${sdkUrl}" async defer></script>
+  <script>
+    (function () {
+      var clientId = ${JSON.stringify(input.googleOAuthClientId)};
+      window.addEventListener('load', function () {
+        google.accounts.id.initialize({
+          client_id: clientId,
+          callback: handleGoogleCredential
+        });
+        google.accounts.id.renderButton(document.getElementById('google-signin'), {
+          theme: 'outline',
+          size: 'large',
+          width: '100%'
+        });
+      });
+      function handleGoogleCredential(credential) {
+        fetch('/auth/google/identity', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ credential: credential.credential })
+        }).then(function (resp) {
+          if (resp.ok) return resp.json().then(function (data) {
+            location.href = data.redirectTo || '/';
+          });
+          var status = document.getElementById('status');
+          if (status) {
+            status.textContent = 'Google sign-in failed. Please try again.';
+            status.className = 'status error';
+          }
+        }).catch(function () {
+          var status = document.getElementById('status');
+          if (status) {
+            status.textContent = 'Network error. Please try again.';
+            status.className = 'status error';
+          }
+        });
+      }
+    })();
+  </script>`
     : '';
   return layout({
     title: 'Sign in',
@@ -1013,7 +1070,7 @@ ${googleButton}`,
         });
       });
     })();
-  </script>`,
+  </script>${gisScript}`,
   });
 }
 

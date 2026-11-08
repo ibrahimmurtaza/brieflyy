@@ -23,4 +23,5 @@ export interface OAuthClient {
     readonly redirectUri: string;
   }): string;
   exchangeCode(input: ExchangeGoogleCodeInput): Promise<ExchangeGoogleCodeOutcome>;
+  verifyIdToken(input: { readonly idToken: string }): Promise<GoogleOAuthProfile | null>;
 }

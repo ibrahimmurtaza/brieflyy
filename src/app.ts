@@ -95,6 +95,18 @@ export interface CreateAppOptions {
   readonly random?: RandomSource | undefined;
   readonly sessionTtlMs?: number | undefined;
   readonly oauthClient?: OAuthClient | undefined;
+  /**
+   * The public Google OAuth client ID, handed to the sign-in page so the Google
+   * Identity Services button can identify this instance. The matching secret
+   * stays server-side.
+   */
+  readonly googleOAuthClientId?: string | undefined;
+  /**
+   * The URL of the Google Identity Services SDK the sign-in page loads.
+   * Defaults to Google's hosted SDK; tests point it at a local stand-in so the
+   * browser suite never reaches Google's network.
+   */
+  readonly googleSdkUrl?: string | undefined;
   readonly logger?: boolean | undefined;
   readonly feedFetcher?: FeedFetcher | undefined;
   /**
@@ -574,6 +586,8 @@ export async function createApp(opts: CreateAppOptions): Promise<FastifyInstance
     trendsService,
     archiveSearchService,
     googleSignInAvailable,
+    googleOAuthClientId: opts.googleOAuthClientId,
+    googleSdkUrl: opts.googleSdkUrl,
     billingService,
   });
 

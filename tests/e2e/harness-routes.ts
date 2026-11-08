@@ -208,6 +208,33 @@ export async function registerHarnessRoutes(
   );
 
   /**
+   * A local stand-in for the Google Identity Services SDK, so the browser suite
+   * never reaches Google's network. It defines `google.accounts.id` with the two
+   * methods the sign-in page calls, and `renderButton` drops a visible button into
+   * the page's `#google-signin` container.
+   */
+  app.get('/e2e/google-sdk.js', (_req, reply) => {
+    return reply
+      .code(200)
+      .header('content-type', 'application/javascript; charset=utf-8')
+      .send(`(function () {
+  window.google = window.google || {};
+  window.google.accounts = window.google.accounts || {};
+  window.google.accounts.id = {
+    initialize: function () {},
+    renderButton: function (el, opts) {
+      var text = opts && typeof opts.text === 'string' ? opts.text : 'Sign in with Google';
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = text;
+      button.style.cssText = 'width:100%;height:44px;border-radius:4px;border:1px solid #4285f4;background:#fff;color:#000;cursor:pointer;font-size:14px;font-family:sans-serif;';
+      el.appendChild(button);
+    }
+  };
+})();`);
+  });
+
+  /**
    * The newest brief this signed-in User was sent for one of their Topics, as stored.
    *
    * A brief a User asks for from a page is stored before it is sent, and the call to
