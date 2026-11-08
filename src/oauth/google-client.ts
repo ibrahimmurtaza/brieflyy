@@ -45,6 +45,9 @@ export class GoogleOAuthClient implements OAuthClient {
   private readonly clientSecret: string;
   private readonly fetchImpl: typeof fetch;
   private readonly clock: { now(): Date };
+  /** Google's public certs, cached so junk tokens do not keep fetching them. */
+  private jwksCache: { keys: Jwk[]; fetchedAt: number } | null = null;
+  private static readonly JWKS_CACHE_TTL_MS = 10 * 60 * 1000;
 
   constructor(opts: GoogleOAuthClientOptions) {
     this.clientId = opts.clientId;
@@ -113,14 +116,44 @@ export class GoogleOAuthClient implements OAuthClient {
   }
 
   async verifyIdToken(input: { readonly idToken: string }): Promise<GoogleOAuthProfile | null> {
-    const jwksResponse = await this.fetchImpl(GOOGLE_JWKS_URI, { method: 'GET' });
-    if (!jwksResponse.ok) return null;
-    const jwks = (await jwksResponse.json()) as Jwks;
+    // Reject tokens with a clearly wrong shape before touching the network.
+    const parts = input.idToken.split('.');
+    if (parts.length !== 3) return null;
+    let header: { alg?: string; kid?: string };
+    try {
+      header = JSON.parse(decodeBase64Url(parts[0]!)) as { alg?: string; kid?: string };
+    } catch {
+      return null;
+    }
+    if (header.alg !== 'RS256' || !header.kid) return null;
+
+    const jwks = await this.jwks();
+    const jwk = jwks.keys.find((k) => k.kid === header.kid);
+    if (!jwk) return null;
+    if (jwk.kty !== 'RSA' || jwk.alg !== 'RS256') return null;
     return verifyGoogleIdToken(input.idToken, {
       clientId: this.clientId,
       clock: this.clock,
       jwks: jwks.keys,
     });
+  }
+
+  private async jwks(): Promise<Jwks> {
+    const now = this.clock.now().getTime();
+    if (
+      this.jwksCache !== null &&
+      now - this.jwksCache.fetchedAt < GoogleOAuthClient.JWKS_CACHE_TTL_MS
+    ) {
+      return this.jwksCache;
+    }
+    const response = await this.fetchImpl(GOOGLE_JWKS_URI, { method: 'GET' });
+    if (!response.ok) {
+      if (this.jwksCache !== null) return this.jwksCache;
+      throw new Error('could not fetch Google public certificates');
+    }
+    const jwks = (await response.json()) as Jwks;
+    this.jwksCache = { keys: jwks.keys, fetchedAt: now };
+    return jwks;
   }
 }
 

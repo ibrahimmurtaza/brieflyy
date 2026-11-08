@@ -354,7 +354,10 @@ describe('HTTP: the Google Identity Services sign-in route', () => {
     const response = await handle.app.inject({
       method: 'POST',
       url: '/auth/google/identity',
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'content-type': 'application/json',
+        origin: 'https://app.brieflyy.test',
+      },
       payload: JSON.stringify({ credential: idToken }),
     });
     expect(response.statusCode).toBe(200);
@@ -367,11 +370,48 @@ describe('HTTP: the Google Identity Services sign-in route', () => {
     const response = await handle.app.inject({
       method: 'POST',
       url: '/auth/google/identity',
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'content-type': 'application/json',
+        origin: 'https://app.brieflyy.test',
+      },
       payload: JSON.stringify({ credential: 'not.a.valid.token' }),
     });
     expect(response.statusCode).toBe(400);
     expect(response.body).toContain('Sign-in failed');
+    // A junk token is rejected on shape before any certificate is fetched.
+    expect(handle.fetchCalls.count).toBe(0);
+  });
+
+  it('refuses an empty request with no body', async () => {
+    const response = await handle.app.inject({
+      method: 'POST',
+      url: '/auth/google/identity',
+      headers: { origin: 'https://app.brieflyy.test' },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toContain('Sign-in failed');
+  });
+
+  it('refuses a credential posted from another origin', async () => {
+    const idToken = makeSignedIdToken({
+      iss: 'https://accounts.google.com',
+      aud: 'cid',
+      sub: 'google-uid-1',
+      email: 'iris@example.com',
+      email_verified: true,
+      exp: Math.floor(NOW_MS / 1000) + 3600,
+    });
+    const response = await handle.app.inject({
+      method: 'POST',
+      url: '/auth/google/identity',
+      headers: {
+        'content-type': 'application/json',
+        origin: 'https://elsewhere.example',
+      },
+      payload: JSON.stringify({ credential: idToken }),
+    });
+    expect(response.statusCode).toBe(403);
+    expect(response.body).toContain('did not come from this Brieflyy page');
   });
 });
 

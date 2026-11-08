@@ -286,8 +286,17 @@ export async function registerAuthRoutes(
       if (!authService.googleSignInAvailable()) {
         return refuseGoogle(reply);
       }
+      // A page on another site can POST a token it copied from its own
+      // sign-in, so this route only accepts requests that originated on this
+      // instance. The signed ID token is the authorization, but it is not
+      // browser-bound by itself.
+      const origin = req.headers.origin;
+      const expectedOrigin = new URL(opts.appBaseUrl).origin;
+      if (typeof origin !== 'string' || origin !== expectedOrigin) {
+        return reply.code(403).type('text/html').send(oauthFailurePage('That sign-in did not come from this Brieflyy page.'));
+      }
       const credential =
-        typeof req.body.credential === 'string' ? req.body.credential : '';
+        typeof req.body?.credential === 'string' ? req.body.credential : '';
       if (!credential) {
         return reply
           .code(400)

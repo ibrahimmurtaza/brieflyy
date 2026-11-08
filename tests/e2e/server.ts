@@ -191,6 +191,7 @@ const app = await createApp({
     clientId: 'e2e-client-id',
     clientSecret: 'e2e-client-secret',
   }),
+  googleOAuthClientId: 'e2e-client-id',
   // The summary client the vitest suite uses, and a double for the same reason: the
   // specs share this process and nothing in here may reach a provider. It writes,
   // so a spec can follow a brief a User actually asked for; and it declines the one

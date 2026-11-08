@@ -991,6 +991,12 @@ function signupPage(input: {
             status.textContent = 'Google sign-in failed. Please try again.';
             status.className = 'status error';
           }
+        }).catch(function () {
+          var status = document.getElementById('status');
+          if (status) {
+            status.textContent = 'Network error. Please try again.';
+            status.className = 'status error';
+          }
         });
       }
     })();
