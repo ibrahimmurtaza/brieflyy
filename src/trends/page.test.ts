@@ -23,6 +23,7 @@ const WINDOW = buildTrendWindow(NOW);
 
 const account: ShellAccount = {
   email: 'iris@example.com',
+  name: null,
   tier: 'free',
   brief: { kind: 'stopped' },
 };

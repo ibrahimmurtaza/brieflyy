@@ -73,6 +73,7 @@ async function makeHarness(
       id: deterministicRandom.uuid(),
       userId,
       email,
+      name: null,
       emailVerifiedAt: clock.clock.now(),
       createdAt: clock.clock.now(),
     });

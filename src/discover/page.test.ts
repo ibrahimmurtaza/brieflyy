@@ -8,6 +8,7 @@ import { discoverPage } from './page.js';
 
 const ACCOUNT: ShellAccount = {
   email: 'iris@example.com',
+  name: null,
   tier: 'free',
   brief: { kind: 'unset' },
 };

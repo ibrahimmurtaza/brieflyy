@@ -49,6 +49,7 @@ export interface Account {
   readonly id: AccountId;
   readonly userId: UserId;
   readonly email: string;
+  readonly name: string | null;
   readonly emailVerifiedAt: Date | null;
   readonly createdAt: Date;
 }

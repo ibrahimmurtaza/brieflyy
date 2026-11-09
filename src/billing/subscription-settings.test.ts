@@ -13,6 +13,7 @@ const RENEWS = new Date('2026-04-01T12:00:00Z');
 
 const ACCOUNT = {
   email: 'iris@example.com',
+  name: null,
   tier: 'paid',
   brief: { kind: 'unset' },
 } as const;

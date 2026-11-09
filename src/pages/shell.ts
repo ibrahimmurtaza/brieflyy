@@ -42,7 +42,7 @@ export async function resolveShellAccount(
   auth: CurrentAuth,
   onboardingService: OnboardingService,
 ): Promise<ShellAccount> {
-  const account = { email: auth.account.email, tier: resolveTier(auth.user) };
+  const account = { email: auth.account.email, name: auth.account.name, tier: resolveTier(auth.user) };
   // `isEmailStopped` is the one answer to "is this stopped", so the header asks
   // it rather than reading the column itself. The scope is named by the null: the
   // header speaks for the whole User, and a Topic turned off on its own still

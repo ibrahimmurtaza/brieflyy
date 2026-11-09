@@ -9,6 +9,7 @@ function rowToAccount(row: AccountRow): Account {
     id: row.id,
     userId: row.userId,
     email: row.email,
+    name: row.name,
     emailVerifiedAt: row.emailVerifiedAt,
     createdAt: row.createdAt,
   };
@@ -30,6 +31,7 @@ export class DrizzleAccountRepo implements AccountRepo {
       id: account.id,
       userId: account.userId,
       email: account.email,
+      name: account.name,
       emailVerifiedAt: account.emailVerifiedAt,
       createdAt: account.createdAt,
     });

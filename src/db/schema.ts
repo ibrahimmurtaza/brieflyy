@@ -46,6 +46,7 @@ export const accounts = sqliteTable(
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     email: text('email').notNull(),
+    name: text('name'),
     emailVerifiedAt: integer('email_verified_at', { mode: 'timestamp_ms' }),
     createdAt: integer('created_at', { mode: 'timestamp_ms' })
       .notNull()
