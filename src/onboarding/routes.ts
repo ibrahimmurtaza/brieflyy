@@ -343,11 +343,13 @@ function readSubmittedDeliveryTime(body: Record<string, unknown>): {
   hour: string;
   minute: string;
   timezone: string;
+  name: string | null;
 } {
   return {
     hour: typeof body.hour === 'string' ? body.hour : '',
     minute: typeof body.minute === 'string' ? body.minute : '',
     timezone: typeof body.timezone === 'string' ? body.timezone : '',
+    name: typeof body.name === 'string' ? body.name.trim() || null : null,
   };
 }
 
@@ -390,7 +392,7 @@ function humanDeliveryTimeReason(
 function deliveryTimeErrorPage(input: {
   account: ShellAccount;
   message: string;
-  submitted: { hour: string; minute: string; timezone: string };
+  submitted: { hour: string; minute: string; timezone: string; name: string | null };
   mode: 'onboarding' | 'settings';
   readonly requestToken?: string | null;
 }): string {
@@ -401,6 +403,7 @@ function deliveryTimeErrorPage(input: {
     firstBriefAt: null,
     message: input.message,
     saved: false,
+    submittedName: input.submitted.name,
     requestToken: input.requestToken ?? null,
     existing: {
       hour: toInt(input.submitted.hour, 8),

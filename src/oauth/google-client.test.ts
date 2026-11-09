@@ -154,6 +154,35 @@ describe('GoogleOAuthClient.exchangeCode', () => {
     ]);
   });
 
+  it('decodes a non-ASCII name as UTF-8 rather than garbling it', async () => {
+    const fetchImpl = makeFetch(async (call) => {
+      if (call.url === 'https://oauth2.googleapis.com/token') {
+        const claims = { ...baseClaims, name: 'José García' };
+        const token = signIdToken(testKey, claims);
+        return new Response(JSON.stringify({ id_token: token }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (call.url === 'https://www.googleapis.com/oauth2/v3/certs') {
+        return new Response(JSON.stringify({ keys: [testKey.jwk] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response('{}', { status: 404 });
+    });
+    const client = makeClientWithFetch(fetchImpl);
+    const outcome = await client.exchangeCode({
+      code: 'auth-code',
+      codeVerifier: 'verifier',
+      redirectUri: 'https://app.example/auth/google/callback',
+    });
+    expect(outcome.status).toBe('ok');
+    if (outcome.status !== 'ok') throw new Error('expected ok');
+    expect(outcome.profile.name).toBe('José García');
+  });
+
   it('returns exchange_failed when the token endpoint returns a non-2xx status', async () => {
     const fetchImpl = makeFetch(async (call) => {
       if (call.url === 'https://oauth2.googleapis.com/token') {

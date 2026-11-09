@@ -311,8 +311,11 @@ function verifyGoogleIdToken(
 function decodeBase64Url(input: string): string {
   const padded = input.replace(/-/g, '+').replace(/_/g, '/') +
     '='.repeat((4 - (input.length % 4)) % 4);
-  if (typeof atob === 'function') return atob(padded);
-  return Buffer.from(padded, 'base64').toString('binary');
+  const bytes =
+    typeof Buffer !== 'undefined'
+      ? Buffer.from(padded, 'base64')
+      : Uint8Array.from(atob(padded), (c) => c.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
 }
 
 /**

@@ -274,6 +274,7 @@ export async function registerPageRoutes(
         mode: 'onboarding',
         message: null,
         saved: false,
+        submittedName: null,
         requestToken: req.requestToken ?? null,
       }),
     );
@@ -319,6 +320,7 @@ export async function registerPageRoutes(
           mode: 'settings',
           message: req.query.saved === '1' ? 'saved' : null,
           saved: req.query.saved === '1',
+          submittedName: null,
           requestToken: req.requestToken ?? null,
         }),
       );
@@ -1312,6 +1314,8 @@ export function deliveryTimePage(input: {
   mode: 'onboarding' | 'settings';
   message: string | null;
   saved: boolean;
+  /** The name the User most recently typed, used to refill the field after a rejection. */
+  submittedName: string | null;
   readonly requestToken?: string | null;
 }): string {
   const isOnboarding = input.mode === 'onboarding';
@@ -1345,10 +1349,10 @@ export function deliveryTimePage(input: {
     action,
   )}">
       ${input.requestToken ? requestTokenInput(input.requestToken) : ''}
+      <label for="name">Your name
+        <input id="name" name="name" type="text" value="${escapeHtml(input.submittedName ?? input.account.name ?? '')}">
+      </label>
       <div class="row">
-        <label for="name">Your name
-          <input id="name" name="name" type="text" value="${escapeHtml(input.account.name ?? '')}">
-        </label>
         <label for="hour">Hour
           <input id="hour" name="hour" type="number" min="0" max="23" value="${input.existing.hour}" required>
         </label>
