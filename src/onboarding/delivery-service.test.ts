@@ -19,6 +19,7 @@ import { OnboardingService } from './onboarding-service.js';
 interface Harness {
   service: OnboardingService;
   emailTransport: ConsoleEmailTransport;
+  accountRepo: DrizzleAccountRepo;
   deliverySettingsRepo: DrizzleDeliverySettingsRepo;
   clock: ReturnType<typeof makeTestClock>;
   signedInUser: (email: string, state?: 'not_started' | 'topics_picked') => Promise<{ userId: string; email: string }>;
@@ -63,7 +64,7 @@ async function makeHarness(): Promise<Harness> {
     return { userId, email };
   };
 
-  return { service, emailTransport, deliverySettingsRepo, clock, signedInUser };
+  return { service, emailTransport, accountRepo, deliverySettingsRepo, clock, signedInUser };
 }
 
 describe('OnboardingService.setDeliveryTime', () => {
@@ -93,6 +94,23 @@ describe('OnboardingService.setDeliveryTime', () => {
 
     const state = await service.getOnboardingState(userId);
     expect(state).toBe('delivery_set');
+  });
+
+  it('saves the account name alongside the delivery time', async () => {
+    const { service, signedInUser, accountRepo } = await makeHarness();
+    const { userId } = await signedInUser('iris@example.com');
+
+    const outcome = await service.setDeliveryTime({
+      userId,
+      hour: 8,
+      minute: 0,
+      timezone: 'America/New_York',
+      name: 'Iris',
+    });
+    expect(outcome.status).toBe('ok');
+
+    const account = await accountRepo.getByUserId(userId);
+    expect(account?.name).toBe('Iris');
   });
 
   it('returns invalid_input for out-of-range hour', async () => {

@@ -1346,6 +1346,9 @@ export function deliveryTimePage(input: {
   )}">
       ${input.requestToken ? requestTokenInput(input.requestToken) : ''}
       <div class="row">
+        <label for="name">Your name
+          <input id="name" name="name" type="text" value="${escapeHtml(input.account.name ?? '')}">
+        </label>
         <label for="hour">Hour
           <input id="hour" name="hour" type="number" min="0" max="23" value="${input.existing.hour}" required>
         </label>
@@ -1357,6 +1360,7 @@ export function deliveryTimePage(input: {
         </label>
       </div>
       <p class="hint">The timezone decides when the brief lands, so pick the one you keep your hours in.</p>
+      <p class="hint">Your name appears at the top of every page instead of your email address.</p>
       <button type="submit" id="delivery-submit">${escapeHtml(
         submitLabel,
       )}</button>

@@ -64,6 +64,7 @@ function makeStubOAuthClient(opts: StubOAuthOptions = {}): OAuthClient & {
           subject: profile.subject ?? 'google-uid',
           email: profile.email ?? 'iris@example.com',
           emailVerified: profile.emailVerified ?? true,
+          name: profile.name ?? null,
         },
       };
     },

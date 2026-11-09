@@ -93,6 +93,7 @@ describe('GoogleOAuthClient.exchangeCode', () => {
     sub: 'google-uid-42',
     email: 'iris@example.com',
     email_verified: true,
+    name: 'Iris Example',
     exp: Math.floor(FIXED_NOW.getTime() / 1000) + 3600,
   };
 
@@ -146,6 +147,7 @@ describe('GoogleOAuthClient.exchangeCode', () => {
     expect(outcome.profile.subject).toBe('google-uid-42');
     expect(outcome.profile.email).toBe('iris@example.com');
     expect(outcome.profile.emailVerified).toBe(true);
+    expect(outcome.profile.name).toBe('Iris Example');
     expect(fetchCalls.map((c) => c.url)).toEqual([
       'https://oauth2.googleapis.com/token',
       'https://www.googleapis.com/oauth2/v3/certs',

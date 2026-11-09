@@ -245,6 +245,7 @@ interface GoogleIdTokenClaims {
   readonly sub?: string;
   readonly email?: string;
   readonly email_verified?: boolean | string;
+  readonly name?: string;
   readonly exp?: number;
 }
 
@@ -303,6 +304,7 @@ function verifyGoogleIdToken(
     subject: claims.sub,
     email: claims.email,
     emailVerified: claims.email_verified === true || claims.email_verified === 'true',
+    name: claims.name ?? null,
   };
 }
 

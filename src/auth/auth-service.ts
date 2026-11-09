@@ -512,7 +512,7 @@ export class AuthService {
           id: this.random.uuid(),
           userId: user.id,
           email,
-          name: null,
+          name: profile.name,
           emailVerifiedAt: now,
           createdAt: now,
         };

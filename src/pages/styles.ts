@@ -328,6 +328,7 @@ small { font-size: var(--text-sm); }
 .account__name {
   font-size: var(--text-xs);
   color: var(--color-text-muted);
+  overflow-wrap: anywhere;
 }
 .account__tier {
   font-size: var(--text-xs);

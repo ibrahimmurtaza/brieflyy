@@ -21,6 +21,7 @@ export interface AccountRepo {
   getByEmail(email: string): Promise<Account | null>;
   getByUserId(userId: UserId): Promise<Account | null>;
   markEmailVerified(id: AccountId, at: Date): Promise<void>;
+  updateName(id: AccountId, name: string | null): Promise<void>;
 }
 
 export class DrizzleAccountRepo implements AccountRepo {
@@ -68,6 +69,13 @@ export class DrizzleAccountRepo implements AccountRepo {
     await this.db
       .update(accounts)
       .set({ emailVerifiedAt: at })
+      .where(eq(accounts.id, id));
+  }
+
+  async updateName(id: AccountId, name: string | null): Promise<void> {
+    await this.db
+      .update(accounts)
+      .set({ name })
       .where(eq(accounts.id, id));
   }
 }

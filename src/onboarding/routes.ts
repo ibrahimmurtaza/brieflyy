@@ -244,6 +244,7 @@ export async function registerOnboardingRoutes(
     const hour = parseHour(body.hour);
     const minute = parseMinute(body.minute);
     const timezone = typeof body.timezone === 'string' ? body.timezone : '';
+    const name = typeof body.name === 'string' ? body.name.trim() || null : null;
     if (hour === null || minute === null || timezone.length === 0) {
       return reply
         .code(400)
@@ -259,15 +260,12 @@ export async function registerOnboardingRoutes(
         );
     }
     const userId = req.auth.user.id;
-    // This screen exists to finish onboarding, so a valid submission always
-    // saves and moves on. Changing a time you already have is what
-    // /settings/delivery is for; the page there posts to its own endpoint. That
-    // keeps each endpoint to one job instead of guessing which one was meant.
     const outcome = await onboardingService.setDeliveryTime({
       userId,
       hour,
       minute,
       timezone,
+      name,
     });
     if (outcome.status === 'ok') {
       return reply.code(302).header('location', '/onboarding/welcome').send();
@@ -293,6 +291,7 @@ export async function registerOnboardingRoutes(
     const hour = parseHour(body.hour);
     const minute = parseMinute(body.minute);
     const timezone = typeof body.timezone === 'string' ? body.timezone : '';
+    const name = typeof body.name === 'string' ? body.name.trim() || null : null;
     if (hour === null || minute === null || timezone.length === 0) {
       return reply
         .code(400)
@@ -312,6 +311,7 @@ export async function registerOnboardingRoutes(
       hour,
       minute,
       timezone,
+      name,
     });
     if (outcome.status === 'ok') {
       return reply.code(302).header('location', '/settings/delivery?saved=1').send();
