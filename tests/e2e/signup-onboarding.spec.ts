@@ -107,7 +107,7 @@ test('a User signs up, finishes onboarding, and lands on a brief with Clusters i
   // 5. Their topic list holds exactly what they chose, and every one of them opens.
   await page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Topics', exact: true }).click();
   await expect(page).toHaveURL(/\/topics$/);
-  await expect(page.locator('.account__email')).toHaveText(email);
+  await expect(page.locator('.account__name')).toHaveText(email);
   // The header says when the next brief lands, in the zone just recorded, which is
   // the only page that proves the delivery time survived the redirect.
   await expect(page.locator('.account__brief')).toContainText(DELIVERY_ZONE);

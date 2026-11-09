@@ -61,6 +61,7 @@ export type ShellBrief =
  */
 export interface ShellAccount {
   readonly email: string;
+  readonly name: string | null;
   readonly tier: Tier;
   readonly brief: ShellBrief;
 }
@@ -379,10 +380,10 @@ function renderHeader(input: {
     </nav>
 ${renderArchiveSearch()}
     <div class="account">
-      <div class="account__who">
-        <span class="account__email">${escapeHtml(account.email)}</span>
-        <span class="account__tier">${escapeHtml(TIER_LABELS[account.tier])}</span>
-      </div>
+    <div class="account__who">
+      <span class="account__name">${escapeHtml(account.name ?? account.email)}</span>
+      <span class="account__tier">${escapeHtml(TIER_LABELS[account.tier])}</span>
+    </div>
       ${renderBriefFact(account.brief)}
       <form class="logout" method="POST" action="/auth/logout">${input.requestToken ? requestTokenInput(input.requestToken) : ''}<button class="quiet" type="submit">Sign out</button></form>
     </div>

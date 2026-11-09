@@ -91,6 +91,7 @@ describe('DrizzleOAuthAccountRepo', () => {
       id: accountId,
       userId,
       email: 'iris@example.com',
+      name: null,
       emailVerifiedAt: null,
       createdAt: now,
     });

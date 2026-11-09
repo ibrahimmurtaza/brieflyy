@@ -12,6 +12,7 @@ import {
 function signedIn(overrides: Partial<ShellAccount> = {}): ShellAccount {
   return {
     email: 'iris@example.com',
+    name: 'Iris',
     tier: 'free',
     brief: {
       kind: 'scheduled',
@@ -47,7 +48,7 @@ describe('the document shell', () => {
 
   it('tells a signed-in User who they are, what they pay for, and when to expect mail', () => {
     const html = page(signedIn());
-    expect(html).toContain('iris@example.com');
+    expect(html).toContain('Iris');
     expect(html).toContain('Free plan');
     // The next brief, in the User's own zone, because a clock time with no frame
     // is a claim without one.
@@ -131,7 +132,7 @@ describe('the document shell', () => {
   it('escapes everything it renders about the account', () => {
     const html = page(
       signedIn({
-        email: '"><script>alert(1)</script>@example.com',
+        name: '"><script>alert(1)</script>@example.com',
         brief: {
           kind: 'scheduled',
           slot: new Date('2026-01-02T08:00:00Z'),

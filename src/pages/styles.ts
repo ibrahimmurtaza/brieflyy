@@ -325,13 +325,10 @@ small { font-size: var(--text-sm); }
   gap: var(--space-2);
   min-width: 0;
 }
-.account__email {
+.account__name {
   font-size: var(--text-xs);
   color: var(--color-text-muted);
-  max-width: 22ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 .account__tier {
   font-size: var(--text-xs);
@@ -990,7 +987,7 @@ form.hide-source select {
     justify-items: start;
   }
   .account__brief { text-align: left; }
-  .account__email { max-width: 100%; }
+  .account__name { max-width: 100%; }
 }
 
 @media (min-width: 64rem) {

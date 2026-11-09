@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS accounts (
   id TEXT PRIMARY KEY NOT NULL,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   email TEXT NOT NULL,
+  name TEXT,
   email_verified_at INTEGER,
   created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
 );
@@ -705,6 +706,14 @@ interface ColumnMigration {
  * which is what makes re-running the migration safe.
  */
 const COLUMN_MIGRATIONS: readonly ColumnMigration[] = [
+  {
+    // A name to show a User by instead of their address, which the header used to
+    // truncate out of sight. Nullable: rows written before this existed have no
+    // name, and the header falls back to the address when there is none.
+    table: 'accounts',
+    column: 'name',
+    ddl: `ALTER TABLE accounts ADD COLUMN name TEXT`,
+  },
   {
     table: 'topics',
     column: 'cadence',

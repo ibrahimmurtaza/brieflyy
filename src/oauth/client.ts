@@ -3,6 +3,7 @@ export interface GoogleOAuthProfile {
   readonly subject: string;
   readonly email: string;
   readonly emailVerified: boolean;
+  readonly name: string | null;
 }
 
 export interface ExchangeGoogleCodeInput {

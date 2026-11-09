@@ -99,6 +99,7 @@ export interface AccountFixture {
   readonly id: string;
   readonly userId: string;
   readonly email?: string;
+  readonly name?: string | null;
   readonly emailVerifiedAt?: Date | null;
 }
 
@@ -111,6 +112,7 @@ export function makeAccount(input: AccountFixture): Account {
     id: input.id,
     userId: input.userId as UserId,
     email: input.email ?? `${input.id}@example.com`,
+    name: input.name ?? null,
     emailVerifiedAt: input.emailVerifiedAt ?? new Date('2026-01-01T00:00:00Z'),
     createdAt: new Date('2026-01-01T00:00:00Z'),
   };

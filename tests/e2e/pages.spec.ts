@@ -127,7 +127,7 @@ test.describe('the shell', () => {
 
   test('the account email is in the header, not opening the page', async ({ signedInPage: page }) => {
     await page.goto('/topics');
-    await expect(page.locator('.account__email')).toHaveText('iris@example.com');
+    await expect(page.locator('.account__name')).toHaveText('iris@example.com');
   });
 
   test('the header says which tier the User is on, and when the next brief lands', async ({ signedInPage: page }) => {

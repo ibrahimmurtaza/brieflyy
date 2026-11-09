@@ -334,6 +334,7 @@ export class AuthService {
       id: this.random.uuid(),
       userId: user.id,
       email: link.email,
+      name: null,
       emailVerifiedAt: now,
       createdAt: now,
     };
@@ -511,6 +512,7 @@ export class AuthService {
           id: this.random.uuid(),
           userId: user.id,
           email,
+          name: profile.name,
           emailVerifiedAt: now,
           createdAt: now,
         };

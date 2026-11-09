@@ -490,6 +490,7 @@ export class OnboardingService {
     readonly hour: number;
     readonly minute: number;
     readonly timezone: string;
+    readonly name?: string | null;
   }): Promise<SetDeliveryTimeOutcome> {
     if (
       !isValidDeliveryHour(input.hour) ||
@@ -501,6 +502,11 @@ export class OnboardingService {
     const user = await this.userRepo.getById(input.userId);
     if (!user) {
       return { status: 'invalid', reason: 'no_user' };
+    }
+
+    const account = await this.accountRepo.getByUserId(input.userId);
+    if (account && input.name !== undefined && account.name !== input.name) {
+      await this.accountRepo.updateName(account.id, input.name);
     }
 
     const existing = await this.deliverySettingsRepo.getByUserId(input.userId);
